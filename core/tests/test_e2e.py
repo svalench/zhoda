@@ -1,10 +1,15 @@
 """End-to-end tests on a SCRIPTED provider (consumable script, deterministic
 via alias_seed, transcripts in tmp_path).
 
-- test_debate_loop_with_platform_revision: revision flows into the verdict.
+- test_debate_loop_with_platform_revision: revision flows into the verdict;
+  the objection's author withdraws it (symmetric supersede, round-8 §2).
 - test_stability_rule_blocks_a_flip: agreement then flip -> no zhoda.
+- test_deadlock_on_rounds_cap: cap exhausted while split -> DEADLOCK.
 - test_smart_mode_without_callback_degrades: questions -> open_ambiguities.
-- test_deadlock_on_rounds_cap: cap exhausted while split -> DEADLOCK (round-7 §8).
+- test_state_does_not_leak_between_questions: one engine, two questions —
+  no foreign switches/divergences in the second verdict (round-8 §1).
+- test_streak_does_not_leak: two unanimous debate questions need
+  stability_rounds EACH (round-8 §1).
 """
 
 import json
@@ -106,8 +111,10 @@ async def test_debate_loop_with_platform_revision(tmp_path) -> None:
             "confidence": 0.8, "changed": True,
             "change_note": "added partitioning after the scope objection"}),
         (None, ("Revise your platform",), {"changed": False, "change_note": "rejected"}),
-        (None, ("revised platform", "partitioning"), {"addressed": True}),
+        # symmetric supersede: the AUTHOR (Throughputists) withdraws the objection
+        ("m2", ("withdraw your objection",), {"withdraw": True}),
         (None, ("theses of all factions",), {"all_agree": False}),
+        (None, ("theses of all factions",), {"all_agree": False}),  # judge pair
     ]
     engine = make_engine(ScriptedProvider(script), tmp_path, stability_rounds=1)
     verdict = await engine.deliberate(
@@ -120,7 +127,7 @@ async def test_debate_loop_with_platform_revision(tmp_path) -> None:
     assert verdict.minority_report and "Kafka" in verdict.minority_report
     assert verdict.switches == []
     assert verdict.cost.requests > 0
-    assert verdict.cost.breakdown  # per-stage accounting (round-7 §11)
+    assert verdict.cost.breakdown
 
 
 @pytest.mark.asyncio
@@ -144,7 +151,8 @@ async def test_stability_rule_blocks_a_flip(tmp_path) -> None:
         (None, ("Did the rebuttal",), {"closed": True}),
         (None, ("Did the rebuttal",), {"closed": True}),
         (None, ("Did the rebuttal",), {"closed": True}),
-        (None, ("theses of all factions",), {"all_agree": True}),  # streak 1 < 2
+        (None, ("theses of all factions",), {"all_agree": True}),
+        (None, ("theses of all factions",), {"all_agree": True}),  # pair, streak 1
         (None, ("You represent faction \"Pragmatists\"", "Produce ONE"), critique_kf),
         (None, ("You represent faction \"Throughputists\"", "Produce ONE"), critique_pg),
         (None, ("devil's advocate",), critique_pg),
@@ -162,7 +170,8 @@ async def test_stability_rule_blocks_a_flip(tmp_path) -> None:
             "changed": False, "change_note": "objection rejected"}),
         ("m1", ("Do you switch factions?",), {"switch": False, "convinced_by": ""}),
         ("m3", ("Do you switch factions?",), {"switch": False, "convinced_by": ""}),
-        (None, ("theses of all factions",), {"all_agree": False}),  # flip!
+        (None, ("theses of all factions",), {"all_agree": False}),  # flip, pair
+        (None, ("theses of all factions",), {"all_agree": False}),
     ]
     engine = make_engine(
         ScriptedProvider(script), tmp_path, stability_rounds=2, rounds_cap=2,
@@ -177,7 +186,6 @@ async def test_stability_rule_blocks_a_flip(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_deadlock_on_rounds_cap(tmp_path) -> None:
-    """Round-7 §8: cap exhausted while split -> DEADLOCK, minority preserved."""
     aliases = make_aliases(COUNCIL, seed=42)
     critique_pg = {
         "target_faction": "Pragmatists", "flaw_type": "scope",
@@ -206,8 +214,9 @@ async def test_deadlock_on_rounds_cap(tmp_path) -> None:
         ("m1", ("Do you switch factions?",), {"switch": False, "convinced_by": ""}),
         ("m3", ("Do you switch factions?",), {"switch": False, "convinced_by": ""}),
         (None, ("theses of all factions",), {"all_agree": False}),
+        (None, ("theses of all factions",), {"all_agree": False}),
     ]
-    script = opening_script(aliases) + round_script + round_script  # two rounds
+    script = opening_script(aliases) + round_script + round_script
     engine = make_engine(
         ScriptedProvider(script), tmp_path, stability_rounds=2, rounds_cap=2,
     )
@@ -217,7 +226,7 @@ async def test_deadlock_on_rounds_cap(tmp_path) -> None:
     )
     assert verdict.zhoda_reached is False
     assert verdict.consensus_strength == ConsensusStrength.DEADLOCK
-    assert verdict.minority_report  # dissent preserved through deadlock
+    assert verdict.minority_report
 
 
 @pytest.mark.asyncio
@@ -243,7 +252,89 @@ async def test_smart_mode_without_callback_degrades(tmp_path) -> None:
     engine = make_engine(ScriptedProvider(script), tmp_path)
     verdict = await engine.deliberate(
         "Which database for the ledger?",
-        force_protocol=Protocol.VOTE, clarify_mode="smart",  # no callback!
+        force_protocol=Protocol.VOTE, clarify_mode="smart",
     )
     assert verdict.value_map.open_ambiguities
     assert verdict.zhoda_reached is True
+
+
+@pytest.mark.asyncio
+async def test_state_does_not_leak_between_questions(tmp_path) -> None:
+    """Round-8 §1: one engine, two questions. The second verdict must not
+    contain the first question's switches, objections, or divergences."""
+    aliases = make_aliases(COUNCIL, seed=42)
+    q1_script = opening_script(aliases) + [
+        (None, ("You represent faction \"Pragmatists\"", "Produce ONE"), {
+            "target_faction": "Throughputists", "flaw_type": "factual",
+            "claim": "Kafka adds operational complexity the team cannot staff",
+            "specifics": ""}),
+        (None, ("You represent faction \"Throughputists\"", "Produce ONE"), {
+            "target_faction": "Pragmatists", "flaw_type": "scope",
+            "claim": "PostgreSQL at 50k RPS writes needs a partitioning plan",
+            "specifics": "no write-scaling story beyond a single node"}),
+        (None, ("devil's advocate",), {
+            "target_faction": "Pragmatists", "flaw_type": "logical",
+            "claim": "the platform ignores read replicas as a simpler scaling path",
+            "specifics": ""}),
+        (None, ("Rebut it concisely",), "Accepted."),
+        (None, ("Rebut it concisely",), "Solved."),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("theses of all factions",), {"all_agree": False}),
+        (None, ("theses of all factions",), {"all_agree": False}),
+    ]
+    # q2: all models agree -> one faction -> unanimous, zero round calls
+    q2_script = [
+        ("m1", ("independent structured stance",), position(PG)),
+        ("m2", ("independent structured stance",), position(PG)),
+        ("m3", ("independent structured stance",), position(PG)),
+        (None, ("Synthesize the shared platform",), position(PG)),
+        (None, ("Name each faction",), {}),
+    ]
+    engine = make_engine(
+        ScriptedProvider(q1_script + q2_script), tmp_path, stability_rounds=1,
+    )
+    first = await engine.deliberate(
+        "PostgreSQL or Kafka?", force_protocol=Protocol.DEBATE, clarify_mode="no-clarify",
+    )
+    assert first.dissent_map  # q1 had real disagreements
+    second = await engine.deliberate(
+        "Redis or Memcached?", force_protocol=Protocol.DEBATE, clarify_mode="no-clarify",
+    )
+    assert second.zhoda_reached is True
+    assert second.switches == []          # no foreign switches
+    assert second.dissent_map == []       # no stale divergences or objections
+    assert second.minority_report is None
+    assert second.transcript_id != first.transcript_id
+
+
+@pytest.mark.asyncio
+async def test_streak_does_not_leak(tmp_path) -> None:
+    """Round-8 §1: two unanimous debate questions on one engine, each needs
+    stability_rounds of its own — a leaked streak would finish q2 in one round."""
+
+    def one_question_script() -> list:
+        return [
+            ("m1", ("independent structured stance",), position(PG)),
+            ("m2", ("independent structured stance",), position(PG)),
+            ("m3", ("independent structured stance",), position(PG)),
+            (None, ("Synthesize the shared platform",), position(PG)),
+            (None, ("Name each faction",), {}),
+        ]
+
+    engine = make_engine(
+        ScriptedProvider(one_question_script() + one_question_script()),
+        tmp_path, stability_rounds=2,
+    )
+    first = await engine.deliberate(
+        "PostgreSQL?", force_protocol=Protocol.DEBATE, clarify_mode="no-clarify",
+    )
+    second = await engine.deliberate(
+        "Redis?", force_protocol=Protocol.DEBATE, clarify_mode="no-clarify",
+    )
+    assert first.zhoda_reached and first.rounds_taken == 2
+    assert second.zhoda_reached and second.rounds_taken == 2  # not 1 — no leak

@@ -1,10 +1,13 @@
-"""Stage 2: faction formation — with internal synthesis and a cheap prefilter.
+"""Stage 2: faction formation — with internal synthesis and an AUDITED prefilter.
 
-A cluster of 2+ models SYNTHESIZES its platform from all member positions
-(one call by the faction speaker). Pairwise structural comparison by a
-conflict-checked judge is the source of truth — but only for CANDIDATE pairs
-(round-7 §11): a near-identical token overlap (Jaccard >= 0.9, TODO-calibrate)
-merges without spending a judge call.
+A cluster of 2+ models SYNTHESIZES its platform from all member positions.
+Pairwise structural comparison by a conflict-checked judge is the source of
+truth — candidate pairs only. Round-8 §3: the Jaccard prefilter gets a
+NEGATION GUARD ('use X' vs 'don't use X' never auto-merges) and every
+auto-merge is recorded in `prefilter_merges` and logged to the transcript —
+it must not look like a judge decision.
+
+Per-question state (divergences, prefilter_merges): created per deliberation.
 """
 
 import asyncio
@@ -29,12 +32,16 @@ Synthesize the shared platform position. ONLY valid JSON:
 {{"thesis": "...", "answer": "...", "arguments": ["..."],
   "falsifiability": "...", "confidence": 0.0}}"""
 
+NEGATION_TOKENS = {"no", "not", "never", "without", "don't", "dont", "avoid", "never"}
+
 
 def near_identical(a: str, b: str, threshold: float = 0.9) -> bool:
-    """Cheap prefilter (round-7 §11): token-overlap Jaccard. TODO(calibrate)."""
+    """Cheap prefilter with a negation guard (round-8 §3). TODO(calibrate)."""
     ta, tb = set(a.lower().split()), set(b.lower().split())
     if not ta or not tb:
         return False
+    if bool(ta & NEGATION_TOKENS) != bool(tb & NEGATION_TOKENS):
+        return False  # one negates, the other doesn't — the judge decides
     return len(ta & tb) / len(ta | tb) >= threshold
 
 
@@ -48,6 +55,7 @@ class FactionClusterer:
     def __init__(self, provider: OpenRouterProvider) -> None:
         self.provider = provider
         self.divergences: list[Disagreement] = []
+        self.prefilter_merges: list[dict[str, str]] = []  # audit trail (round-8 §3)
 
     async def cluster(
         self,
@@ -66,13 +74,15 @@ class FactionClusterer:
             return x
 
         pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
-        candidates = [
-            (i, j) for i, j in pairs
-            if not near_identical(positions[i].thesis, positions[j].thesis)
-        ]
+        candidates = []
         for i, j in pairs:
-            if (i, j) not in candidates:
-                parent[find(j)] = find(i)  # prefilter: near-identical, no judge call
+            if near_identical(positions[i].thesis, positions[j].thesis):
+                parent[find(j)] = find(i)  # auto-merge, no judge call...
+                self.prefilter_merges.append({  # ...but ALWAYS audited
+                    "a": positions[i].thesis, "b": positions[j].thesis, "via": "prefilter",
+                })
+            else:
+                candidates.append((i, j))
 
         results = await asyncio.gather(
             *(self._compare(positions[i], positions[j], judges) for i, j in candidates),

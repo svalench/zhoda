@@ -1,14 +1,18 @@
 """Stage 3: Oxford-style debate rounds.
 
 Order (round-6 §1): critiques -> devil's advocate -> rebuttals -> closures ->
-REVISION (with SUPERSEDED) -> switches against the REVISED platforms.
-Round-7:
-- a switch moves only TOWARD the objection's author faction (§3) — with 3+
-  factions 'the next faction' was not necessarily the convincing one;
-- rebuttals, closure votes and revisions run in PARALLEL (§11) — the round
-  cost in wall time drops, the request count is tracked per stage;
-- devil's advocate rotation is deterministic (sorted candidates) and excludes
-  leading-faction members while candidates exist outside.
+REVISION -> switches against the REVISED platforms.
+
+Round-8:
+- SUPERSEDED is symmetric to CLOSED (§2): after a revision, the objection's
+  AUTHOR faction is asked to withdraw (one counter-round); if it refuses,
+  the non-conflicted judge PAIR must unanimously confirm the objection is
+  addressed. No revision-washing: the accused can't free itself alone.
+- switches pick the first open objection with a RESOLVABLE author faction
+  (§4) — a devil's advocate objection no longer blocks a valid switch.
+- the revision speaker ROTATES among faction members per round (§6) — members
+  who joined via a switch get the pen; the faction is not 'member[0] + crowd'
+  in dynamics.
 """
 
 import asyncio
@@ -68,6 +72,12 @@ why the objections fail. ONLY valid JSON:
   "falsifiability": "...", "confidence": 0.0,
   "changed": true, "change_note": "what changed and why (or why not)"}}"""
 
+WITHDRAW_PROMPT = """Your faction raised this objection ({flaw_type}): {claim} {specifics}
+The opposing faction revised its platform. New thesis: {thesis}
+
+Do you withdraw your objection? ONLY valid JSON:
+{{"withdraw": true}} or {{"withdraw": false}}"""
+
 SUPERSEDE_PROMPT = """Objection ({flaw_type}): {claim} {specifics}
 The faction revised its platform. New thesis: {thesis}
 
@@ -83,6 +93,9 @@ class Round(BaseModel):
 
 
 class DebateEngine:
+    """Per-question state (objections, switches) — created per deliberation
+    by the engine (round-8 §1), never shared across questions."""
+
     def __init__(self, provider: OpenRouterProvider, devils_advocate: bool = True) -> None:
         self.provider = provider
         self.devils_advocate = devils_advocate
@@ -121,7 +134,7 @@ class DebateEngine:
 
     def validate_switch(self, switch: FactionSwitch) -> bool:
         """Open objection by ID targeting the current faction + non-empty
-        citation + target IS the objection's author faction (round-7 §3)."""
+        citation + target IS the objection's author faction."""
         objection = next(
             (c for c in self.objections if c.id == switch.objection_id), None,
         )
@@ -154,7 +167,7 @@ class DebateEngine:
             zip(
                 [f.name for f, _ in pairs],
                 await asyncio.gather(
-                    *(self._critique(f, t, speakers, CRITIQUE_PROMPT) for f, t in pairs),
+                    *(self._critique(f, t, speakers, CRITIQUE_PROMPT, number) for f, t in pairs),
                     return_exceptions=True,
                 ),
                 strict=True,
@@ -168,7 +181,7 @@ class DebateEngine:
             advocate_alias = candidates[(number - 1) % len(candidates)]
             da = await self._critique(
                 Faction(name="devils_advocate", members=[advocate_alias]),
-                leading, speakers, DEVILS_ADVOCATE_PROMPT,
+                leading, speakers, DEVILS_ADVOCATE_PROMPT, number,
             )
             raw.append(("devils_advocate", da))
 
@@ -177,12 +190,12 @@ class DebateEngine:
                 continue
             try:
                 critique = Critique(**item)
-                critique.author_faction = author  # round-7 §3: switches point here
+                critique.author_faction = author
                 round_.critiques.append(self.register_critique(critique))
             except (ValueError, TypeError):
                 continue
 
-        # 3. rebuttals (parallel) + closure votes (parallel per objection)
+        # 3. rebuttals (parallel) + closure votes (judge pair, parallel)
         open_items = [c for c in self.objections if c.status == ObjectionStatus.OPEN]
 
         async def rebut(critique: Critique) -> tuple[Critique, str] | None:
@@ -225,12 +238,13 @@ class DebateEngine:
             return_exceptions=True,
         )
 
-        # 4. PLATFORM REVISION (parallel) — before switches; then supersede
+        # 4. PLATFORM REVISION (rotating speaker) — then symmetric supersede
         async def revise(faction: Faction) -> tuple[Faction, dict] | None:
             open_against = self._open_against(faction)
             if not open_against or not faction.members or faction.platform is None:
                 return None
-            speaker = speakers.get(faction.members[0])
+            # rotating speaker: members who joined via a switch get the pen (§6)
+            speaker = speakers.get(faction.members[(number - 1) % len(faction.members)])
             if speaker is None:
                 return None
             objections_text = "\n".join(
@@ -265,35 +279,68 @@ class DebateEngine:
             round_.revisions.append({
                 "faction": faction.name, "change_note": data.get("change_note", ""),
             })
+            # supersede, symmetric with closure (§2): author may withdraw;
+            # otherwise the judge PAIR must unanimously confirm 'addressed'
             for critique in self._open_against(faction):
-                verdict = await self.provider.ask_json(
-                    judges.for_faction(faction),
-                    SUPERSEDE_PROMPT.format(
-                        flaw_type=critique.flaw_type, claim=critique.claim,
-                        specifics=critique.specifics, thesis=faction.platform.thesis,
-                    ),
+                author = next(
+                    (f for f in factions if f.name == critique.author_faction), None,
                 )
-                if verdict.get("addressed"):
-                    self.supersede_objection(critique.id)
+                withdrawn = False
+                if author is not None and author.members:
+                    author_speaker = speakers.get(author.members[0])
+                    if author_speaker is not None:
+                        answer = await self.provider.ask_json(
+                            author_speaker,
+                            WITHDRAW_PROMPT.format(
+                                flaw_type=critique.flaw_type, claim=critique.claim,
+                                specifics=critique.specifics,
+                                thesis=faction.platform.thesis,
+                            ),
+                        )
+                        withdrawn = bool(answer.get("withdraw"))
+                if not withdrawn:
+                    votes = await asyncio.gather(
+                        *(self.provider.ask_json(
+                            judge,
+                            SUPERSEDE_PROMPT.format(
+                                flaw_type=critique.flaw_type, claim=critique.claim,
+                                specifics=critique.specifics,
+                                thesis=faction.platform.thesis,
+                            ),
+                        ) for judge in judges.pair_for(faction)),
+                        return_exceptions=True,
+                    )
+                    if not (
+                        votes
+                        and all(isinstance(v, dict) and v.get("addressed") for v in votes)
+                    ):
+                        continue  # stays open — no revision-washing
+                self.supersede_objection(critique.id)
 
-        # 5. switches — against REVISED platforms, TOWARD the objection's author
+        # 5. switches — against REVISED platforms, first RESOLVABLE objection
         for faction in factions:
             open_against = self._open_against(faction)
             if not open_against or faction.platform is None:
                 continue
             for member in list(faction.members):
                 speaker = speakers.get(member)
-                objection = open_against[0]
-                target = next(
-                    (f for f in factions if f.name == objection.author_faction), None,
+                objection = next(
+                    (
+                        c for c in open_against
+                        if any(f.name == c.author_faction for f in factions)
+                    ),
+                    None,
                 )
-                if speaker is None or target is None or target.platform is None:
-                    continue  # e.g. devil's advocate authored — nowhere to switch
+                if speaker is None or objection is None:
+                    continue  # e.g. only devil's advocate objections — nowhere to switch
+                target = next(
+                    f for f in factions if f.name == objection.author_faction
+                )
                 data = await self.provider.ask_json(
                     speaker,
                     SWITCH_PROMPT.format(
                         claim=objection.claim,
-                        opponent_thesis=target.platform.thesis,
+                        opponent_thesis=target.platform.thesis if target.platform else "",
                     ),
                 )
                 if not data.get("switch"):
@@ -322,10 +369,11 @@ class DebateEngine:
         target: Faction,
         speakers: dict[str, str],
         prompt: str,
+        number: int,
     ) -> dict | None:
         if target.platform is None:
             return None
-        speaker = speakers.get(faction.members[0])
+        speaker = speakers.get(faction.members[(number - 1) % len(faction.members)])
         if speaker is None:
             return None
         return await self.provider.ask_json(
