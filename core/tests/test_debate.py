@@ -72,7 +72,7 @@ def test_switch_only_toward_the_objections_author() -> None:
 
 def test_superseded_objection_leaves_the_ledger() -> None:
     engine = make_engine()
-    critique = engine.register_critique(makecritique())
+    critique = engine.register_critique(make_critique())
     assert engine.supersede_objection(critique.id)
     assert critique.status == ObjectionStatus.SUPERSEDED
     assert not engine.validate_switch(make_switch(objection_id=critique.id))
