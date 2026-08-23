@@ -1,0 +1,14 @@
+---
+description: Commit and branch conventions
+alwaysApply: false
+---
+
+# Git conventions
+
+- Conventional Commits in English: `feat:`, `fix:`, `docs:`, `refactor:`,
+  `test:`, `chore:`. Scope optional: `feat(core): ...`.
+- One logical change per commit. Don't mix code and docs rewrites.
+- `main` is always releasable; feature work on branches `feat/<slug>`.
+- Never commit secrets, `.env`, API keys, or recorded fixtures containing
+  real user data.
+- Commit messages describe WHY, not just WHAT, when the change is non-obvious.

@@ -1,0 +1,38 @@
+---
+description: Zhoda project context and hard rules — always active
+alwaysApply: true
+---
+
+# Zhoda — project context
+
+Zhoda is an open-source deliberation engine for LLMs: models interview the user
+(Stage 0 elicitation), form factions, debate Oxford-style, and reach consensus
+("zhoda") or produce an honest dissent map. Output = verdict + minority report +
+full transcript. Protocol: docs/whitepaper.md. Design: docs/master-plan.md.
+
+## Monorepo layout
+
+- `core/` — zhoda-core, Python 3.12+ / FastAPI. The deliberation engine.
+- `mcp/` — zhoda-mcp, Python MCP server wrapping the core.
+- `plugins/dsh/` — @zhoda/dsh-plugin, TypeScript, DeepSeek Harness UI.
+- `docs/` — design docs (Russian), whitepaper (English).
+
+## Hard rules (never violate)
+
+1. Dependencies point DOWN only: plugins/dsh → mcp → core. Never upward.
+   `core/` must not import anything from `mcp/` or `plugins/`.
+2. No token, no crypto payments, no trading code. Funding = donations.
+3. BYOK only: model API keys come from env (`OPENROUTER_API_KEY`, `ZHODA_*`).
+   Never hardcode keys, never commit `.env`.
+4. No multi-account abuse of OpenRouter free tiers — one key, respect rate limits
+   (20 req/min, 50/day). On quota exhaustion return honest `quota_exceeded`,
+   never silently degrade.
+5. Every deliberation has a hard budget cap (`budget_per_question_usd`).
+
+## Protocol invariants
+
+- Critique rounds are always anonymized (models never see who wrote which answer).
+- Consensus is computed on structured JSON theses, never on prose similarity.
+- The minority report is never erased from a verdict.
+- Every deliberation is persisted as a transcript (хроніка) before returning.
+- A model may switch factions only with a cited convincing argument.

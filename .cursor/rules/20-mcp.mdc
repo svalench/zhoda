@@ -1,0 +1,21 @@
+---
+description: Conventions for zhoda-mcp (MCP server)
+globs: mcp/**
+alwaysApply: false
+---
+
+# zhoda-mcp conventions
+
+- Built on the Python `mcp` SDK (FastMCP). stdio transport by default,
+  SSE optional via `ZHODA_CORE_URL`.
+- Tools: `zhoda_clarify`, `zhoda_deliberate`, `zhoda_verdict`,
+  `zhoda_transcript`, `zhoda_reputation`. Names and signatures must match
+  docs/02-mcp-server.md.
+- Tools return structured JSON, never prose walls — the host agent decides
+  how to render.
+- `zhoda_deliberate` must first return a cost/time estimate and require
+  explicit confirmation from the host before running the full cycle.
+- Long deliberations stream progress via MCP notifications so hosts
+  don't kill the call on timeout.
+- The core is embedded in-process by default; `ZHODA_CORE_URL` switches
+  to a remote core over HTTP. No deliberation logic in this layer.

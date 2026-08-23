@@ -1,0 +1,18 @@
+---
+description: Documentation language and sync rules
+globs: docs/**, README.md, **/README.md
+alwaysApply: false
+---
+
+# Documentation conventions
+
+- Public-facing docs in English: root README, docs/whitepaper.md, package READMEs.
+- Design docs in Russian: docs/master-plan.md, docs/01-core.md,
+  docs/02-mcp-server.md, docs/03-dsh-plugin.md.
+- Code and docs change together: schema change → update docs/01-core.md;
+  tool change → update docs/02-mcp-server.md; roadmap progress → tick
+  checkboxes in docs/master-plan.md in the same commit.
+- Product vocabulary is fixed: consensus = "zhoda", transcript = "хроніка",
+  factions = "фракцыі". Don't invent synonyms in docs.
+- No promises without evidence: benchmark numbers go into docs only after
+  they are measured and reproducible.

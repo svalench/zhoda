@@ -1,0 +1,19 @@
+---
+description: Conventions for the DeepSeek Harness plugin (TypeScript)
+globs: plugins/**/*.ts, plugins/**/*.tsx, plugins/**/package.json
+alwaysApply: false
+---
+
+# @zhoda/dsh-plugin conventions
+
+- TypeScript strict mode, `pnpm`, React for UI panels.
+- Thin shell only: the plugin calls zhoda-core (HTTP) or zhoda-mcp (SSE) and
+  renders results. Zero deliberation logic in this package.
+- Pin the dsh peer dependency; keep a compatibility matrix in the README.
+  dsh is a developer preview — expect breaking changes.
+- Feature flag `ZHODA_DSH_UI=off` must degrade the plugin to a pure
+  tools provider if dsh UI slots change.
+- The faction graph animates switches: a model moving factions is the
+  signature visual — never render it as a static list.
+- If the core is unreachable, show an honest "council offline" state with
+  launch instructions (`uvx zhoda-mcp`), never a spinner forever.

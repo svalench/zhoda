@@ -1,0 +1,23 @@
+---
+description: Conventions for zhoda-core (Python/FastAPI)
+globs: core/**/*.py, core/**/pyproject.toml
+alwaysApply: false
+---
+
+# zhoda-core conventions
+
+- Python 3.12+, `uv` for deps, src layout: `core/src/zhoda_core/`.
+- Pydantic v2 models live in `models/` and must mirror the schemas in
+  docs/01-core.md: ValueMap, Position, Critique, FactionSwitch, Verdict,
+  Disagreement, CostReport. Changing a schema = update the doc in the same commit.
+- All model calls are async (`httpx.AsyncClient`). Fan-out via
+  `asyncio.gather(return_exceptions=True)`: a failed model is excluded from the
+  round; raise only if ALL models failed (graceful degradation).
+- No blocking I/O inside async functions. No `time.sleep` — use `asyncio.sleep`.
+- OpenRouter provider: retries with exponential backoff on 429/5xx, semantic
+  cache keyed by hash(question + value_map + model), strict JSON parsing of
+  model outputs with one repair retry.
+- Type hints everywhere; `ruff` + `mypy` clean. Line length 100.
+- Tests: pytest, recorded fixtures only (no live API calls in CI). Three
+  canonical scenarios: consensus, split, escalation.
+- CLI entry: `zhoda deliberate "..."` (typer), live round output via rich.
