@@ -1,12 +1,17 @@
-"""Judge selection with conflict-of-interest avoidance (round-5 §2, round-6 §5).
+"""Judge selection with conflict-of-interest avoidance.
 
-Two judge models come from config (recommended: OUTSIDE the council — then
-`conflicts()` is empty and `outside()` is the full pair). A judge never rules
-on anything involving their own faction; closure requires the whole
-non-conflicted pair to agree — disagreement leaves the objection OPEN.
+Two judge models from config, REQUIRED to sit outside the council (round-7
+§1-2): the engine refuses to start with fewer than two clean judges. A judge
+never rules on their own faction; closure requires the non-conflicted pair
+to agree. There is NO silent fallback to a conflicted judge — a full
+conflict is a hard error, not a soft surrender of the invariant.
 """
 
 from .factions import Faction
+
+
+class JudgesConflictError(Exception):
+    """All judges are conflicted for this faction — configuration error."""
 
 
 class Judges:
@@ -14,27 +19,31 @@ class Judges:
         if len(set(models)) < 2:
             raise ValueError("need two DISTINCT judge models")
         self.models = models
-        # alias is None for judges outside the council — they never conflict
-        self.alias_of = {m: aliases.get(m) for m in models}
+        self.alias_of = {m: aliases.get(m) for m in models}  # None = outside council
 
     def for_faction(self, faction: Faction) -> str:
-        """A judge that is not a member of this faction."""
         for model, alias in self.alias_of.items():
             if alias is None or alias not in faction.members:
                 return model
-        return self.models[0]  # both conflicted — config should avoid this
+        raise JudgesConflictError(
+            f"all judges conflicted for faction {faction.name!r} — "
+            "configure judges outside the council"
+        )
 
     def pair_for(self, faction: Faction) -> tuple[str, ...]:
-        """All judges not conflicted against this faction (for closure votes)."""
         clean = tuple(
             m for m, a in self.alias_of.items() if a is None or a not in faction.members
         )
-        return clean or (self.models[0],)
+        if not clean:
+            raise JudgesConflictError(
+                f"all judges conflicted for faction {faction.name!r} — "
+                "configure judges outside the council"
+            )
+        return clean
 
     def outside(self) -> tuple[str, ...]:
-        """Judges outside the council — zero possible conflict (consensus probe)."""
+        """Judges outside the council — zero possible conflict."""
         return tuple(m for m, a in self.alias_of.items() if a is None)
 
     def conflicts(self) -> list[str]:
-        """Judge models that sit in the council — the CLI warns about these."""
         return [m for m, a in self.alias_of.items() if a is not None]

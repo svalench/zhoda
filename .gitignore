@@ -15,5 +15,9 @@ node_modules/
 .env
 .env.*
 
+# Zhoda runtime artifacts
+transcripts/
+.zhoda-cache.db
+
 # OS
 .DS_Store

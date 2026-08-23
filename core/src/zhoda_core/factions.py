@@ -1,13 +1,10 @@
-"""Stage 2: faction formation — WITH internal synthesis (round-6 §2).
+"""Stage 2: faction formation — with internal synthesis and a cheap prefilter.
 
 A cluster of 2+ models SYNTHESIZES its platform from all member positions
-(one call by the faction speaker) — the faction is a collective author at
-formation, not 'first member broadcasts, others vote with their feet'.
-During debate rounds the speaker (members[0]) carries the faction's voice;
-that is documented, not hidden.
-
-Pairwise structural comparison by a conflict-checked judge is the source of
-truth for grouping; divergences seed dissent_map.
+(one call by the faction speaker). Pairwise structural comparison by a
+conflict-checked judge is the source of truth — but only for CANDIDATE pairs
+(round-7 §11): a near-identical token overlap (Jaccard >= 0.9, TODO-calibrate)
+merges without spending a judge call.
 """
 
 import asyncio
@@ -31,6 +28,14 @@ Their individual answers:
 Synthesize the shared platform position. ONLY valid JSON:
 {{"thesis": "...", "answer": "...", "arguments": ["..."],
   "falsifiability": "...", "confidence": 0.0}}"""
+
+
+def near_identical(a: str, b: str, threshold: float = 0.9) -> bool:
+    """Cheap prefilter (round-7 §11): token-overlap Jaccard. TODO(calibrate)."""
+    ta, tb = set(a.lower().split()), set(b.lower().split())
+    if not ta or not tb:
+        return False
+    return len(ta & tb) / len(ta | tb) >= threshold
 
 
 class Faction(BaseModel):
@@ -61,11 +66,19 @@ class FactionClusterer:
             return x
 
         pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
+        candidates = [
+            (i, j) for i, j in pairs
+            if not near_identical(positions[i].thesis, positions[j].thesis)
+        ]
+        for i, j in pairs:
+            if (i, j) not in candidates:
+                parent[find(j)] = find(i)  # prefilter: near-identical, no judge call
+
         results = await asyncio.gather(
-            *(self._compare(positions[i], positions[j], judges) for i, j in pairs),
+            *(self._compare(positions[i], positions[j], judges) for i, j in candidates),
             return_exceptions=True,
         )
-        for (i, j), res in zip(pairs, results, strict=True):
+        for (i, j), res in zip(candidates, results, strict=True):
             if not isinstance(res, dict):
                 continue  # failed comparison -> keep separate (safe side)
             if res.get("same"):

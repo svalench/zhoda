@@ -1,14 +1,14 @@
 """Stage 3: Oxford-style debate rounds.
 
-Round order (round-6 §1): critiques -> devil's advocate -> rebuttals ->
-judged closures -> PLATFORM REVISION (with SUPERSEDED) -> switches.
-Revision comes BEFORE switches: a model decides whether to leave against the
-UPDATED platform — nobody flees a ship that was just repaired. A revision
-that addresses an objection supersedes it (judge-confirmed): objections
-never linger as ghosts pressuring a text that no longer exists.
-
-Devil's advocate rotation EXCLUDES leading-faction members while candidates
-exist outside (round-6 §3) — no model argues with itself.
+Order (round-6 §1): critiques -> devil's advocate -> rebuttals -> closures ->
+REVISION (with SUPERSEDED) -> switches against the REVISED platforms.
+Round-7:
+- a switch moves only TOWARD the objection's author faction (§3) — with 3+
+  factions 'the next faction' was not necessarily the convincing one;
+- rebuttals, closure votes and revisions run in PARALLEL (§11) — the round
+  cost in wall time drops, the request count is tracked per stage;
+- devil's advocate rotation is deterministic (sorted candidates) and excludes
+  leading-faction members while candidates exist outside.
 """
 
 import asyncio
@@ -112,7 +112,7 @@ class DebateEngine:
         return False
 
     def supersede_objection(self, objection_id: str) -> bool:
-        """Mark an objection as addressed by a platform revision (round-6 §1)."""
+        """Mark an objection as addressed by a platform revision."""
         for item in self.objections:
             if item.id == objection_id and item.status == ObjectionStatus.OPEN:
                 item.status = ObjectionStatus.SUPERSEDED
@@ -120,15 +120,18 @@ class DebateEngine:
         return False
 
     def validate_switch(self, switch: FactionSwitch) -> bool:
-        """BOTH halves: an OPEN objection by ID targeting the model's current
-        faction AND a non-empty cited argument."""
-        has_objection = any(
-            item.id == switch.objection_id
-            and item.status == ObjectionStatus.OPEN
-            and item.target_faction == switch.from_faction
-            for item in self.objections
+        """Open objection by ID targeting the current faction + non-empty
+        citation + target IS the objection's author faction (round-7 §3)."""
+        objection = next(
+            (c for c in self.objections if c.id == switch.objection_id), None,
         )
-        return has_objection and bool(switch.convinced_by.strip())
+        if objection is None or objection.status != ObjectionStatus.OPEN:
+            return False
+        if objection.target_faction != switch.from_faction:
+            return False
+        if objection.author_faction and objection.author_faction != switch.to_faction:
+            return False
+        return bool(switch.convinced_by.strip())
 
     async def run_round(
         self,
@@ -147,37 +150,49 @@ class DebateEngine:
 
         # 1. critiques: every faction vs the strongest OTHER faction
         pairs = [(f, leading if f is not leading else ordered[1]) for f in ordered]
-        raw = await asyncio.gather(
-            *(self._critique(f, target, speakers, CRITIQUE_PROMPT) for f, target in pairs),
-            return_exceptions=True,
+        raw: list[tuple[str, object]] = list(
+            zip(
+                [f.name for f, _ in pairs],
+                await asyncio.gather(
+                    *(self._critique(f, t, speakers, CRITIQUE_PROMPT) for f, t in pairs),
+                    return_exceptions=True,
+                ),
+                strict=True,
+            )
         )
 
-        # 2. devil's advocate — rotation EXCLUDES leading-faction members
+        # 2. devil's advocate — deterministic rotation, excludes the leading faction
         if self.devils_advocate and leading.platform is not None:
-            candidates = [a for a in speakers if a not in leading.members] or list(speakers)
+            candidates = sorted(a for a in speakers if a not in leading.members)
+            candidates = candidates or sorted(speakers)
             advocate_alias = candidates[(number - 1) % len(candidates)]
-            raw.append(await self._critique(
+            da = await self._critique(
                 Faction(name="devils_advocate", members=[advocate_alias]),
                 leading, speakers, DEVILS_ADVOCATE_PROMPT,
-            ))
+            )
+            raw.append(("devils_advocate", da))
 
-        for item in raw:
+        for author, item in raw:
             if not isinstance(item, dict):
                 continue
             try:
-                round_.critiques.append(self.register_critique(Critique(**item)))
+                critique = Critique(**item)
+                critique.author_faction = author  # round-7 §3: switches point here
+                round_.critiques.append(self.register_critique(critique))
             except (ValueError, TypeError):
                 continue
 
-        # 3. rebuttals from target factions + closure by the judge PAIR
-        for critique in [c for c in self.objections if c.status == ObjectionStatus.OPEN]:
+        # 3. rebuttals (parallel) + closure votes (parallel per objection)
+        open_items = [c for c in self.objections if c.status == ObjectionStatus.OPEN]
+
+        async def rebut(critique: Critique) -> tuple[Critique, str] | None:
             target = next((f for f in factions if f.name == critique.target_faction), None)
             if target is None or target.platform is None:
-                continue
+                return None
             speaker = speakers.get(target.members[0])
             if speaker is None:
-                continue
-            rebuttal = await self.provider.complete(
+                return None
+            text = await self.provider.complete(
                 speaker,
                 REBUTTAL_PROMPT.format(
                     name=target.name, platform=target.platform.thesis,
@@ -185,6 +200,13 @@ class DebateEngine:
                     specifics=critique.specifics,
                 ),
             )
+            return critique, text
+
+        rebuttals = await asyncio.gather(*(rebut(c) for c in open_items), return_exceptions=True)
+
+        async def judge_closure(item: tuple[Critique, str]) -> None:
+            critique, rebuttal = item
+            target = next(f for f in factions if f.name == critique.target_faction)
             votes = await asyncio.gather(
                 *(self.provider.ask_json(
                     judge,
@@ -198,14 +220,19 @@ class DebateEngine:
             if votes and all(isinstance(v, dict) and v.get("closed") for v in votes):
                 self.close_objection(critique.id, rebuttal, rebuttal_by=target.name)
 
-        # 4. PLATFORM REVISION — before switches (round-6 §1)
-        for faction in factions:
+        await asyncio.gather(
+            *(judge_closure(item) for item in rebuttals if isinstance(item, tuple)),
+            return_exceptions=True,
+        )
+
+        # 4. PLATFORM REVISION (parallel) — before switches; then supersede
+        async def revise(faction: Faction) -> tuple[Faction, dict] | None:
             open_against = self._open_against(faction)
             if not open_against or not faction.members or faction.platform is None:
-                continue
+                return None
             speaker = speakers.get(faction.members[0])
             if speaker is None:
-                continue
+                return None
             objections_text = "\n".join(
                 f"- [{c.flaw_type}] {c.claim} {c.specifics}" for c in open_against
             )
@@ -216,7 +243,16 @@ class DebateEngine:
                     objections=objections_text,
                 ),
             )
-            if not (data.get("changed") and data.get("thesis")):
+            return faction, data
+
+        revised = await asyncio.gather(
+            *(revise(f) for f in factions), return_exceptions=True,
+        )
+        for item in revised:
+            if not isinstance(item, tuple):
+                continue
+            faction, data = item
+            if not (data.get("changed") and data.get("thesis")) or faction.platform is None:
                 continue
             faction.platform = Position(
                 model=faction.platform.model,
@@ -229,8 +265,7 @@ class DebateEngine:
             round_.revisions.append({
                 "faction": faction.name, "change_note": data.get("change_note", ""),
             })
-            # supersede: judge confirms the revised platform addresses each objection
-            for critique in open_against:
+            for critique in self._open_against(faction):
                 verdict = await self.provider.ask_json(
                     judges.for_faction(faction),
                     SUPERSEDE_PROMPT.format(
@@ -241,33 +276,36 @@ class DebateEngine:
                 if verdict.get("addressed"):
                     self.supersede_objection(critique.id)
 
-        # 5. switches — decided against the REVISED platforms
+        # 5. switches — against REVISED platforms, TOWARD the objection's author
         for faction in factions:
             open_against = self._open_against(faction)
             if not open_against or faction.platform is None:
                 continue
-            opponent = next((f for f in factions if f is not faction), None)
             for member in list(faction.members):
                 speaker = speakers.get(member)
-                if speaker is None or opponent is None or opponent.platform is None:
-                    continue
+                objection = open_against[0]
+                target = next(
+                    (f for f in factions if f.name == objection.author_faction), None,
+                )
+                if speaker is None or target is None or target.platform is None:
+                    continue  # e.g. devil's advocate authored — nowhere to switch
                 data = await self.provider.ask_json(
                     speaker,
                     SWITCH_PROMPT.format(
-                        claim=open_against[0].claim,
-                        opponent_thesis=opponent.platform.thesis,
+                        claim=objection.claim,
+                        opponent_thesis=target.platform.thesis,
                     ),
                 )
                 if not data.get("switch"):
                     continue
                 switch = FactionSwitch(
-                    model=member, from_faction=faction.name, to_faction=opponent.name,
+                    model=member, from_faction=faction.name, to_faction=target.name,
                     convinced_by=data.get("convinced_by", ""),
-                    objection_id=open_against[0].id,
+                    objection_id=objection.id,
                 )
                 if self.validate_switch(switch):
                     faction.members.remove(member)
-                    opponent.members.append(member)
+                    target.members.append(member)
                     round_.switches.append(switch)
                     self.switches.append(switch)
         return round_

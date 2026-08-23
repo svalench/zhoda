@@ -2,15 +2,17 @@
 
 Round-3: 429 transient vs quota, real usage accounting, 4xx fail-fast.
 Round-4: per-question budget (begin_question + delta), pre-call estimate.
-Round-5: question_report() returns the per-question CostReport DELTA (not the
-provider-lifetime totals); cache keys use sha256 — hash() is randomized
-between processes and would break a persistent cache.
+Round-5: question_report() delta; sha256 cache keys.
+Round-7: optional persistent sqlite cache (cache_path) — in-memory dies with
+the process; ask_json requires a top-level JSON OBJECT (all our prompts ask
+for objects; an array was silently accepted before).
 """
 
 import asyncio
 import hashlib
 import json
 import os
+import sqlite3
 
 import httpx
 
@@ -20,7 +22,7 @@ DEFAULT_MAX_TOKENS = 2000
 
 
 def make_cache_key(*parts: object) -> str:
-    """Process-stable cache key (round-5 §5: hash() is per-process random)."""
+    """Process-stable cache key."""
     return hashlib.sha256("::".join(str(p) for p in parts).encode()).hexdigest()[:16]
 
 
@@ -58,16 +60,21 @@ class OpenRouterProvider:
         max_retries: int = 3,
         max_concurrency: int = 4,
         prices: dict[str, float] | None = None,
+        cache_path: str | None = None,
     ) -> None:
         self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY is required (BYOK)")
         self.budget_usd = budget_usd
         self.max_retries = max_retries
-        self.prices = prices or {}  # model -> USD per 1K output tokens
+        self.prices = prices or {}
         self.cost = CostReport()
         self._question_start = CostReport()
         self._cache: dict[str, str] = {}
+        self._db: sqlite3.Connection | None = None
+        if cache_path:
+            self._db = sqlite3.connect(cache_path)
+            self._db.execute("CREATE TABLE IF NOT EXISTS cache (k TEXT PRIMARY KEY, v TEXT)")
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._client = httpx.AsyncClient(timeout=120.0)
 
@@ -76,7 +83,7 @@ class OpenRouterProvider:
         self._question_start = self.cost.model_copy()
 
     def question_report(self) -> CostReport:
-        """Per-question delta (round-5 §4): what THIS deliberation spent."""
+        """Per-question delta: what THIS deliberation spent."""
         return CostReport(
             requests=self.cost.requests - self._question_start.requests,
             tokens_in=self.cost.tokens_in - self._question_start.tokens_in,
@@ -100,6 +107,21 @@ class OpenRouterProvider:
                     f"${self.budget_usd} (question already at ${self.question_usd:.4f})"
                 )
 
+    def _cache_get(self, key: str) -> str | None:
+        if key in self._cache:
+            return self._cache[key]
+        if self._db is not None:
+            row = self._db.execute("SELECT v FROM cache WHERE k = ?", (key,)).fetchone()
+            if row:
+                return row[0]
+        return None
+
+    def _cache_put(self, key: str, value: str) -> None:
+        self._cache[key] = value
+        if self._db is not None:
+            self._db.execute("INSERT OR REPLACE INTO cache (k, v) VALUES (?, ?)", (key, value))
+            self._db.commit()
+
     async def complete(
         self,
         model: str,
@@ -108,15 +130,17 @@ class OpenRouterProvider:
         cache_key: str | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
-        if cache_key and cache_key in self._cache:
-            self.cost.cache_hits += 1
-            return self._cache[cache_key]
+        if cache_key:
+            cached = self._cache_get(cache_key)
+            if cached is not None:
+                self.cost.cache_hits += 1
+                return cached
         self._check_budget(model, max_tokens)
         async with self._semaphore:
             return await self._with_retries(model, prompt, cache_key, max_tokens)
 
     async def ask_json(self, model: str, prompt: str, *, cache_key: str | None = None) -> dict:
-        """Strict JSON output with one repair retry."""
+        """Strict JSON OBJECT with one repair retry (round-7: arrays rejected)."""
         text = await self.complete(
             model, prompt + "\n\nRespond with ONLY valid JSON. No markdown, no commentary.",
             cache_key=cache_key,
@@ -139,6 +163,8 @@ class OpenRouterProvider:
         if not starts:
             raise ValueError("no JSON in model output")
         obj, _ = json.JSONDecoder().raw_decode(cleaned[min(starts):])
+        if not isinstance(obj, dict):
+            raise ValueError("expected a JSON object")
         return obj
 
     async def _with_retries(self, model: str, prompt: str, cache_key: str | None, max_tokens: int) -> str:
@@ -185,8 +211,10 @@ class OpenRouterProvider:
 
         text: str = data["choices"][0]["message"]["content"]
         if cache_key:
-            self._cache[cache_key] = text
+            self._cache_put(cache_key, text)
         return text
 
     async def close(self) -> None:
         await self._client.aclose()
+        if self._db is not None:
+            self._db.close()

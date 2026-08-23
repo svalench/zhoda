@@ -6,13 +6,14 @@ council:
   - meta-llama/llama-4-scout:free
 chairman: google/gemini-3-pro        # names factions, appeals (paid, optional)
 
-# Two DISTINCT judges, RECOMMENDED outside the council:
-# a judge never rules on their own faction; closure needs the pair to agree.
+# Two DISTINCT judges, REQUIRED outside the council (round-7 §2):
+# the engine refuses to start with fewer than two clean judges.
+# (example ids — pick any two models NOT listed in council)
 judges:
-  - deepseek/deepseek-chat-v3:free
-  - qwen/qwen3-32b:free
+  - mistralai/mistral-small-3.1:free
+  - microsoft/phi-4:free
 
-# MANDATORY, two distinct models (round-6 §5: never derived from council order)
+# MANDATORY, two distinct models (never derived from council order)
 router_classifiers:
   - deepseek/deepseek-chat-v3:free
   - google/gemma-3-27b:free
@@ -21,9 +22,14 @@ rounds_cap: 4
 stability_rounds: 2                  # consensus must persist 2 rounds
 ambiguity_threshold: 0.6             # TODO(calibrate): smart elicitation
 devils_advocate: true                # rotation excludes the leading faction
+max_concurrency: 4                   # parallel calls to OpenRouter
+transcripts_dir: transcripts
+# cache_path: .zhoda-cache.db        # optional persistent sqlite cache
+# prices:                            # USD per 1K output tokens (paid models)
+#   google/gemini-3-pro: 0.02
 
 escalation:
-  enabled: false                     # true = paid appeal ladder
+  enabled: false                     # true = paid appeal ladder (NOT IMPLEMENTED yet)
   ladder: [free, mid, frontier]
 
 budget_per_question_usd: 0.0         # hard cap PER QUESTION; 0 = free only

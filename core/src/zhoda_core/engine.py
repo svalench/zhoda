@@ -1,11 +1,10 @@
 """Orchestration state machine: router -> elicitor -> positions -> factions
 (chairman names them) -> debate rounds (revise BEFORE switches) -> verdict.
 
-Trust is CONCENTRATED in three auditable points (round-3 §6), guarded by
-conflict-free judge pairs (round-5 §2). Round-6: smart elicitation without a
-callback DEGRADES to open_ambiguities instead of dropping the questions (§4);
-router classifiers are mandatory config, never council order (§5); the
-chairman earns its keep by naming factions.
+Round-7: judges must sit OUTSIDE the council — fewer than two clean judges is
+a hard error, never a silent fallback (§1-2). A rounds cap reached while
+split is marked DEADLOCK, not masked as split (§8). CostReport carries a
+per-stage breakdown (§11).
 """
 
 from collections.abc import Callable
@@ -42,13 +41,20 @@ class ZhodaEngine:
         rounds_cap: int = 4,
         stability_rounds: int = 2,
         devils_advocate: bool = True,
+        ambiguity_threshold: float = 0.6,
         transcripts_dir: str = "transcripts",
         alias_seed: int | None = None,  # testability hook
     ) -> None:
         if len(council) < 2:
             raise ValueError("council needs at least 2 models")
-        if router_classifiers is None:
-            raise ValueError("router_classifiers are mandatory config (round-6 §5)")
+        if router_classifiers is None or len(set(router_classifiers)) < 2:
+            raise ValueError("router_classifiers: two distinct models, from config")
+        clean_judges = [j for j in judges if j not in council]
+        if len(clean_judges) < 2:
+            raise ValueError(
+                "at least two judges must sit OUTSIDE the council "
+                f"(clean: {clean_judges}) — no silent fallback (round-7 §2)"
+            )
         self.provider = provider
         self.council = council
         self.chairman = chairman
@@ -57,7 +63,7 @@ class ZhodaEngine:
         self.alias_seed = alias_seed
         self.transcripts = TranscriptStore(transcripts_dir)
         self.router = ProtocolRouter(provider, classifiers=router_classifiers)
-        self.elicitor = Elicitor(provider)
+        self.elicitor = Elicitor(provider, ambiguity_threshold=ambiguity_threshold)
         self.clusterer = FactionClusterer(provider)
         self.debate = DebateEngine(provider, devils_advocate=devils_advocate)
         self.consensus = ConsensusChecker(provider, stability_rounds=stability_rounds)
@@ -76,9 +82,14 @@ class ZhodaEngine:
         aliases = make_aliases(self.council, seed=self.alias_seed)
         speakers = {alias: real for real, alias in aliases.items()}
         judges = Judges(self.judge_models, aliases)
+        breakdown: dict[str, int] = {}
+
+        def mark(stage: str) -> None:
+            breakdown[stage] = self.provider.question_report().requests
 
         route = await self.router.route(question, force_protocol)
         self.transcripts.append(tid, {"stage": "route", **route.model_dump()})
+        mark("route")
 
         value_map = ValueMap()
         if clarify_mode != "no-clarify":
@@ -90,12 +101,12 @@ class ZhodaEngine:
                     value_map = self.elicitor.apply_answers(elicitation.questions, answers)
                     self.transcripts.append(tid, {"stage": "answers", "answers": answers})
                 else:
-                    # degrade honestly (round-6 §4): never drop raised ambiguities
                     value_map = ValueMap(
                         assumptions=elicitation.value_map.assumptions,
                         open_ambiguities=[q.question for q in elicitation.questions],
                     )
             self.transcripts.append(tid, {"stage": "elicit", **elicitation.model_dump()})
+        mark("elicit")
 
         positions = await extract_positions(
             self.provider, self.council, question, value_map, aliases,
@@ -103,12 +114,14 @@ class ZhodaEngine:
         self.transcripts.append(
             tid, {"stage": "positions", "positions": [p.model_dump() for p in positions]},
         )
+        mark("positions")
 
         factions = await self.clusterer.cluster(positions, judges=judges, speakers=speakers)
         await self._name_factions(factions)
         self.transcripts.append(
             tid, {"stage": "factions", "factions": [f.model_dump() for f in factions]},
         )
+        mark("factions")
 
         rounds_taken = 0
         if route.protocol == Protocol.VOTE:
@@ -134,6 +147,10 @@ class ZhodaEngine:
                 )
                 if zhoda:
                     break
+            mark("debate")
+            # rounds cap exhausted while split -> DEADLOCK, not masked (round-7 §8)
+            if not zhoda and strength == ConsensusStrength.SPLIT:
+                strength = ConsensusStrength.DEADLOCK
 
         divergences = self.clusterer.divergences + [
             Disagreement(topic=c.claim, factions=[c.target_faction], summary=c.claim)
@@ -141,6 +158,8 @@ class ZhodaEngine:
             if c.status == ObjectionStatus.OPEN
         ]
 
+        cost = self.provider.question_report()
+        cost.breakdown = breakdown
         verdict = self.verdicts.build(
             factions, strength, route.protocol, value_map,
             zhoda_reached=zhoda,
@@ -148,7 +167,7 @@ class ZhodaEngine:
             rounds_taken=rounds_taken,
             transcript_id=tid,
             switches=self.debate.switches,
-            cost=self.provider.question_report(),
+            cost=cost,
             divergences=divergences,
         )
         self.transcripts.append(tid, {"stage": "verdict", "verdict": verdict.model_dump()})

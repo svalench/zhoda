@@ -1,4 +1,8 @@
-"""`zhoda deliberate "..."` — interactive Stage 0 + verdict output."""
+"""`zhoda deliberate "..."` — interactive Stage 0 + verdict output.
+
+Full config wiring (round-7 §1): everything named in zhoda.yaml reaches the
+engine — classifiers, thresholds, prices, concurrency, transcripts dir.
+"""
 
 import asyncio
 from pathlib import Path
@@ -40,26 +44,30 @@ def deliberate(
     async def run() -> None:
         provider = OpenRouterProvider(
             budget_usd=cfg.get("budget_per_question_usd", 0.0),
+            max_concurrency=cfg.get("max_concurrency", 4),
+            prices=cfg.get("prices"),
+            cache_path=cfg.get("cache_path"),
         )
         try:
             judges = cfg.get("judges")
             if not judges:
-                console.print("[yellow]no judges configured — defaulting to council members; "
-                              "conflict of interest possible[/yellow]")
-                judges = (cfg.get("chairman", cfg["council"][0]), cfg["council"][-1])
+                console.print("[red]no judges configured — judges must sit outside "
+                              "the council; refusing to start[/red]")
+                raise typer.Exit(code=2)
             in_council = [j for j in judges if j in cfg["council"]]
             if in_council:
-                console.print(f"[yellow]judges sit in the council: {in_council} — "
-                              "they will be excluded from rulings on their own faction[/yellow]")
+                console.print(f"[yellow]judges sit in the council: {in_council}[/yellow]")
             engine = ZhodaEngine(
                 provider,
                 cfg["council"],
                 chairman=cfg.get("chairman", cfg["council"][0]),
                 judges=tuple(judges),
-                router_classifiers=tuple(cfg["router_classifiers"]),  # mandatory (round-6 §5)
+                router_classifiers=tuple(cfg["router_classifiers"]),
                 rounds_cap=cfg.get("rounds_cap", 4),
                 stability_rounds=cfg.get("stability_rounds", 2),
                 devils_advocate=cfg.get("devils_advocate", True),
+                ambiguity_threshold=cfg.get("ambiguity_threshold", 0.6),
+                transcripts_dir=cfg.get("transcripts_dir", "transcripts"),
             )
             verdict = await engine.deliberate(
                 question,
@@ -79,6 +87,8 @@ def deliberate(
                 console.print(f"[bold]switches:[/bold] {len(verdict.switches)}")
             console.print(f"cost: {verdict.cost.requests} requests, "
                           f"${verdict.cost.usd:.4f}, transcript: {verdict.transcript_id}")
+            if verdict.cost.breakdown:
+                console.print(f"[dim]breakdown: {verdict.cost.breakdown}[/dim]")
         finally:
             await provider.close()
 

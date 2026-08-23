@@ -29,13 +29,13 @@ class ConsensusStrength(StrEnum):
     UNANIMOUS = "unanimous"
     MAJORITY = "majority"
     SPLIT = "split"
-    DEADLOCK = "deadlock"
+    DEADLOCK = "deadlock"  # rounds cap exhausted while split (round-7 §8)
 
 
 class ValueMap(BaseModel):
     """What the answer is checked against. `assumptions` are marked guesses
     taken without asking; `open_ambiguities` are questions that were raised
-    but never answered (smart mode without a callback — round-6 §4)."""
+    but never answered (round-6 §4, round-7 §4)."""
 
     goal: str = ""
     success_criteria: list[str] = Field(default_factory=list)
@@ -67,16 +67,16 @@ class FlawType(StrEnum):
 class ObjectionStatus(StrEnum):
     OPEN = "open"
     CLOSED = "closed"          # rebutted to the judges' satisfaction
-    SUPERSEDED = "superseded"  # addressed by a platform revision (round-6 §1)
+    SUPERSEDED = "superseded"  # addressed by a platform revision
 
 
 class Critique(BaseModel):
-    """A concrete charge with a typed flaw, registered in the objection ledger
-    with an ID. Quality gate: factual/logical need a concrete `claim`;
-    scope/values_mismatch need `specifics`. Leaves the ledger via CLOSED
-    (rebuttal) or SUPERSEDED (platform revision) — never lingers as a ghost."""
+    """A concrete charge in the objection ledger. `author_faction` is assigned
+    by the engine at registration (round-7 §3): a switch may only move TOWARD
+    the faction that authored the convincing objection."""
 
     id: str = ""                              # assigned by DebateEngine.register_critique
+    author_faction: str = ""                  # assigned by DebateEngine.run_round
     target_faction: str
     flaw_type: FlawType
     claim: str
@@ -86,15 +86,15 @@ class Critique(BaseModel):
 
 
 class FactionSwitch(BaseModel):
-    """Public faction change. Valid only against an OPEN objection referenced
-    by `objection_id` AND a non-empty cited argument (both halves, round-4 §6).
-    Decided AFTER the platform revision — against the updated platform."""
+    """Public faction change. Valid only with BOTH halves (open objection by ID
+    targeting the current faction + non-empty citation) AND a target equal to
+    the objection's author faction (round-7 §3)."""
 
     model: str
     from_faction: str
-    to_faction: str
-    convinced_by: str                         # cited convincing argument
-    objection_id: str                         # the unclosed objection behind it
+    to_faction: str                           # must equal the objection's author_faction
+    convinced_by: str
+    objection_id: str
 
 
 class Disagreement(BaseModel):
@@ -110,6 +110,7 @@ class CostReport(BaseModel):
     cache_hits: int = 0
     usd: float = 0.0
     latency_s: float = 0.0
+    breakdown: dict[str, int] = Field(default_factory=dict)  # requests per stage
 
 
 class Verdict(BaseModel):

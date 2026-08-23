@@ -1,10 +1,11 @@
 """Stage 0: smart elicitation.
 
 Questions are asked ONLY when the ambiguity score clears the threshold;
-otherwise the council proceeds with marked assumptions (round-2 §4). The
-score is inter-model agreement, not self-report (round-3 §4). Round-5 §3:
-the loop is CLOSED — engine accepts answers via on_questions callback and
-fills the ValueMap; unanswered questions degrade to marked assumptions.
+otherwise the council proceeds with marked assumptions. The score is
+inter-model agreement, not self-report. Round-6 §4: the loop is closed via
+the on_questions callback; without it, questions degrade to open_ambiguities.
+Round-7 §4: apply_answers keeps EVERYTHING — answered questions become
+constraints, unanswered ones become open_ambiguities (nothing is dropped).
 """
 
 import asyncio
@@ -78,11 +79,14 @@ class Elicitor:
 
     @staticmethod
     def apply_answers(questions: list[ClarifyingQuestion], answers: list[str]) -> ValueMap:
-        """Close the loop (round-5 §3): user answers become constraints."""
-        return ValueMap(
-            constraints=[
-                f"Q: {q.question} A: {a}"
-                for q, a in zip(questions, answers, strict=False)
-                if a.strip()
-            ],
-        )
+        """Answered -> constraints; unanswered -> open_ambiguities (round-7 §4)."""
+        constraints, open_ambiguities = [], []
+        for q, a in zip(questions, answers, strict=False):
+            if a.strip():
+                constraints.append(f"Q: {q.question} A: {a}")
+            else:
+                open_ambiguities.append(q.question)
+        # fewer answers than questions: the tail is unanswered
+        for q in questions[len(answers):]:
+            open_ambiguities.append(q.question)
+        return ValueMap(constraints=constraints, open_ambiguities=open_ambiguities)

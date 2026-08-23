@@ -37,3 +37,8 @@ line-length = 100
 
 [tool.mypy]
 strict = true
+
+[tool.pytest.ini_options]
+markers = [
+    "live: hits the real OpenRouter API (needs OPENROUTER_API_KEY; runs only with -m live)",
+]
