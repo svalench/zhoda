@@ -1,17 +1,16 @@
 # Zhoda: An Open Protocol for Multi-LLM Deliberation
 
-**Whitepaper v0.2 — August 2026**
+**Whitepaper v0.3 — August 2026**
 Alexander Valenchits · [github.com/svalench/zhoda](https://github.com/svalench/zhoda) · zhoda.dev
 
 > *Models argue until they reach zhoda.*
 
-Changelog v0.2: added the closest neighbor (Yes-Brainer) and the 2026
-debate-critical analyses to Related Work; replaced the naive cost estimate
-with honest per-stage arithmetic; narrowed the public claim to the honest
-formula (no side-switching without an unclosed objection, stability-counted
-consensus, verdicts always carry the minority); reputation marked as
-planned post-MVP; beachhead wedge stated (agent harnesses, not regulated
-domains).
+Changelog v0.3: the verdict now renders twice — a report for humans and a
+plan contract for cheaper executor agents; claims carry mandatory evidence
+fields (unsourced = labeled assumption); the decision tree replaces the
+linear chronicle; new metric: dead ends prevented. v0.2: Yes-Brainer and
+the 2026 debate-critical analyses in Related Work; honest cost arithmetic;
+the honest formula.
 
 ## Abstract
 
@@ -22,10 +21,11 @@ truth. Zhoda introduces an open deliberation protocol in which models first
 interview the user to build a value map, then take positions, self-organize into
 factions, and debate Oxford-style — with a rotating devil's advocate and public
 faction switches — until they reach consensus (*zhoda*, Belarusian for agreement)
-or produce an honest map of dissent. Every verdict ships with a minority report
-and a full auditable transcript. The system is open source (AGPL-3.0), runs on
-free OpenRouter models with BYOK, and ships as a core engine, an MCP server, and
-a DeepSeek Harness plugin.
+or produce an honest map of dissent. Every verdict ships with a minority report,
+a full auditable transcript — and renders twice: a report for humans and a plan
+contract for cheaper executor agents. The system is open source (AGPL-3.0), runs
+on free OpenRouter models with BYOK, and ships as a core engine, an MCP server,
+and a DeepSeek Harness plugin.
 
 ## 1. Problem
 
@@ -45,6 +45,11 @@ majority can converge on a confidently wrong answer.
 than attack weak claims. Debate without an obligation to find concrete flaws
 degenerates into politeness.
 
+**The handoff loss.** Even a good decision dies at handoff: the brainstorm
+knows why paths were rejected; the cheap executor model doesn't, and walks
+into the same dead ends. The value of deliberation evaporates between
+"decided" and "done".
+
 ## 2. Design principles
 
 1. **Understand before solving.** No answer is produced before the goal,
@@ -55,6 +60,8 @@ degenerates into politeness.
    reports a structured disagreement map instead of faking agreement.
 4. **Auditability.** Every verdict is reproducible from its transcript.
 5. **Cost honesty.** Free models first, explicit budget caps, no hidden spend.
+6. **Evidence discipline.** A claim without a source is an opinion — and is
+   labeled as one. We never sell the illusion of rigor.
 
 ## 3. The Zhoda protocol
 
@@ -78,11 +85,14 @@ that the verdict depends on an unstated value. Modes: `--no-clarify`,
 Each model answers with a structured stance, anonymized from the start:
 
 ```
-Position { thesis, answer, arguments[], falsifiability, confidence }
+Position { thesis, answer, claims[], falsifiability, confidence }
+Claim { claim, evidence_url | null, confidence }   # null = labeled "assumption"
 ```
 
 `falsifiability` — conditions under which the position is wrong — forces
-models to define their own failure modes before the debate begins.
+models to define their own failure modes before the debate begins. Every
+argument is a Claim: factual statements cite or are honestly marked as
+unsourced.
 
 ### Stage 2 — Faction formation
 
@@ -95,10 +105,11 @@ The chairman names factions descriptively ("Pragmatists", "Maximalists").
 
 Each round: a faction presents an argument against the strongest opposing
 faction → the opponent rebuts → cross-examination obliges the faction to answer
-a concrete charge. Critiques are structured:
+a concrete charge. Critiques are structured and may cite:
 
 ```
-Critique { target_faction, flaw_type ∈ {factual, logical, scope, values_mismatch}, claim, rebuttal }
+Critique { target_faction, flaw_type ∈ {factual, logical, scope, values_mismatch},
+           claim, evidence_url | null, rebuttal, rebuttal_evidence_url | null }
 ```
 
 A rotating **devil's advocate** must attack the currently leading position —
@@ -124,7 +135,7 @@ reports convergence within 4–8 rounds). Consensus strength:
 escalation enabled, the case moves up the model ladder (free → mid → frontier);
 the chairman decides from the full transcript.
 
-### Stage 5 — Verdict
+### Stage 5 — Verdict (renders twice)
 
 ```
 Verdict {
@@ -135,9 +146,24 @@ Verdict {
   minority_report,             # preserved dissent — never erased
   dissent_map[],               # where and why factions disagreed
   switches[],                  # who changed position and why
+  decision_tree,               # argument -> what closed it -> who moved
+  plan_contract,               # second render: spec for a cheaper executor
+  dead_ends_prevented,         # rejected paths that reached plan constraints
   rounds_taken, cost, transcript_id
 }
 ```
+
+**Two renders.** The human report is narrative: decision, risks, minority.
+The **plan contract** is for a cheaper executor model: steps with goals,
+hard constraints, forbidden paths, and acceptance criteria — nothing left
+to inference. Rejected paths are collected programmatically from the
+objection ledger and the minority (never invented by the renderer), so the
+executor inherits *why* paths died, not just which one survived.
+
+**The metric.** Not "agreement" but **dead ends prevented**: how many
+rejected paths made it into the plan's constraints. That is the ROI a
+customer buys: invest $2–5 of expensive-model debate once, save hours of
+cheap-model execution that no longer walks into discarded dead ends.
 
 ## 4. Failure modes and mitigations
 
@@ -148,6 +174,7 @@ Verdict {
 | Endless debate | Adaptive stopping + round cap; escalation ladder as tiebreaker |
 | Cost blowup | Per-question budget cap, semantic caching of stages, free-tier-first routing |
 | Judge bias | Chairman reads transcripts, not votes; escalation instead of forced synthesis |
+| Illusion of rigor | Evidence discipline: unsourced claims are labeled "assumption" everywhere |
 
 ## 5. Reputation (planned, post-MVP)
 
@@ -166,12 +193,13 @@ accordingly.
 Three layers, strict downward dependencies only:
 
 - **zhoda-core** — Python/FastAPI engine: elicitation, factions, debate,
-  consensus, verdicts, reputation. Provider-agnostic; OpenRouter first.
+  consensus, verdicts, plan contracts, decision trees. Provider-agnostic;
+  OpenRouter first.
 - **zhoda-mcp** — Model Context Protocol server (`zhoda_clarify`,
   `zhoda_deliberate`, `zhoda_verdict`, `zhoda_transcript`, `zhoda_reputation`),
   usable from DeepSeek Harness, Claude Code, Codex, any MCP host.
 - **@zhoda/dsh-plugin** — DeepSeek Harness plugin: debate room, faction graph
-  with animated switches, verdict panel.
+  with animated switches, verdict panel, decision-tree view.
 
 ### Cost model — honest arithmetic
 
@@ -186,6 +214,7 @@ requests ≈ router (2) + elicitation (N) + positions (N)
          + per round: F critiques + 1 devil's advocate + R rebuttals
            + 2 closure votes per open objection + revisions
            + supersede checks + switch prompts + 2 consensus votes
+         + plan-contract render (1)
 ```
 
 For a 4-model council, 2 factions, 2 rounds: **typically 35–50 requests, up
@@ -212,12 +241,19 @@ precedents show that compute tokens without pre-existing demand collapse
 emerges around Zhoda, it will start with credit-style accounting
 (BitTorrent-ratio-like), not a tradable asset.
 
+The pricing frame is the price of complexity, not the price of dialogue: the
+real competitor is a human arguing with themselves and a chatbot for two
+hours, badly, forgetting half the arguments. Zhoda sells: "invest $2–5 of
+expensive-model debate once — save hours of cheap-model execution, because
+the plan already accounted for every dead end."
+
 ## 8. Evaluation plan
 
 1. **Benchmarks:** single model vs single-pass council vs Zhoda on reasoning
    and decision-quality tasks; factuality suites.
 2. **Metrics:** accuracy, calibration (stated confidence vs correctness),
-   dissent usefulness (human-rated), cost per correct answer.
+   dissent usefulness (human-rated), cost per correct answer, dead ends
+   prevented per dollar.
 3. **Open dataset:** opt-in anonymized debate transcripts for the research
    community.
 
@@ -233,7 +269,8 @@ emerges around Zhoda, it will start with credit-style accounting
   human-facing web app without a backend: no factions, no objection lifecycle,
   no anti-capitulation mechanics (participants re-answer freely each round,
   but nothing tracks *why* a position moved), no conflict-of-interest handling
-  for its judge/mediator, no elicitation stage, and no agent-harness surface.
+  for its judge/mediator, no elicitation stage, no agent-harness surface —
+  and no machine-readable plan for a cheaper executor.
 - **Multi-agent debate** (Du et al., 2023) — iterative convergence; Zhoda adds
   elicitation, factions, structured critique, and dissent preservation.
 - **Mixture-of-Agents** (Together, 2024) — layered synthesis without
@@ -253,9 +290,10 @@ emerges around Zhoda, it will start with credit-style accounting
 **The honest formula, as of August 2026:** Zhoda is the protocol where a model
 may not switch sides without an unclosed objection, agreement does not count
 until it survives two consecutive rounds, and every verdict carries the
-minority and the chronicle. Iterative multi-model debate exists (Yes-Brainer,
-the MAD lineage); agent-infrastructure protocols with an auditable trust
-surface do not.
+minority and the chronicle — plus a plan contract that tells a cheaper
+executor which paths died and why. Iterative multi-model debate exists
+(Yes-Brainer, the MAD lineage); agent-infrastructure protocols with an
+auditable trust surface do not.
 
 ## 10. Roadmap
 
