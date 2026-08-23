@@ -1,4 +1,5 @@
-"""Values, fixed in round 10: three evidence labels, honest paths_rejected,
+"""Values, fixed in rounds 10-11: three evidence labels, honest
+paths_rejected (minority + accepted weaknesses of the winner, on zhoda only),
 plan gated on zhoda."""
 
 from zhoda_core.factions import Faction
@@ -23,7 +24,7 @@ def test_three_evidence_labels() -> None:
 
 
 def test_paths_rejected_only_by_a_reached_consensus() -> None:
-    """Round-10 §2/§3: at split/deadlock nothing was rejected — an unresolved
+    """Round-10 §2: at split/deadlock nothing was rejected — an unresolved
     dispute is not a rejection and is not counted."""
     leading = Faction(
         name="Pragmatists", members=["A", "C"],
@@ -34,10 +35,34 @@ def test_paths_rejected_only_by_a_reached_consensus() -> None:
         platform=Position(model="B", thesis="Use Kafka", answer="..."),
     )
     factions = [leading, minority]
-    assert collect_rejected_paths(factions, zhoda_reached=False) == []
-    paths = collect_rejected_paths(factions, zhoda_reached=True)
+    assert collect_rejected_paths(factions, [], zhoda_reached=False) == []
+    paths = collect_rejected_paths(factions, [], zhoda_reached=True)
     assert len(paths) == 1 and "Kafka" in paths[0].path
     assert paths[0].why  # every rejected path has a WHY
+
+
+def test_paths_rejected_include_accepted_weaknesses_of_the_winner() -> None:
+    """Round-11 §1: an objection that stayed open against the WINNER is an
+    accepted weakness — the unaddressed version of the chosen path was
+    rejected. Counted only on zhoda."""
+    leading = Faction(
+        name="Pragmatists", members=["A", "C"],
+        platform=Position(model="A", thesis="Use PostgreSQL", answer="..."),
+    )
+    objections = [
+        Critique(
+            id="1", author_faction="Throughputists", target_faction="Pragmatists",
+            flaw_type=FlawType.SCOPE,
+            claim="no write-scaling story beyond a single node",
+            specifics="partitioning and replication are unaddressed",
+            status=ObjectionStatus.OPEN,
+        ),
+    ]
+    # no zhoda -> nothing rejected, not even the winner's open weakness
+    assert collect_rejected_paths([leading], objections, zhoda_reached=False) == []
+    paths = collect_rejected_paths([leading], objections, zhoda_reached=True)
+    assert len(paths) == 1 and "write-scaling" in paths[0].path
+    assert "accepted weakness" in paths[0].why
 
 
 def test_decision_tree_three_labels() -> None:

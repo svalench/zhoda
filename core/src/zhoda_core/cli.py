@@ -1,7 +1,8 @@
 """`zhoda deliberate "..."` — interactive Stage 0 + verdict output.
 
-Prints the honest metric (round-10 §3): paths rejected by a reached
-consensus. An appellate decision is labeled as such — never mistaken for zhoda.
+Round-11 §2: empty paths_rejected on clean unanimity reads as 'clean
+unanimity — nothing was disputed', not as a bare 0 ('the protocol found
+nothing'). The metric stays honest; the presentation stops underselling it.
 """
 
 import asyncio
@@ -94,7 +95,13 @@ def deliberate(
                               f"{len(verdict.value_map.open_ambiguities)}[/dim]")
             if verdict.switches:
                 console.print(f"[bold]switches:[/bold] {len(verdict.switches)}")
-            console.print(f"[bold]paths rejected:[/bold] {len(verdict.paths_rejected)}")
+            if verdict.paths_rejected:
+                console.print(f"[bold]paths rejected:[/bold] {len(verdict.paths_rejected)}")
+            elif verdict.zhoda_reached and not verdict.minority_report:
+                console.print("[dim]clean unanimity — nothing was disputed, "
+                              "nothing to reject[/dim]")
+            else:
+                console.print("[dim]paths rejected: 0[/dim]")
             if verdict.plan_contract:
                 console.print(f"[bold]plan contract:[/bold] "
                               f"{len(verdict.plan_contract.steps)} steps, "

@@ -1,17 +1,15 @@
 """The second render (values №2) — gated on zhoda (round-10 §2).
 
-A plan contract is rendered ONLY when consensus was reached: a spec built on
-'we did not decide' would hand the cheap executor a document founded on
-dissent, with the dissenters' positions written into its forbidden paths.
-
-`paths_rejected` is an honest programmatic count (round-10 §3): minority
-positions rejected by a REACHED consensus. It measures rejections, not
-prevented dead ends — the counterfactual ROI metric waits for executor
-feedback.
+`paths_rejected` (round-10 §3, widened in round-11 §1): an honest
+programmatic count of what a REACHED consensus rejected — minority positions
+that lost the vote AND objections that stayed open against the winning
+platform (the council chose the path despite the known flaw: the unaddressed
+version of the path is what got rejected). At split/deadlock nothing was
+rejected — an unresolved dispute is not a rejection.
 """
 
 from .factions import Faction
-from .models import PlanContract, RejectedPath, Verdict
+from .models import Critique, ObjectionStatus, PlanContract, RejectedPath, Verdict
 from .providers.openrouter import OpenRouterProvider, make_cache_key
 
 PLAN_PROMPT = """Render this deliberation outcome as a PLAN CONTRACT for a cheaper
@@ -34,24 +32,36 @@ ONLY valid JSON:
 
 def collect_rejected_paths(
     factions: list[Faction],
+    objections: list[Critique],
     *,
     zhoda_reached: bool,
 ) -> list[RejectedPath]:
-    """Minority positions rejected by a REACHED consensus. At split/deadlock
-    nothing was rejected — an unresolved dispute is not a rejection, and it
-    is not counted (round-10 §2)."""
+    """What a REACHED consensus rejected (round-11 §1 — both sources):
+    minority positions that lost the vote, and objections that stayed open
+    against the winning platform (an accepted weakness: the unaddressed
+    version of the chosen path is what got rejected)."""
     if not zhoda_reached:
         return []
     leading = max(factions, key=lambda f: len(f.members))
-    return [
+    paths = [
         RejectedPath(
-            path=faction.platform.thesis,
+            path=f.platform.thesis,
             rejected_by="majority",
             why="minority position after a reached consensus",
         )
-        for faction in factions
-        if faction is not leading and faction.platform is not None
+        for f in factions
+        if f is not leading and f.platform is not None
     ]
+    paths += [
+        RejectedPath(
+            path=c.claim,
+            rejected_by=c.author_faction or "council",
+            why="accepted weakness — unclosed objection against the chosen platform",
+        )
+        for c in objections
+        if c.status == ObjectionStatus.OPEN and c.target_faction == leading.name
+    ]
+    return paths
 
 
 async def render_plan_contract(
