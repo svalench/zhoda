@@ -1,0 +1,3 @@
+{"question": "Should a 50k RPS event-sourced ledger use PostgreSQL or Kafka + ClickHouse?", "rubric": ["addresses write throughput", "addresses replay and audit requirements", "considers operational complexity", "states conditions under which the answer flips"], "domain": "architecture"}
+{"question": "Monolith vs microservices for a 4-person team building a B2B SaaS MVP?", "rubric": ["considers team size", "addresses deployment complexity", "states scaling trigger points"], "domain": "architecture"}
+{"question": "Should we refactor the legacy PHP billing module or wrap it behind an API?", "rubric": ["addresses risk of billing errors", "considers the strangler-fig pattern", "states cost and timeline trade-offs"], "domain": "architecture"}

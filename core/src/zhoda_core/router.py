@@ -1,10 +1,14 @@
 """Stage -1: protocol router.
 
-The router is the most 'single-model' component of the system, so it fails
-SAFE: low confidence escalates to the MORE thorough protocol, never the
-cheaper one (critique §1). Threshold is a magic constant until calibrated
-on bench data.
+Round-3 §4: LLM self-reported confidence is uncalibrated by definition — a
+model returns 0.85–0.95 almost always, and a fail-safe on it never fires.
+So confidence here is INTER-MODEL AGREEMENT, not self-assessment: two
+different models classify the question; agreement = confident, disagreement
+= escalate to the more thorough protocol. The router finally follows the
+project's own philosophy.
 """
+
+import asyncio
 
 from pydantic import BaseModel
 
@@ -19,25 +23,22 @@ PROTOCOL_BY_CLASS: dict[TaskClass, Protocol] = {
     TaskClass.CREATIVE: Protocol.VOTE,
 }
 
-# Escalation only goes UP in thoroughness. There is no downward path.
-ESCALATE_UP: dict[Protocol, Protocol] = {
-    Protocol.VOTE: Protocol.DEBATE,
-    Protocol.DEBATE: Protocol.DEBATE,
-    Protocol.RED_TEAM: Protocol.RED_TEAM,
-}
+# Fail-safe landing protocol when classifiers disagree: debate is the
+# thorough default. There is no downward path.
+FALLBACK_PROTOCOL = Protocol.DEBATE
 
 
 class RouteDecision(BaseModel):
     task_class: TaskClass
     protocol: Protocol
-    confidence: float
+    confidence: float  # 1.0 = classifiers agree, 0.0 = disagree (escalated)
     overridden: bool = False
 
 
 class ProtocolRouter:
-    def __init__(self, provider: OpenRouterProvider, confidence_threshold: float = 0.7) -> None:
+    def __init__(self, provider: OpenRouterProvider, classifiers: tuple[str, str]) -> None:
         self.provider = provider
-        self.confidence_threshold = confidence_threshold  # TODO(calibrate): bench
+        self.classifiers = classifiers  # two DIFFERENT models
 
     async def route(self, question: str, force: Protocol | None = None) -> RouteDecision:
         if force is not None:
@@ -45,17 +46,19 @@ class ProtocolRouter:
                 task_class=TaskClass.DECISION, protocol=force,
                 confidence=1.0, overridden=True,
             )
-        task_class, confidence = await self._classify(question)
-        protocol = PROTOCOL_BY_CLASS[task_class]
-        if confidence < self.confidence_threshold:
-            protocol = ESCALATE_UP[protocol]
-        return RouteDecision(task_class=task_class, protocol=protocol, confidence=confidence)
+        first, second = await asyncio.gather(
+            self._classify(question, self.classifiers[0]),
+            self._classify(question, self.classifiers[1]),
+        )
+        if first == second:
+            return RouteDecision(
+                task_class=first, protocol=PROTOCOL_BY_CLASS[first], confidence=1.0,
+            )
+        return RouteDecision(
+            task_class=TaskClass.DECISION, protocol=FALLBACK_PROTOCOL, confidence=0.0,
+        )
 
-    async def _classify(self, question: str) -> tuple[TaskClass, float]:
-        """Single cheap model call, strict JSON: {task_class, confidence}.
-
-        Mixed classes (decision+factual — most real questions) must return
-        the more thorough class with lowered confidence, letting the
-        threshold push them to debate.
-        """
+    async def _classify(self, question: str, model: str) -> TaskClass:
+        """Single cheap model call, strict JSON: {task_class}. No confidence
+        self-report — agreement between two classifiers is the signal."""
         raise NotImplementedError  # TODO(mvp)
