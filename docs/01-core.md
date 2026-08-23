@@ -28,12 +28,25 @@ protocol reports confidence 1.0.
 ## Stage 0 — Elicitation
 
 Each council model returns ambiguities; an aggregator keeps the 2–4 with the
-highest decision impact. Modes: `smart` (ask the user), `no-clarify`,
+highest decision impact. Duplicate questions from different models are
+merged (exact match, then a cheap model groups paraphrases) before the
+user sees at most three. Modes: `smart` (ask the user), `no-clarify`,
 `auto-clarify` (marked assumptions). Unanswered questions land in
 `value_map.open_ambiguities` — honestly, never silently assumed (round-5 §2).
 Answers are validated against options: a digit `1..n` maps to that option;
-pasting the option list or a non-matching string is treated as unanswered,
-never as a constraint. Empty answers always stay in `open_ambiguities`.
+a free-text reply that contains **exactly one** option as a substring maps
+to that option; pasting the option list or a non-matching string is treated
+as unanswered, never as a constraint. Empty answers always stay in
+`open_ambiguities`.
+
+`--context path` (repeatable) injects file contents into elicitation and
+position prompts as `Context:`. If the question refers to an external
+object (project, repo, document) and Stage 0 still cannot name that object
+— the user answered a URL, “this project”, or nothing, and no `--context`
+was given — the engine returns `insufficient_context=True`,
+`consensus_strength=SPLIT`, `zhoda_reached=False`, decision
+`INSUFFICIENT_CONTEXT: …`, and **does not** collect positions or run
+debate.
 
 ## Stage 1 — Positions
 
@@ -103,6 +116,7 @@ Verdict {
   plan_contract?,         # rendered ONLY on zhoda (round-10 §2)
   paths_rejected[],       # honest programmatic count (rounds 10-11)
   decision_tree, escalated_to?,
+  insufficient_context,  # True → no debate; object of evaluation missing
 }
 ```
 
@@ -131,7 +145,9 @@ one position, even if faction objects were not merged. On split/deadlock,
 faction's raw `answer`. On zhoda, the chairman **synthesizes** `decision`
 for the user (action first, closed objections, overturn conditions);
 unresolved ambiguities must not be asserted as facts. Fallback is the
-winner's thesis, never the raw platform answer.
+winner's thesis, never the raw platform answer. If Stage 0 cannot ground
+the object of evaluation, `insufficient_context` short-circuits: SPLIT,
+no zhoda, no position or debate spend.
 
 ## Cost honesty
 

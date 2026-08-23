@@ -825,6 +825,7 @@ async def test_mixed_elicitation_answers_stay_honest(tmp_path) -> None:
         ("m1", ("Do NOT answer",), three),
         ("m2", ("Do NOT answer",), three),
         ("m3", ("Do NOT answer",), three),
+        ("j1", ("Group equivalent clarifying questions",), {"groups": [[0], [1], [2]]}),
         ("m1", ("independent structured stance",), position(PG)),
         ("m2", ("independent structured stance",), position(PG)),
         ("m3", ("independent structured stance",), position(PG)),
@@ -855,3 +856,67 @@ async def test_mixed_elicitation_answers_stay_honest(tmp_path) -> None:
     assert not any("Postgres | Kafka" in c for c in verdict.value_map.constraints)
     assert verdict.decision != ""
     assert "absolute zero" not in verdict.decision.lower()
+
+
+@pytest.mark.asyncio
+async def test_url_answer_is_insufficient_context_and_skips_debate(tmp_path) -> None:
+    """Совет не судит объект, которого у него нет — позиции и раунды не зовутся."""
+    grounding = {
+        "ambiguities": [
+            {
+                "ambiguity": "object unstated",
+                "why_it_matters": "cannot judge an unseen artifact",
+                "candidate_question": "Which project are we evaluating?",
+                "options": [],
+            }
+        ],
+    }
+    provider = ScriptedProvider(
+        [
+            ("m1", ("Do NOT answer",), grounding),
+            ("m2", ("Do NOT answer",), grounding),
+            ("m3", ("Do NOT answer",), grounding),
+        ]
+    )
+    engine = make_engine(provider, tmp_path)
+
+    def on_questions(questions: list) -> list[str]:
+        assert len(questions) == 1
+        return ["https://github.com/org/zhoda"]
+
+    verdict = await engine.deliberate(
+        "Evaluate project X",
+        force_protocol=Protocol.VOTE,
+        clarify_mode="smart",
+        on_questions=on_questions,
+    )
+    assert verdict.insufficient_context is True
+    assert verdict.zhoda_reached is False
+    assert verdict.consensus_strength == ConsensusStrength.SPLIT
+    assert verdict.decision.startswith("INSUFFICIENT_CONTEXT:")
+    assert verdict.rounds_taken == 0
+    assert "positions" not in verdict.cost.breakdown
+    assert provider.script == []
+
+
+@pytest.mark.asyncio
+async def test_context_files_land_in_position_prompt(tmp_path) -> None:
+    token = "SECRET_CONTEXT_TOKEN_README"
+    script = [
+        ("m1", ("independent structured stance", token), position(PG)),
+        ("m2", ("independent structured stance", token), position(PG)),
+        ("m3", ("independent structured stance", token), position(PG)),
+        (None, ("Synthesize the shared platform",), position(PG)),
+        (None, ("Name each faction",), {}),
+        (None, ("SYNTHESIZE THE COUNCIL DECISION",), DECISION),
+        (None, ("PLAN CONTRACT",), PLAN),
+    ]
+    engine = make_engine(ScriptedProvider(script), tmp_path, devils_advocate=False)
+    verdict = await engine.deliberate(
+        "Which database for the ledger?",
+        force_protocol=Protocol.VOTE,
+        clarify_mode="no-clarify",
+        context=token,
+    )
+    assert verdict.zhoda_reached is True
+    assert verdict.insufficient_context is False

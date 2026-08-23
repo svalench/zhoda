@@ -13,7 +13,7 @@ from collections.abc import Callable
 from .anonymize import make_aliases
 from .consensus import ConsensusChecker
 from .debate import DebateEngine
-from .elicitor import ClarifyingQuestion, Elicitor
+from .elicitor import ClarifyingQuestion, Elicitor, grounding_need
 from .factions import ADVOCATE_ALIAS, Faction, FactionClusterer
 from .judges import Judges
 from .models import (
@@ -115,6 +115,7 @@ class ZhodaEngine:
         clarify_mode: str = "smart",
         on_questions: Callable[[list[ClarifyingQuestion]], list[str]] | None = None,
         on_progress: Callable[[ProgressEvent], None] | None = None,
+        context: str = "",
     ) -> Verdict:
         # fresh session state per question (round-8 §1)
         debate = DebateEngine(
@@ -151,14 +152,23 @@ class ZhodaEngine:
         emit("route", f"protocol={route.protocol}", done=True)
 
         value_map = ValueMap()
+        elicit_questions: list[ClarifyingQuestion] = []
+        elicit_answers: list[str] = []
         if clarify_mode != "no-clarify":
             emit("elicit", "eliciting clarifying questions…")
-            elicitation = await self.elicitor.elicit(question, self.council, mode=clarify_mode)
+            elicitation = await self.elicitor.elicit(
+                question,
+                self.council,
+                mode=clarify_mode,
+                context=context,
+                dedup_model=self.chairman,
+            )
             value_map = elicitation.value_map
+            elicit_questions = elicitation.questions
             if elicitation.questions:
-                answers = on_questions(elicitation.questions) if on_questions else []
-                value_map = self.elicitor.apply_answers(elicitation.questions, answers)
-                self.transcripts.append(tid, {"stage": "answers", "answers": answers})
+                elicit_answers = on_questions(elicitation.questions) if on_questions else []
+                value_map = self.elicitor.apply_answers(elicitation.questions, elicit_answers)
+                self.transcripts.append(tid, {"stage": "answers", "answers": elicit_answers})
             self.transcripts.append(tid, {"stage": "elicit", **elicitation.model_dump()})
             emit(
                 "elicit",
@@ -167,6 +177,28 @@ class ZhodaEngine:
             )
         mark("elicit")
 
+        need = grounding_need(question, elicit_questions, elicit_answers, context)
+        if need is not None:
+            cost = self.provider.question_report()
+            cost.breakdown = breakdown
+            verdict = Verdict(
+                decision=f"INSUFFICIENT_CONTEXT: {need}",
+                zhoda_reached=False,
+                consensus_strength=ConsensusStrength.SPLIT,
+                protocol=route.protocol,
+                router_confidence=route.confidence,
+                value_map=value_map,
+                cost=cost,
+                transcript_id=tid,
+                insufficient_context=True,
+            )
+            self.transcripts.append(
+                tid,
+                {"stage": "verdict", "verdict": verdict.model_dump(), "insufficient_context": True},
+            )
+            emit("verdict", "insufficient_context — no debate", done=True)
+            return verdict
+
         emit("positions", f"collecting positions ({len(self.council)} models)…")
         positions = await extract_positions(
             self.provider,
@@ -174,6 +206,7 @@ class ZhodaEngine:
             question,
             value_map,
             aliases,
+            context=context,
         )
         self.transcripts.append(
             tid,

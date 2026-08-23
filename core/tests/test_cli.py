@@ -11,9 +11,14 @@ def test_auto_clarify_flag_resolves() -> None:
     assert resolve_clarify_mode(None, auto_clarify=True, no_clarify=False) == "auto-clarify"
     assert resolve_clarify_mode(None, auto_clarify=False, no_clarify=True) == "no-clarify"
     assert resolve_clarify_mode(None, auto_clarify=False, no_clarify=False) == "smart"
-    assert resolve_clarify_mode(
-        "auto-clarify", auto_clarify=False, no_clarify=False,
-    ) == "auto-clarify"
+    assert (
+        resolve_clarify_mode(
+            "auto-clarify",
+            auto_clarify=False,
+            no_clarify=False,
+        )
+        == "auto-clarify"
+    )
 
 
 def test_conflicting_clarify_flags_are_rejected() -> None:
@@ -33,11 +38,13 @@ def test_help_lists_auto_clarify_on_deliberate_subcommand() -> None:
     assert "--auto-clarify" in result.stdout
     assert "--no-clarify" in result.stdout
     assert "--clarify" in result.stdout
+    assert "--context" in result.stdout
 
 
 def test_conflicting_flags_fail_before_engine() -> None:
     result = CliRunner().invoke(
-        app, ["deliberate", "q", "--auto-clarify", "--no-clarify"],
+        app,
+        ["deliberate", "q", "--auto-clarify", "--no-clarify"],
     )
     combined = result.stdout + result.stderr
     assert result.exit_code != 0

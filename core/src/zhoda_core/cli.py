@@ -26,6 +26,14 @@ console = Console()
 CLARIFY_MODES = ("smart", "no-clarify", "auto-clarify")
 
 
+def _load_context_files(paths: list[Path]) -> str:
+    """Склеить файлы --context в один блок для промптов элиситации и позиций."""
+    if not paths:
+        return ""
+    parts = [f"### {path.name}\n{path.read_text(encoding='utf-8')}" for path in paths]
+    return "\n\n".join(parts)
+
+
 @app.callback()
 def _cli_root() -> None:
     """Zhoda — models argue until they reach zhoda."""
@@ -99,6 +107,14 @@ def deliberate(
         help="Skip Stage 0 elicitation",
     ),
     config: str = typer.Option("zhoda.yaml"),
+    context: list[Path] | None = typer.Option(  # noqa: B008
+        None,
+        "--context",
+        help="File attached as council context (repeatable)",
+        exists=True,
+        readable=True,
+        dir_okay=False,
+    ),
 ) -> None:
     """Run a full deliberation and print the verdict."""
     try:
@@ -164,11 +180,17 @@ def deliberate(
                     clarify_mode=clarify_mode,
                     on_questions=ask_pausing if clarify_mode == "smart" else None,
                     on_progress=lambda event: apply_progress(event, status),
+                    context=_load_context_files(context or []),
                 )
             console.print(
                 f"\n[bold]zhoda_reached:[/bold] {verdict.zhoda_reached} "
                 f"({verdict.consensus_strength}, rounds: {verdict.rounds_taken})"
             )
+            if verdict.insufficient_context:
+                console.print(
+                    "[yellow]insufficient_context — council will not judge "
+                    "an unseen object[/yellow]"
+                )
             if verdict.decision_origin != "council":
                 console.print(
                     f"[red]APPELLATE DECISION without consensus "

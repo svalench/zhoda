@@ -194,3 +194,4 @@ class Verdict(BaseModel):
     paths_rejected: list[RejectedPath] = Field(default_factory=list)
     decision_tree: dict = Field(default_factory=dict)
     escalated_to: str | None = None
+    insufficient_context: bool = False  # объект оценки не задан — дебат не стартовал

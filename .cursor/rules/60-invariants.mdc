@@ -32,6 +32,10 @@ Current mapping (keep updated):
 | Garbage/index/empty elicitation answers never become constraints | tests/test_elicitor.py |
 | Zhoda decision synthesized, not raw platform.answer | tests/test_verdict.py + tests/test_e2e.py |
 | Birth unanimity fast-pass / DA spawn opposition | tests/test_e2e.py |
+| Grounding gate: URL/deixis/empty object → insufficient_context, no debate | tests/test_e2e.py::test_url_answer_is_insufficient_context_and_skips_debate |
+| Paraphrased elicitation questions asked once | tests/test_elicitor.py::test_paraphrased_questions_are_asked_once |
+| One-option substring maps to that option | tests/test_elicitor.py::test_single_option_substring_counts_as_answer |
+| --context files appear in position prompts | tests/test_e2e.py::test_context_files_land_in_position_prompt |
 
 When you add a mechanic to a docstring or docs/, add its test first or in the
 same commit. When you change a schema, update docs/01-core.md in the same

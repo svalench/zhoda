@@ -13,6 +13,8 @@ from .providers.openrouter import OpenRouterProvider, make_cache_key
 POSITION_PROMPT = """You are one member of a council. Give your independent structured stance.
 
 Question: {question}
+Context:
+{context}
 Context (value map): {value_map}
 
 Open ambiguities in the value map are UNRESOLVED — never treat them as
@@ -36,12 +38,18 @@ async def extract_positions(
     question: str,
     value_map: ValueMap,
     aliases: dict[str, str],
+    *,
+    context: str = "",
 ) -> list[Position]:
     async def one(model: str) -> Position:
         data = await provider.ask_json(
             model,
-            POSITION_PROMPT.format(question=question, value_map=value_map.model_dump()),
-            cache_key=make_cache_key("pos", model, question),
+            POSITION_PROMPT.format(
+                question=question,
+                context=context.strip() or "(none)",
+                value_map=value_map.model_dump(),
+            ),
+            cache_key=make_cache_key("pos", model, question, context),
         )
         return Position(model=aliases[model], **data)
 
