@@ -1,13 +1,13 @@
 """Stage 1: independent structured positions, anonymized from the start.
 
 Parallel fan-out with graceful degradation: a failed model is excluded,
-failure only if ALL models failed (Cursor rule 10-python-core).
+failure only if ALL models failed.
 """
 
 import asyncio
 
 from .models import Position, ValueMap
-from .providers.openrouter import OpenRouterProvider
+from .providers.openrouter import OpenRouterProvider, make_cache_key
 
 POSITION_PROMPT = """You are one member of a council. Give your independent structured stance.
 
@@ -33,12 +33,12 @@ async def extract_positions(
         data = await provider.ask_json(
             model,
             POSITION_PROMPT.format(question=question, value_map=value_map.model_dump()),
-            cache_key=f"pos:{model}:{hash(question)}",
+            cache_key=make_cache_key("pos", model, question),
         )
         return Position(model=aliases[model], **data)
 
     results = await asyncio.gather(*(one(m) for m in council), return_exceptions=True)
     positions = [r for r in results if isinstance(r, Position)]
     if not positions:
-        raise RuntimeError("all council models failed")  # graceful degradation limit
+        raise RuntimeError("all council models failed")
     return positions

@@ -1,4 +1,4 @@
-"""`zhoda deliberate "..."` — live verdict output via rich."""
+"""`zhoda deliberate "..."` — interactive Stage 0 + verdict output."""
 
 import asyncio
 from pathlib import Path
@@ -7,12 +7,24 @@ import typer
 import yaml
 from rich.console import Console
 
+from .elicitor import ClarifyingQuestion
 from .engine import ZhodaEngine
 from .models import Protocol
 from .providers.openrouter import OpenRouterProvider
 
 app = typer.Typer(help="Zhoda — models argue until they reach zhoda.")
 console = Console()
+
+
+def ask_user(questions: list[ClarifyingQuestion]) -> list[str]:
+    """Close the elicitation loop (round-5 §3): show questions, collect answers."""
+    answers = []
+    for q in questions:
+        console.print(f"\n[bold]{q.question}[/bold]\n[dim]{q.why_it_matters}[/dim]")
+        if q.options:
+            console.print("options: " + " | ".join(q.options))
+        answers.append(typer.prompt("answer", default="", show_default=False))
+    return answers
 
 
 @app.command()
@@ -30,22 +42,32 @@ def deliberate(
             budget_usd=cfg.get("budget_per_question_usd", 0.0),
         )
         try:
+            judges = cfg.get("judges")
+            if not judges:
+                console.print("[yellow]no judges configured — defaulting to council members; "
+                              "conflict of interest possible[/yellow]")
+                judges = (cfg.get("chairman", cfg["council"][0]), cfg["council"][-1])
             engine = ZhodaEngine(
                 provider,
                 cfg["council"],
                 chairman=cfg.get("chairman", cfg["council"][0]),
+                judges=tuple(judges),
                 rounds_cap=cfg.get("rounds_cap", 4),
+                stability_rounds=cfg.get("stability_rounds", 2),
             )
             verdict = await engine.deliberate(
                 question,
                 force_protocol=Protocol(protocol) if protocol else None,
                 clarify_mode=clarify,
+                on_questions=ask_user if clarify == "smart" else None,
             )
             console.print(f"\n[bold]zhoda_reached:[/bold] {verdict.zhoda_reached} "
                           f"({verdict.consensus_strength}, rounds: {verdict.rounds_taken})")
             console.print(f"[bold]decision:[/bold]\n{verdict.decision}")
             if verdict.minority_report:
                 console.print(f"[bold]minority report:[/bold]\n{verdict.minority_report}")
+            if verdict.switches:
+                console.print(f"[bold]switches:[/bold] {len(verdict.switches)}")
             console.print(f"cost: {verdict.cost.requests} requests, "
                           f"${verdict.cost.usd:.4f}, transcript: {verdict.transcript_id}")
         finally:

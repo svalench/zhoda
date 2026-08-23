@@ -1,16 +1,10 @@
 """Stage -1: protocol router.
 
-Round-3 §4: confidence is INTER-MODEL AGREEMENT, not self-assessment — two
-DIFFERENT models classify; agreement = confident, disagreement = escalate up.
-
-Round-4 §3:
-- classifiers come from explicit config, never from council order;
-  two identical classifiers are rejected at construction.
-- on disagreement, task_class reports the more thorough classifier's class —
-  never a fabricated DECISION.
-- documented limitation: agreement of two classifiers is NOT calibrated
-  correctness — two same-family models can be confidently wrong together.
-  The fail-safe catches disagreement, not shared bias.
+Confidence is INTER-MODEL AGREEMENT (round-3 §4): two DIFFERENT models
+classify; agreement = confident, disagreement = escalate up. Classifiers come
+from explicit config, never council order; disagreement honestly reports the
+more thorough class (round-4 §3). Limitation: agreement is NOT calibrated
+correctness — same-family models can be confidently wrong together.
 """
 
 import asyncio
@@ -18,7 +12,7 @@ import asyncio
 from pydantic import BaseModel
 
 from .models import Protocol, TaskClass
-from .providers.openrouter import OpenRouterProvider
+from .providers.openrouter import OpenRouterProvider, make_cache_key
 
 PROTOCOL_BY_CLASS: dict[TaskClass, Protocol] = {
     TaskClass.FACTUAL_LOOKUP: Protocol.VOTE,
@@ -72,7 +66,6 @@ class ProtocolRouter:
             return RouteDecision(
                 task_class=first, protocol=PROTOCOL_BY_CLASS[first], confidence=1.0,
             )
-        # disagreement: honestly report the more thorough class, land on debate
         thorough = max((first, second), key=lambda c: THOROUGHNESS[PROTOCOL_BY_CLASS[c]])
         return RouteDecision(
             task_class=thorough, protocol=FALLBACK_PROTOCOL, confidence=0.0,
@@ -81,6 +74,6 @@ class ProtocolRouter:
     async def _classify(self, question: str, model: str) -> TaskClass:
         data = await self.provider.ask_json(
             model, CLASSIFY_PROMPT.format(question=question),
-            cache_key=f"route:{model}:{hash(question)}",
+            cache_key=make_cache_key("route", model, question),
         )
         return TaskClass(data["task_class"])

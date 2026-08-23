@@ -1,14 +1,14 @@
 """OpenRouter provider: BYOK, concurrency-limited, honest about money and quotas.
 
-Round-3 fixes: 429 transient vs quota, real usage accounting, 4xx fail-fast.
-Round-4 fixes:
-- Budget is PER QUESTION: engine calls begin_question() on entry, and the cap
-  checks the delta since that snapshot — not the provider's lifetime spend.
-- The cap is PRE-CALL for paid models: estimate (max_tokens x price) is checked
-  before the request; a single frontier call can't jump the cap unnoticed.
+Round-3: 429 transient vs quota, real usage accounting, 4xx fail-fast.
+Round-4: per-question budget (begin_question + delta), pre-call estimate.
+Round-5: question_report() returns the per-question CostReport DELTA (not the
+provider-lifetime totals); cache keys use sha256 — hash() is randomized
+between processes and would break a persistent cache.
 """
 
 import asyncio
+import hashlib
 import json
 import os
 
@@ -17,6 +17,11 @@ import httpx
 from ..models import CostReport
 
 DEFAULT_MAX_TOKENS = 2000
+
+
+def make_cache_key(*parts: object) -> str:
+    """Process-stable cache key (round-5 §5: hash() is per-process random)."""
+    return hashlib.sha256("::".join(str(p) for p in parts).encode()).hexdigest()[:16]
 
 
 class ZhodaProviderError(Exception):
@@ -61,18 +66,28 @@ class OpenRouterProvider:
         self.max_retries = max_retries
         self.prices = prices or {}  # model -> USD per 1K output tokens
         self.cost = CostReport()
-        self._question_start_usd = 0.0
+        self._question_start = CostReport()
         self._cache: dict[str, str] = {}
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._client = httpx.AsyncClient(timeout=120.0)
 
     def begin_question(self) -> None:
-        """Snapshot spend at the start of a deliberation (round-4 §1)."""
-        self._question_start_usd = self.cost.usd
+        """Snapshot ALL counters at the start of a deliberation."""
+        self._question_start = self.cost.model_copy()
+
+    def question_report(self) -> CostReport:
+        """Per-question delta (round-5 §4): what THIS deliberation spent."""
+        return CostReport(
+            requests=self.cost.requests - self._question_start.requests,
+            tokens_in=self.cost.tokens_in - self._question_start.tokens_in,
+            tokens_out=self.cost.tokens_out - self._question_start.tokens_out,
+            cache_hits=self.cost.cache_hits - self._question_start.cache_hits,
+            usd=self.cost.usd - self._question_start.usd,
+        )
 
     @property
     def question_usd(self) -> float:
-        return self.cost.usd - self._question_start_usd
+        return self.cost.usd - self._question_start.usd
 
     def _check_budget(self, model: str, max_tokens: int) -> None:
         if self.budget_usd == 0 and not model.endswith(":free"):
@@ -101,7 +116,7 @@ class OpenRouterProvider:
             return await self._with_retries(model, prompt, cache_key, max_tokens)
 
     async def ask_json(self, model: str, prompt: str, *, cache_key: str | None = None) -> dict:
-        """Strict JSON output with one repair retry (Cursor rule 10-python-core)."""
+        """Strict JSON output with one repair retry."""
         text = await self.complete(
             model, prompt + "\n\nRespond with ONLY valid JSON. No markdown, no commentary.",
             cache_key=cache_key,
@@ -166,7 +181,7 @@ class OpenRouterProvider:
         self.cost.requests += 1
         self.cost.tokens_in += int(usage.get("prompt_tokens") or 0)
         self.cost.tokens_out += int(usage.get("completion_tokens") or 0)
-        self.cost.usd += float(usage.get("cost") or 0.0)  # 0.0 for :free models
+        self.cost.usd += float(usage.get("cost") or 0.0)
 
         text: str = data["choices"][0]["message"]["content"]
         if cache_key:

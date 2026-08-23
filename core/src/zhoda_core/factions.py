@@ -1,20 +1,19 @@
 """Stage 2: faction formation.
 
-Embeddings are skipped in the MVP slice: the source of truth is a pairwise
-STRUCTURAL comparison by a judge model ("same position? if not — what is the
-divergence?"). Divergences seed the dissent_map. Factions form bottom-up
-(union-find over real positions) — never assigned roles — to avoid
-artificial polarization.
-
-Position comparison is one of the three auditable trust points (round-3 §6).
+Source of truth is a pairwise STRUCTURAL comparison by a judge ("same
+position? if not — what is the divergence?"); divergences seed dissent_map.
+Factions form bottom-up (union-find) — never assigned roles. Position
+comparison is one of the three auditable trust points (round-3 §6); the
+judge is conflict-checked per faction (round-5 §2).
 """
 
 import asyncio
 
 from pydantic import BaseModel, Field
 
+from .judges import Judges
 from .models import Disagreement, Position
-from .providers.openrouter import OpenRouterProvider
+from .providers.openrouter import OpenRouterProvider, make_cache_key
 
 PAIRWISE_PROMPT = """Position A thesis: {a}
 Position B thesis: {b}
@@ -30,12 +29,11 @@ class Faction(BaseModel):
 
 
 class FactionClusterer:
-    def __init__(self, provider: OpenRouterProvider, judge_model: str) -> None:
+    def __init__(self, provider: OpenRouterProvider) -> None:
         self.provider = provider
-        self.judge_model = judge_model
         self.divergences: list[Disagreement] = []
 
-    async def cluster(self, positions: list[Position]) -> list[Faction]:
+    async def cluster(self, positions: list[Position], *, judges: Judges) -> list[Faction]:
         n = len(positions)
         parent = list(range(n))
 
@@ -47,7 +45,7 @@ class FactionClusterer:
 
         pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
         results = await asyncio.gather(
-            *(self._compare(positions[i], positions[j]) for i, j in pairs),
+            *(self._compare(positions[i], positions[j], judges) for i, j in pairs),
             return_exceptions=True,
         )
         for (i, j), res in zip(pairs, results, strict=True):
@@ -70,9 +68,10 @@ class FactionClusterer:
             for members in groups.values()
         ]
 
-    async def _compare(self, a: Position, b: Position) -> dict:
+    async def _compare(self, a: Position, b: Position, judges: Judges) -> dict:
+        probe = Faction(name="probe", members=[a.model, b.model])
         return await self.provider.ask_json(
-            self.judge_model,
+            judges.for_faction(probe),
             PAIRWISE_PROMPT.format(a=a.thesis, b=b.thesis),
-            cache_key=f"pair:{hash(a.thesis)}:{hash(b.thesis)}",
+            cache_key=make_cache_key("pair", a.thesis, b.thesis),
         )

@@ -1,13 +1,10 @@
 """Stage 0: smart elicitation.
 
-Users hate questionnaires before answers (round-2 §4): questions are asked
-ONLY when the ambiguity score clears the threshold; otherwise the council
-proceeds and marks its assumptions in the verdict. Questions ship with
-one-tap options.
-
-Ambiguity score is NOT self-reported (round-3 §4 taught us better): it is the
-share of council models that independently flagged ambiguities — inter-model
-agreement again. TODO(calibrate): threshold on bench data.
+Questions are asked ONLY when the ambiguity score clears the threshold;
+otherwise the council proceeds with marked assumptions (round-2 §4). The
+score is inter-model agreement, not self-report (round-3 §4). Round-5 §3:
+the loop is CLOSED — engine accepts answers via on_questions callback and
+fills the ValueMap; unanswered questions degrade to marked assumptions.
 """
 
 import asyncio
@@ -15,7 +12,7 @@ import asyncio
 from pydantic import BaseModel, Field
 
 from .models import ValueMap
-from .providers.openrouter import OpenRouterProvider
+from .providers.openrouter import OpenRouterProvider, make_cache_key
 
 ELICIT_PROMPT = """You are a council member. Do NOT answer the question.
 List what is ambiguous or underspecified — things whose clarification would
@@ -52,7 +49,7 @@ class Elicitor:
 
         results = await asyncio.gather(
             *(self.provider.ask_json(m, ELICIT_PROMPT.format(question=question),
-                                     cache_key=f"elic:{m}:{hash(question)}")
+                                     cache_key=make_cache_key("elic", m, question))
               for m in council),
             return_exceptions=True,
         )
@@ -61,11 +58,10 @@ class Elicitor:
             raise RuntimeError("all council models failed at elicitation")
 
         flagged = [p for p in payloads if p.get("ambiguities")]
-        score = len(flagged) / len(payloads)  # inter-model agreement, not self-report
+        score = len(flagged) / len(payloads)
 
         ambiguities = [a for p in flagged for a in p["ambiguities"]]
         if mode == "auto-clarify" or score < self.ambiguity_threshold:
-            # proceed on marked assumptions instead of asking
             return ElicitationResult(
                 ambiguity_score=score,
                 value_map=ValueMap(assumptions=[a["ambiguity"] for a in ambiguities]),
@@ -76,6 +72,17 @@ class Elicitor:
                 why_it_matters=a["why_it_matters"],
                 options=a.get("options", []),
             )
-            for a in ambiguities[:3]  # top-3 max, never a questionnaire
+            for a in ambiguities[:3]
         ]
         return ElicitationResult(ambiguity_score=score, questions=questions)
+
+    @staticmethod
+    def apply_answers(questions: list[ClarifyingQuestion], answers: list[str]) -> ValueMap:
+        """Close the loop (round-5 §3): user answers become constraints."""
+        return ValueMap(
+            constraints=[
+                f"Q: {q.question} A: {a}"
+                for q, a in zip(questions, answers, strict=False)
+                if a.strip()
+            ],
+        )

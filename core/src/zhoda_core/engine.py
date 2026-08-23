@@ -1,21 +1,21 @@
 """Orchestration state machine: router -> elicitor -> positions -> factions
--> debate rounds -> consensus -> verdict.
+-> debate rounds (with platform revision) -> consensus -> verdict.
 
-Trust is not eliminated, it is CONCENTRATED in three auditable points
-(round-3 §6): router classification, objection closure, position comparison.
-Each is a separate logged call in the transcript (хроніка), persisted
-BEFORE the verdict is returned.
-
-Round-4: aliases are per-deliberation (§7); budget is per-question via
-provider.begin_question() (§1).
+Trust is CONCENTRATED in three auditable points (round-3 §6), now guarded by
+conflict-free judge pairs (round-5 §2). Transcript persists BEFORE the
+verdict returns. Aliases are per-deliberation; budget is per-question;
+verdict.cost is the per-question delta (round-5 §4).
 """
+
+from collections.abc import Callable
 
 from .anonymize import make_aliases
 from .consensus import ConsensusChecker
 from .debate import DebateEngine
-from .elicitor import Elicitor
+from .elicitor import ClarifyingQuestion, Elicitor
 from .factions import FactionClusterer
-from .models import ConsensusStrength, Protocol, ValueMap, Verdict
+from .judges import Judges
+from .models import ConsensusStrength, Disagreement, ObjectionStatus, Protocol, ValueMap, Verdict
 from .positions import extract_positions
 from .providers.openrouter import OpenRouterProvider
 from .router import ProtocolRouter
@@ -30,24 +30,29 @@ class ZhodaEngine:
         council: list[str],
         *,
         chairman: str,
+        judges: tuple[str, str],
         router_classifiers: tuple[str, str] | None = None,
         rounds_cap: int = 4,
+        stability_rounds: int = 2,
         transcripts_dir: str = "transcripts",
+        alias_seed: int | None = None,  # testability hook
     ) -> None:
         if len(council) < 2:
             raise ValueError("council needs at least 2 models")
         self.provider = provider
         self.council = council
         self.chairman = chairman
+        self.judge_models = judges
         self.rounds_cap = rounds_cap
+        self.alias_seed = alias_seed
         self.transcripts = TranscriptStore(transcripts_dir)
         self.router = ProtocolRouter(
             provider, classifiers=router_classifiers or (council[0], council[1]),
         )
         self.elicitor = Elicitor(provider)
-        self.clusterer = FactionClusterer(provider, judge_model=chairman)
-        self.debate = DebateEngine(provider, judge_model=chairman)
-        self.consensus = ConsensusChecker(provider, judge_model=chairman)
+        self.clusterer = FactionClusterer(provider)
+        self.debate = DebateEngine(provider)
+        self.consensus = ConsensusChecker(provider, stability_rounds=stability_rounds)
         self.verdicts = VerdictBuilder()
 
     async def deliberate(
@@ -56,11 +61,13 @@ class ZhodaEngine:
         *,
         force_protocol: Protocol | None = None,
         clarify_mode: str = "smart",
+        on_questions: Callable[[list[ClarifyingQuestion]], list[str]] | None = None,
     ) -> Verdict:
         tid = self.transcripts.create()
-        self.provider.begin_question()  # per-question budget delta (round-4 §1)
-        aliases = make_aliases(self.council)  # per deliberation (round-4 §7)
+        self.provider.begin_question()
+        aliases = make_aliases(self.council, seed=self.alias_seed)
         speakers = {alias: real for real, alias in aliases.items()}
+        judges = Judges(self.judge_models, aliases)
 
         route = await self.router.route(question, force_protocol)
         self.transcripts.append(tid, {"stage": "route", **route.model_dump()})
@@ -69,6 +76,11 @@ class ZhodaEngine:
         if clarify_mode != "no-clarify":
             elicitation = await self.elicitor.elicit(question, self.council, mode=clarify_mode)
             value_map = elicitation.value_map
+            # close the loop (round-5 §3): questions -> answers -> ValueMap
+            if elicitation.questions and on_questions is not None:
+                answers = on_questions(elicitation.questions)
+                value_map = self.elicitor.apply_answers(elicitation.questions, answers)
+                self.transcripts.append(tid, {"stage": "answers", "answers": answers})
             self.transcripts.append(tid, {"stage": "elicit", **elicitation.model_dump()})
 
         positions = await extract_positions(
@@ -78,28 +90,43 @@ class ZhodaEngine:
             tid, {"stage": "positions", "positions": [p.model_dump() for p in positions]},
         )
 
-        factions = await self.clusterer.cluster(positions)
+        factions = await self.clusterer.cluster(positions, judges=judges)
         self.transcripts.append(
             tid, {"stage": "factions", "factions": [f.model_dump() for f in factions]},
         )
 
         rounds_taken = 0
         if route.protocol == Protocol.VOTE:
-            # cheap path: single check, stability rule does not apply
-            _, strength = await self.consensus.check(factions)
+            strength = await self.consensus.classify(factions, judges=judges)
+            zhoda = strength in (ConsensusStrength.UNANIMOUS, ConsensusStrength.MAJORITY)
+        elif route.protocol == Protocol.RED_TEAM:
+            # one adversarial round + revision, then verdict
+            round_ = await self.debate.run_round(1, factions, speakers=speakers, judges=judges)
+            self.transcripts.append(tid, {"stage": "round", **round_.model_dump()})
+            rounds_taken = 1
+            strength = await self.consensus.classify(factions, judges=judges)
             zhoda = strength in (ConsensusStrength.UNANIMOUS, ConsensusStrength.MAJORITY)
         else:
             zhoda, strength = False, ConsensusStrength.SPLIT
             for rounds_taken in range(1, self.rounds_cap + 1):
-                round_ = await self.debate.run_round(rounds_taken, factions, speakers=speakers)
+                round_ = await self.debate.run_round(
+                    rounds_taken, factions, speakers=speakers, judges=judges,
+                )
                 self.transcripts.append(tid, {"stage": "round", **round_.model_dump()})
-                factions = [f for f in factions if f.members]  # drop empty factions
-                zhoda, strength = await self.consensus.check(factions)
+                factions = [f for f in factions if f.members]
+                zhoda, strength = await self.consensus.check(factions, judges=judges)
                 self.transcripts.append(
                     tid, {"stage": "consensus", "zhoda": zhoda, "strength": str(strength)},
                 )
                 if zhoda:
                     break
+
+        # dissent map grows with the rounds' open objections (round-5 §5)
+        divergences = self.clusterer.divergences + [
+            Disagreement(topic=c.claim, factions=[c.target_faction], summary=c.claim)
+            for c in self.debate.objections
+            if c.status == ObjectionStatus.OPEN
+        ]
 
         verdict = self.verdicts.build(
             factions, strength, route.protocol, value_map,
@@ -107,12 +134,9 @@ class ZhodaEngine:
             router_confidence=route.confidence,
             rounds_taken=rounds_taken,
             transcript_id=tid,
-            switches=[s for r in [self.debate] for s in []] or [],  # collected below
-            cost=self.provider.cost,
-            divergences=self.clusterer.divergences,
+            switches=self.debate.switches,  # real accumulator (round-5 §4)
+            cost=self.provider.question_report(),  # per-question delta
+            divergences=divergences,
         )
-        verdict.switches = [
-            s for s in getattr(self.debate, "_all_switches", [])
-        ]
         self.transcripts.append(tid, {"stage": "verdict", "verdict": verdict.model_dump()})
         return verdict
