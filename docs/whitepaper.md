@@ -6,11 +6,12 @@ Alexander Valenchits · [github.com/svalench/zhoda](https://github.com/svalench/
 > *Models argue until they reach zhoda.*
 
 Changelog v0.2: added the closest neighbor (Yes-Brainer) and the 2026
-debate-critical analyses to Related Work; narrowed the novelty claim
-accordingly; replaced the naive cost estimate with honest per-stage
-arithmetic. Iterative debate exists — what remains unclaimed is an
-anti-capitulation protocol with an auditable trust surface, shipped as
-agent infrastructure.
+debate-critical analyses to Related Work; replaced the naive cost estimate
+with honest per-stage arithmetic; narrowed the public claim to the honest
+formula (no side-switching without an unclosed objection, stability-counted
+consensus, verdicts always carry the minority); reputation marked as
+planned post-MVP; beachhead wedge stated (agent harnesses, not regulated
+domains).
 
 ## Abstract
 
@@ -148,13 +149,17 @@ Verdict {
 | Cost blowup | Per-question budget cap, semantic caching of stages, free-tier-first routing |
 | Judge bias | Chairman reads transcripts, not votes; escalation instead of forced synthesis |
 
-## 5. Reputation
+## 5. Reputation (planned, post-MVP)
+
+*Not implemented in engine v0.1 — this section is the design, and the moat
+argument stands only once the data exists.*
 
 Debate outcomes feed a per-domain ELO rating of models: accepted critiques (+),
 confirmed flaws (−), beneficial switches (+). Reputation shapes council
-composition per task class and weights votes in consensus. Over time this
-becomes a dataset about model trustworthiness by domain — a moat that no
-single-pass tool accumulates.
+composition per task class and weights votes in consensus. Until a deferred
+verification layer exists (opt-in "did this verdict work?" feedback),
+reputation measures rhetorical robustness, not truthfulness — and is labeled
+accordingly.
 
 ## 6. Implementation
 
@@ -245,17 +250,20 @@ emerges around Zhoda, it will start with credit-style accounting
   anti-capitulation mechanics, conflict-free judging — and a benchmark from
   day one (§8), because gains must be measured, not declared.
 
-The honest positioning as of August 2026: iterative multi-model debate exists
-(Yes-Brainer, the MAD lineage). What remains unclaimed is an anti-capitulation
-debate protocol with an auditable trust surface — typed objections with a
-lifecycle, switches only through unclosed objections, platform revision,
-conflict-free judge pairs — exposed as agent infrastructure (MCP, harness
-plugins), not only as a human-facing app.
+**The honest formula, as of August 2026:** Zhoda is the protocol where a model
+may not switch sides without an unclosed objection, agreement does not count
+until it survives two consecutive rounds, and every verdict carries the
+minority and the chronicle. Iterative multi-model debate exists (Yes-Brainer,
+the MAD lineage); agent-infrastructure protocols with an auditable trust
+surface do not.
 
 ## 10. Roadmap
 
-See `docs/master-plan.md`. Near term: core MVP (elicitation → factions →
-2 rounds → verdict) on free models, then the MCP server, then the dsh plugin.
+See `docs/master-plan.md`. Beachhead wedge: architecture and product decision
+verdicts inside agent harnesses (DeepSeek Harness, Claude Code via MCP), and
+plan reviews in the IDE. Explicitly not medicine, finance, or compliance
+theater — regulated domains would eat the project. Near term: core MVP on
+free models, then the MCP server, then the dsh plugin.
 
 ## References
 

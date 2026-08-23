@@ -2,7 +2,9 @@
 
 **Models argue until they reach zhoda.**
 
-Zhoda (from Belarusian «згода» — agreement, consensus) is an open-source deliberation engine for LLMs. Instead of asking one model and hoping it is right, Zhoda:
+Zhoda (from Belarusian «згода» — agreement, consensus) is an open-source deliberation engine for LLMs.
+
+**The honest formula:** a model may not switch sides without an unclosed objection; agreement does not count until it survives two consecutive rounds; every verdict carries the minority report and the full transcript.
 
 1. **Interviews you first** — the council asks clarifying questions only when the question is genuinely underspecified, and builds a value map (goal, success criteria, constraints, anti-goals) before answering.
 2. **Forms factions** — models take positions, cluster into factions (with a real internal synthesis), and debate Oxford-style: argument → counter-argument → cross-examination → **platform revision** → faction switches. A rotating devil's advocate attacks the leading position. Consensus can be reached by convergence, not only by attrition.
@@ -10,9 +12,20 @@ Zhoda (from Belarusian «згода» — agreement, consensus) is an open-sourc
 
 ## Why
 
-Single models hallucinate confidently. Councils that just vote inherit shared biases. Zhoda makes models *argue* — the way humans actually get to the truth.
+Single models hallucinate confidently. Councils that just vote inherit shared biases. And the market is tired of synthesized "everyone agrees" — a tool that can say `zhoda_reached: false` and show the dissent map is the differentiator.
 
-Beachhead use case: **architecture decision verdicts for coding agents** — ADR reviews, "refactor X or Y", library choices. Measurable, and the audience already lives in agent harnesses.
+## The artifact, not the chat
+
+A Zhoda verdict is a first-class object: decision + minority report + dissent map + who switched factions and why + the full auditable transcript. Drop it into an ADR, an RFC, or a ticket. Single-answer tools and one-pass councils don't produce this object.
+
+## Where it plays
+
+One vertical wedge, not "any question":
+
+- **Architecture and product decisions inside agent harnesses** (DeepSeek Harness, Claude Code) — via MCP
+- **Plan reviews in the IDE** — the agent's plan gets a factional review before execution
+
+Explicitly not: medicine, finance, CISO theater — regulated domains would eat the project.
 
 Runs on free OpenRouter `:free` models with BYOK. Your keys, your budget cap.
 
@@ -24,7 +37,7 @@ Runs on free OpenRouter `:free` models with BYOK. Your keys, your budget cap.
 - CLI: `zhoda deliberate "..."` (interactive clarifying questions)
 - Conflict-free judging: two judges outside the council, pairwise closure votes
 - Honest provider: per-question budget with pre-call estimate, 429/quota split, sqlite cache
-- Test suite: provider gates, ledger gates, scripted e2e (revision / stability flip / deadlock / smart degradation)
+- Test suite: provider gates, ledger gates, scripted e2e (revision / stability flip / deadlock / smart degradation / state isolation)
 
 **Doesn't exist yet:** MCP server, dsh plugin, FastAPI server, escalation ladder, reputation. They land only after the core is green on live models.
 
