@@ -1,16 +1,21 @@
-"""Explainability view (values №1): the decision as a TREE, not a linear
-chronicle — argument -> what closed it -> who switched. This is what
-physically differentiates Zhoda from council-of-the-week tools."""
+"""Explainability view (values №1): the decision as a TREE — argument ->
+what closed it -> who switched. Evidence labels are THREE states
+(round-10 §1): sourced / unverified_claim / assumption."""
 
 from .factions import Faction
-from .models import Critique, FactionSwitch, ObjectionStatus
-from .models import DecisionNode
+from .models import Critique, DecisionNode, FactionSwitch, ObjectionStatus
 
 _RESOLUTION = {
     ObjectionStatus.CLOSED: "closed by rebuttal",
     ObjectionStatus.SUPERSEDED: "addressed by platform revision",
     ObjectionStatus.OPEN: "UNRESOLVED — carried into plan constraints",
 }
+
+
+def _evidence_label(url: str | None, verified: bool) -> str:
+    if url is None:
+        return "assumption"
+    return "sourced" if verified else "unverified_claim"
 
 
 def build_decision_tree(
@@ -31,7 +36,7 @@ def build_decision_tree(
                     {
                         "claim": c.claim,
                         "evidence_url": c.evidence_url,
-                        "label": "sourced" if c.is_sourced else "assumption",
+                        "label": c.label,  # sourced | unverified_claim | assumption
                     }
                     for c in (faction.platform.claims if faction.platform else [])
                 ],
@@ -46,9 +51,10 @@ def build_decision_tree(
                 detail={
                     "flaw_type": str(critique.flaw_type),
                     "by": critique.author_faction,
-                    "evidence_url": critique.evidence_url,
+                    "evidence": _evidence_label(
+                        critique.evidence_url, critique.evidence_verified,
+                    ),
                     "resolution": _RESOLUTION[critique.status],
-                    "rebuttal_evidence_url": critique.rebuttal_evidence_url,
                 },
             ))
         root.children.append(fnode)

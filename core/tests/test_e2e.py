@@ -1,8 +1,8 @@
 """End-to-end tests on a SCRIPTED provider (consumable script, deterministic
 via alias_seed, transcripts in tmp_path).
 
-Round-9: red_team attacks a unanimous platform; deadlock escalates to the
-appellate model.
+Round-10: the plan contract renders ONLY on zhoda; paths_rejected counts
+rejections by a reached consensus; an appeal carries decision_origin.
 """
 
 import json
@@ -128,8 +128,8 @@ async def test_debate_loop_with_platform_revision(tmp_path) -> None:
     assert "partitioning" in verdict.decision
     assert verdict.minority_report and "Kafka" in verdict.minority_report
     assert verdict.switches == []
-    assert verdict.plan_contract is not None
-    assert verdict.dead_ends_prevented >= 1
+    assert verdict.plan_contract is not None        # zhoda -> plan renders
+    assert len(verdict.paths_rejected) >= 1          # the Kafka minority, rejected
     assert verdict.decision_tree["children"]
     assert verdict.cost.breakdown
 
@@ -177,7 +177,6 @@ async def test_stability_rule_blocks_a_flip(tmp_path) -> None:
         ("m3", ("Do you switch factions?",), {"switch": False, "convinced_by": ""}),
         (None, ("theses of all factions",), {"all_agree": False}),
         (None, ("theses of all factions",), {"all_agree": False}),
-        (None, ("PLAN CONTRACT",), PLAN),
     ]
     engine = make_engine(
         ScriptedProvider(script), tmp_path, stability_rounds=2, rounds_cap=2,
@@ -188,6 +187,8 @@ async def test_stability_rule_blocks_a_flip(tmp_path) -> None:
     )
     assert verdict.zhoda_reached is False
     assert verdict.rounds_taken == 2
+    assert verdict.plan_contract is None   # no zhoda -> no plan (round-10 §2)
+    assert verdict.paths_rejected == []    # nothing was rejected
 
 
 @pytest.mark.asyncio
@@ -223,9 +224,7 @@ async def test_deadlock_on_rounds_cap(tmp_path) -> None:
         (None, ("theses of all factions",), {"all_agree": False}),
         (None, ("theses of all factions",), {"all_agree": False}),
     ]
-    script = opening_script(aliases) + round_script + round_script + [
-        (None, ("PLAN CONTRACT",), PLAN),
-    ]
+    script = opening_script(aliases) + round_script + round_script
     engine = make_engine(
         ScriptedProvider(script), tmp_path, stability_rounds=2, rounds_cap=2,
     )
@@ -236,12 +235,12 @@ async def test_deadlock_on_rounds_cap(tmp_path) -> None:
     assert verdict.zhoda_reached is False
     assert verdict.consensus_strength == ConsensusStrength.DEADLOCK
     assert verdict.minority_report
-    assert verdict.dead_ends_prevented >= 1
+    assert verdict.paths_rejected == []  # deadlock rejected nothing
 
 
 @pytest.mark.asyncio
 async def test_deadlock_escalates_to_appeal(tmp_path) -> None:
-    """Round-9 §4: deadlock + escalation enabled -> the appellate judge decides."""
+    """Deadlock + escalation -> the appellate judge decides, LABELED."""
     aliases = make_aliases(COUNCIL, seed=42)
     critique_pg = {
         "target_faction": "Pragmatists", "flaw_type": "scope",
@@ -277,7 +276,6 @@ async def test_deadlock_escalates_to_appeal(tmp_path) -> None:
         ("j3", ("appellate judge",), {
             "decision": "Use PostgreSQL with a partitioning plan — appeal",
             "winning_arguments": ["operational simplicity"]}),
-        (None, ("PLAN CONTRACT",), PLAN),
     ]
     engine = make_engine(
         ScriptedProvider(script), tmp_path,
@@ -289,13 +287,14 @@ async def test_deadlock_escalates_to_appeal(tmp_path) -> None:
     )
     assert verdict.consensus_strength == ConsensusStrength.DEADLOCK
     assert verdict.escalated_to == "j3"
-    assert "appeal" in verdict.decision  # the appellate decision, not the stalemate
+    assert verdict.decision_origin == "appeal_without_consensus"  # labeled fiat
+    assert "appeal" in verdict.decision
+    assert verdict.plan_contract is None  # still no zhoda -> still no plan
 
 
 @pytest.mark.asyncio
 async def test_red_team_attacks_unanimous_platform(tmp_path) -> None:
-    """Round-9 §1: one faction (everyone said 'fine') -> the devil's advocate
-    still attacks. The transcript must contain the critique."""
+    """One faction (everyone said 'fine') -> the devil's advocate still attacks."""
     aliases = make_aliases(COUNCIL, seed=42)
     a1 = aliases["m1"]
     script = [

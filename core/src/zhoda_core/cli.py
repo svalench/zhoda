@@ -1,6 +1,7 @@
 """`zhoda deliberate "..."` — interactive Stage 0 + verdict output.
 
-Full config wiring, including objection caps and the escalation model.
+Prints the honest metric (round-10 §3): paths rejected by a reached
+consensus. An appellate decision is labeled as such — never mistaken for zhoda.
 """
 
 import asyncio
@@ -82,8 +83,9 @@ def deliberate(
             )
             console.print(f"\n[bold]zhoda_reached:[/bold] {verdict.zhoda_reached} "
                           f"({verdict.consensus_strength}, rounds: {verdict.rounds_taken})")
-            if verdict.escalated_to:
-                console.print(f"[bold]escalated to:[/bold] {verdict.escalated_to}")
+            if verdict.decision_origin != "council":
+                console.print(f"[red]APPELLATE DECISION without consensus "
+                              f"(judge: {verdict.escalated_to})[/red]")
             console.print(f"[bold]decision:[/bold]\n{verdict.decision}")
             if verdict.minority_report:
                 console.print(f"[bold]minority report:[/bold]\n{verdict.minority_report}")
@@ -92,11 +94,13 @@ def deliberate(
                               f"{len(verdict.value_map.open_ambiguities)}[/dim]")
             if verdict.switches:
                 console.print(f"[bold]switches:[/bold] {len(verdict.switches)}")
-            console.print(f"[bold]dead ends prevented:[/bold] {verdict.dead_ends_prevented}")
+            console.print(f"[bold]paths rejected:[/bold] {len(verdict.paths_rejected)}")
             if verdict.plan_contract:
                 console.print(f"[bold]plan contract:[/bold] "
                               f"{len(verdict.plan_contract.steps)} steps, "
                               f"{len(verdict.plan_contract.rejected_paths)} rejected paths")
+            else:
+                console.print("[dim]no plan contract — no zhoda[/dim]")
             console.print(f"cost: {verdict.cost.requests} requests, "
                           f"${verdict.cost.usd:.4f}, transcript: {verdict.transcript_id}")
             if verdict.cost.breakdown:

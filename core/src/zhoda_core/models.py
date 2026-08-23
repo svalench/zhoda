@@ -44,21 +44,28 @@ class ValueMap(BaseModel):
 
 
 class Claim(BaseModel):
-    """An argument with evidence discipline (values №1): without a source it
-    is an OPINION, and every render must label it as such."""
+    """An argument with evidence discipline (values №1, fixed in round-10 §1):
+    THREE labels, not two. A URL a model names from its head is an
+    UNVERIFIED_CLAIM — visually closer to an assumption than to a source.
+    `sourced` is reserved for user-provided or actually fetched+verified
+    sources (`verified=True`). Otherwise the protocol would lend
+    hallucinated links institutional weight — the exact false confidence
+    this project is built against."""
 
     claim: str
-    evidence_url: str | None = None  # None -> rendered as "assumption"
+    evidence_url: str | None = None
     confidence: float = 0.5
+    verified: bool = False  # set by a source verifier, or for user-provided sources
 
     @property
-    def is_sourced(self) -> bool:
-        return self.evidence_url is not None
+    def label(self) -> str:
+        if self.evidence_url is None:
+            return "assumption"
+        return "sourced" if self.verified else "unverified_claim"
 
 
 class Position(BaseModel):
-    """A model's stance. `model` holds the ANONYMIZED alias during debate.
-    `claims` carry mandatory evidence fields (values №1)."""
+    """A model's stance. `model` holds the ANONYMIZED alias during debate."""
 
     model: str
     thesis: str
@@ -91,6 +98,7 @@ class Critique(BaseModel):
     claim: str
     specifics: str = ""
     evidence_url: str | None = None
+    evidence_verified: bool = False  # same three-label discipline as Claim
     rebuttal: str = ""
     rebuttal_evidence_url: str | None = None
     status: ObjectionStatus = ObjectionStatus.OPEN
@@ -134,7 +142,9 @@ class PlanStep(BaseModel):
 
 
 class RejectedPath(BaseModel):
-    """A path the council rejected — with WHO rejected it and WHY."""
+    """A position rejected BY A REACHED CONSENSUS (round-10 §2): at split or
+    deadlock nothing was rejected — there is an unresolved dispute, and it is
+    not counted here."""
 
     path: str
     rejected_by: str
@@ -142,7 +152,9 @@ class RejectedPath(BaseModel):
 
 
 class PlanContract(BaseModel):
-    """The second render (values №2): a spec for a CHEAPER executor model."""
+    """The second render (values №2): a spec for a CHEAPER executor model.
+    Rendered ONLY when zhoda was reached — a plan built on 'we did not
+    decide' would hand the executor a spec founded on dissent (round-10 §2)."""
 
     goal: str = ""
     steps: list[PlanStep] = Field(default_factory=list)
@@ -161,12 +173,15 @@ class DecisionNode(BaseModel):
 
 
 class Verdict(BaseModel):
-    """Final output — renders twice: human report + plan contract."""
+    """Final output. `paths_rejected` is an honest programmatic count
+    (round-10 §3) — the 'dead ends prevented' ROI metric waits for executor
+    feedback, because we don't promise unmeasured numbers."""
 
     decision: str
     zhoda_reached: bool
     consensus_strength: ConsensusStrength
     protocol: Protocol
+    decision_origin: str = "council"  # "appeal_without_consensus" when escalated
     router_confidence: float = 1.0
     value_map: ValueMap = Field(default_factory=ValueMap)
     minority_report: str | None = None
@@ -175,7 +190,7 @@ class Verdict(BaseModel):
     rounds_taken: int = 0
     cost: CostReport = Field(default_factory=CostReport)
     transcript_id: str = ""
-    plan_contract: PlanContract | None = None
-    dead_ends_prevented: int = 0
+    plan_contract: PlanContract | None = None  # rendered ONLY on zhoda
+    paths_rejected: list[RejectedPath] = Field(default_factory=list)
     decision_tree: dict = Field(default_factory=dict)
-    escalated_to: str | None = None  # appellate model after deadlock (round-9 §4)
+    escalated_to: str | None = None

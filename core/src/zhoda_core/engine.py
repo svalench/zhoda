@@ -1,8 +1,11 @@
 """Orchestration state machine: router -> elicitor -> positions -> factions
 (chairman names them) -> debate rounds (revise BEFORE switches) -> verdict
--> plan contract + decision tree. On DEADLOCK with escalation enabled, an
-appellate model reads the outcome and decides (round-9 §4) — the escalation
-ladder is real, not a config promise.
+-> plan contract (ONLY on zhoda) + decision tree.
+
+Round-10: paths_rejected is honest (rejections by a REACHED consensus only);
+the plan contract never renders on a non-zhoda verdict; an appellate
+decision carries decision_origin="appeal_without_consensus" — a single
+model's fiat is labeled, never mistaken for zhoda.
 """
 
 from collections.abc import Callable
@@ -14,7 +17,7 @@ from .elicitor import ClarifyingQuestion, Elicitor
 from .factions import Faction, FactionClusterer
 from .judges import Judges
 from .models import ConsensusStrength, Disagreement, ObjectionStatus, Protocol, ValueMap, Verdict
-from .plan import render_plan_contract
+from .plan import collect_rejected_paths, render_plan_contract
 from .positions import extract_positions
 from .providers.openrouter import OpenRouterProvider
 from .router import ProtocolRouter
@@ -181,7 +184,7 @@ class ZhodaEngine:
             if not zhoda and strength == ConsensusStrength.SPLIT:
                 strength = ConsensusStrength.DEADLOCK
 
-        # escalation (round-9 §4): the appellate model decides a deadlock
+        # escalation: the appellate model decides a deadlock — LABELED (round-10 §2)
         escalated_to = None
         appeal_decision = None
         if strength == ConsensusStrength.DEADLOCK and self.escalation_model:
@@ -224,12 +227,15 @@ class ZhodaEngine:
         )
         if appeal_decision:
             verdict.decision = appeal_decision
+            verdict.decision_origin = "appeal_without_consensus"  # labeled fiat
         verdict.escalated_to = escalated_to
-        # second render + explainability + ROI metric (values №1–№3)
-        verdict.plan_contract = await render_plan_contract(
-            self.provider, self.chairman, verdict, debate.objections, factions,
-        )
-        verdict.dead_ends_prevented = len(verdict.plan_contract.rejected_paths)
+        # honest metric (round-10 §3): rejections by a REACHED consensus only
+        verdict.paths_rejected = collect_rejected_paths(factions, zhoda_reached=zhoda)
+        # the plan contract renders ONLY on zhoda (round-10 §2)
+        if zhoda:
+            verdict.plan_contract = await render_plan_contract(
+                self.provider, self.chairman, verdict,
+            )
         verdict.decision_tree = build_decision_tree(
             factions, debate.objections, debate.switches, verdict.decision,
         ).model_dump()

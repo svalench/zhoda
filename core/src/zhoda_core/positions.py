@@ -1,7 +1,8 @@
 """Stage 1: independent structured positions, anonymized from the start.
 
-Evidence discipline (values №1): every claim carries `evidence_url` — null
-means 'assumption', and renders label it accordingly.
+Evidence discipline (round-10 §1): a URL named from memory will be labeled
+UNVERIFIED — null is more honest. We never lend hallucinated links
+institutional weight.
 """
 
 import asyncio
@@ -22,8 +23,8 @@ Respond with ONLY valid JSON:
               "confidence": 0.0}}],
   "falsifiability": "conditions under which this position is wrong",
   "confidence": 0.0}}
-If you have no source for a claim, set evidence_url to null — the report
-will label it an assumption. Never invent URLs."""
+A URL you name from memory will be labeled UNVERIFIED, not sourced —
+null is more honest. Never invent URLs."""
 
 
 async def extract_positions(
