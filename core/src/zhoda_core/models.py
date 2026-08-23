@@ -45,8 +45,7 @@ class ValueMap(BaseModel):
 
 class Claim(BaseModel):
     """An argument with evidence discipline (values №1): without a source it
-    is an OPINION, and every render must label it as such — we never sell
-    the illusion of rigor."""
+    is an OPINION, and every render must label it as such."""
 
     claim: str
     evidence_url: str | None = None  # None -> rendered as "assumption"
@@ -83,8 +82,7 @@ class ObjectionStatus(StrEnum):
 
 
 class Critique(BaseModel):
-    """A concrete charge in the objection ledger. Factual objections should
-    cite (`evidence_url`); the rebuttal may cite back (`rebuttal_evidence_url`)."""
+    """A concrete charge in the objection ledger."""
 
     id: str = ""
     author_faction: str = ""
@@ -92,9 +90,9 @@ class Critique(BaseModel):
     flaw_type: FlawType
     claim: str
     specifics: str = ""
-    evidence_url: str | None = None          # source behind a factual objection
+    evidence_url: str | None = None
     rebuttal: str = ""
-    rebuttal_evidence_url: str | None = None  # source behind the rebuttal
+    rebuttal_evidence_url: str | None = None
     status: ObjectionStatus = ObjectionStatus.OPEN
 
 
@@ -136,8 +134,7 @@ class PlanStep(BaseModel):
 
 
 class RejectedPath(BaseModel):
-    """A path the council rejected — with WHO rejected it and WHY. Collected
-    programmatically from the ledger, never invented by a renderer."""
+    """A path the council rejected — with WHO rejected it and WHY."""
 
     path: str
     rejected_by: str
@@ -145,8 +142,7 @@ class RejectedPath(BaseModel):
 
 
 class PlanContract(BaseModel):
-    """The second render (values №2): a spec for a CHEAPER executor model,
-    not a narrative for a human."""
+    """The second render (values №2): a spec for a CHEAPER executor model."""
 
     goal: str = ""
     steps: list[PlanStep] = Field(default_factory=list)
@@ -156,10 +152,9 @@ class PlanContract(BaseModel):
 
 
 class DecisionNode(BaseModel):
-    """Explainability view (values №1): argument -> what closed it -> who moved.
-    A tree, not a linear chronicle."""
+    """Explainability view (values №1): a tree, not a linear chronicle."""
 
-    kind: str  # faction | objection | resolution | switch | verdict
+    kind: str
     label: str
     detail: dict = Field(default_factory=dict)
     children: list[DecisionNode] = Field(default_factory=list)
@@ -180,6 +175,7 @@ class Verdict(BaseModel):
     rounds_taken: int = 0
     cost: CostReport = Field(default_factory=CostReport)
     transcript_id: str = ""
-    plan_contract: PlanContract | None = None   # second render (values №2)
-    dead_ends_prevented: int = 0                # the ROI metric (values №3)
-    decision_tree: dict = Field(default_factory=dict)  # explainability (values №1)
+    plan_contract: PlanContract | None = None
+    dead_ends_prevented: int = 0
+    decision_tree: dict = Field(default_factory=dict)
+    escalated_to: str | None = None  # appellate model after deadlock (round-9 §4)

@@ -1,10 +1,19 @@
 """Stage 3: Oxford-style debate rounds.
 
 Order: critiques -> devil's advocate -> rebuttals -> closures -> REVISION ->
-switches against the REVISED platforms. Supersede is symmetric with closure:
-the objection's AUTHOR may withdraw, else the judge pair must unanimously
-confirm 'addressed'. Factual objections should cite (evidence_url); rebuttals
-may cite back (rebuttal_evidence_url) — evidence discipline (values №1).
+switches against the REVISED platforms.
+
+Round-9:
+- red_team on unanimity (§1): with a single faction the devil's advocate
+  attacks the platform DIRECTLY — 'everyone said the code is fine' is the
+  typical code_review case, and the protocol must attack exactly there;
+- objection caps (§2): at most `max_new_per_round` new critiques register per
+  round (overflow is marked `deferred`, never dropped silently), and
+  rebuttal/closure/revision process the top-priority `max_active` open
+  objections (factual > logical > scope > values_mismatch) — the rest wait;
+- rotation consistency (§3): the rebuttal speaker rotates like the critic and
+  the reviser; a revised platform is authored by the revising speaker's alias
+  in the transcript, not the original author's.
 """
 
 import asyncio
@@ -30,7 +39,7 @@ Produce ONE concrete critique of the opposing position. ONLY valid JSON:
 Never invent URLs — null is honest."""
 
 DEVILS_ADVOCATE_PROMPT = """You are the rotating devil's advocate. Attack the leading
-position regardless of your own stance. Leading faction \"{opponent}\": {opponent_thesis}
+position regardless of your own stance. Position of faction \"{opponent}\": {opponent_thesis}
 
 Produce ONE concrete critique. ONLY valid JSON:
 {{"target_faction": "{opponent}", "flaw_type": "factual|logical|scope|values_mismatch",
@@ -81,20 +90,36 @@ The faction revised its platform. New thesis: {thesis}
 Does the revised platform substantively address the objection? ONLY valid JSON:
 {{"addressed": true}} or {{"addressed": false}}"""
 
+_FLAW_PRIORITY = {
+    FlawType.FACTUAL: 0,
+    FlawType.LOGICAL: 1,
+    FlawType.SCOPE: 2,
+    FlawType.VALUES_MISMATCH: 3,
+}
+
 
 class Round(BaseModel):
     number: int
     critiques: list[Critique] = Field(default_factory=list)
     switches: list[FactionSwitch] = Field(default_factory=list)
     revisions: list[dict] = Field(default_factory=list)
+    deferred: list[dict] = Field(default_factory=list)  # over-cap, NOT dropped
 
 
 class DebateEngine:
     """Per-question state (objections, switches) — created per deliberation."""
 
-    def __init__(self, provider: OpenRouterProvider, devils_advocate: bool = True) -> None:
+    def __init__(
+        self,
+        provider: OpenRouterProvider,
+        devils_advocate: bool = True,
+        max_new_per_round: int = 3,
+        max_active: int = 6,
+    ) -> None:
         self.provider = provider
         self.devils_advocate = devils_advocate
+        self.max_new_per_round = max_new_per_round
+        self.max_active = max_active
         self.objections: list[Critique] = []
         self.switches: list[FactionSwitch] = []
 
@@ -108,6 +133,17 @@ class DebateEngine:
         critique.id = uuid4().hex[:8]
         self.objections.append(critique)
         return critique
+
+    def admit(self, critique: Critique, round_: Round) -> bool:
+        """Objection cap (round-9 §2): at most max_new_per_round per round and
+        max_active open overall; overflow is marked deferred — never dropped."""
+        open_now = sum(1 for c in self.objections if c.status == ObjectionStatus.OPEN)
+        if len(round_.critiques) >= self.max_new_per_round or open_now >= self.max_active:
+            round_.deferred.append({"claim": critique.claim, "reason": "objection cap"})
+            return False
+        self.register_critique(critique)
+        round_.critiques.append(critique)
+        return True
 
     def close_objection(self, objection_id: str, rebuttal: str, *, rebuttal_by: str) -> bool:
         """Close an open objection — only by a rebuttal FROM THE TARGET FACTION."""
@@ -142,6 +178,12 @@ class DebateEngine:
             return False
         return bool(switch.convinced_by.strip())
 
+    def active_objections(self) -> list[Critique]:
+        """Top-priority open objections within the active cap (round-9 §2)."""
+        open_items = [c for c in self.objections if c.status == ObjectionStatus.OPEN]
+        open_items.sort(key=lambda c: _FLAW_PRIORITY[c.flaw_type])
+        return open_items[: self.max_active]
+
     async def run_round(
         self,
         number: int,
@@ -151,31 +193,41 @@ class DebateEngine:
         judges: Judges,
     ) -> Round:
         round_ = Round(number=number)
-        if len(factions) < 2:
+        if not factions:
             return round_
 
-        ordered = sorted(factions, key=lambda f: len(f.members), reverse=True)
-        leading = ordered[0]
-
-        pairs = [(f, leading if f is not leading else ordered[1]) for f in ordered]
-        raw: list[tuple[str, object]] = list(
-            zip(
-                [f.name for f, _ in pairs],
-                await asyncio.gather(
-                    *(self._critique(f, t, speakers, CRITIQUE_PROMPT, number) for f, t in pairs),
-                    return_exceptions=True,
-                ),
-                strict=True,
+        raw: list[tuple[str, object]] = []
+        if len(factions) >= 2:
+            ordered = sorted(factions, key=lambda f: len(f.members), reverse=True)
+            leading = ordered[0]
+            pairs = [(f, leading if f is not leading else ordered[1]) for f in ordered]
+            raw += list(
+                zip(
+                    [f.name for f, _ in pairs],
+                    await asyncio.gather(
+                        *(self._critique(f, t, speakers, CRITIQUE_PROMPT, number) for f, t in pairs),
+                        return_exceptions=True,
+                    ),
+                    strict=True,
+                )
             )
-        )
-
-        if self.devils_advocate and leading.platform is not None:
-            candidates = sorted(a for a in speakers if a not in leading.members)
-            candidates = candidates or sorted(speakers)
+            if self.devils_advocate and leading.platform is not None:
+                candidates = sorted(a for a in speakers if a not in leading.members)
+                candidates = candidates or sorted(speakers)
+                advocate_alias = candidates[(number - 1) % len(candidates)]
+                da = await self._critique(
+                    Faction(name="devils_advocate", members=[advocate_alias]),
+                    leading, speakers, DEVILS_ADVOCATE_PROMPT, number,
+                )
+                raw.append(("devils_advocate", da))
+        elif self.devils_advocate and factions[0].platform is not None:
+            # red_team on unanimity (round-9 §1): attack the only platform directly
+            only = factions[0]
+            candidates = sorted(a for a in speakers if a not in only.members) or sorted(speakers)
             advocate_alias = candidates[(number - 1) % len(candidates)]
             da = await self._critique(
                 Faction(name="devils_advocate", members=[advocate_alias]),
-                leading, speakers, DEVILS_ADVOCATE_PROMPT, number,
+                only, speakers, DEVILS_ADVOCATE_PROMPT, number,
             )
             raw.append(("devils_advocate", da))
 
@@ -185,17 +237,16 @@ class DebateEngine:
             try:
                 critique = Critique(**item)
                 critique.author_faction = author
-                round_.critiques.append(self.register_critique(critique))
+                self.admit(critique, round_)
             except (ValueError, TypeError):
                 continue
 
-        open_items = [c for c in self.objections if c.status == ObjectionStatus.OPEN]
-
+        # rebuttals (parallel, rotating speaker) + closure votes (judge pair)
         async def rebut(critique: Critique) -> tuple[Critique, str] | None:
             target = next((f for f in factions if f.name == critique.target_faction), None)
             if target is None or target.platform is None:
                 return None
-            speaker = speakers.get(target.members[0])
+            speaker = speakers.get(target.members[(number - 1) % len(target.members)])
             if speaker is None:
                 return None
             text = await self.provider.complete(
@@ -208,7 +259,9 @@ class DebateEngine:
             )
             return critique, text
 
-        rebuttals = await asyncio.gather(*(rebut(c) for c in open_items), return_exceptions=True)
+        rebuttals = await asyncio.gather(
+            *(rebut(c) for c in self.active_objections()), return_exceptions=True,
+        )
 
         async def judge_closure(item: tuple[Critique, str]) -> None:
             critique, rebuttal = item
@@ -231,7 +284,10 @@ class DebateEngine:
             return_exceptions=True,
         )
 
-        async def revise(faction: Faction) -> tuple[Faction, dict] | None:
+        # PLATFORM REVISION (parallel, rotating speaker) — then symmetric supersede
+        alias_of = {v: k for k, v in speakers.items()}
+
+        async def revise(faction: Faction) -> tuple[Faction, dict, str] | None:
             open_against = self._open_against(faction)
             if not open_against or not faction.members or faction.platform is None:
                 return None
@@ -248,7 +304,7 @@ class DebateEngine:
                     objections=objections_text,
                 ),
             )
-            return faction, data
+            return faction, data, speaker
 
         revised = await asyncio.gather(
             *(revise(f) for f in factions), return_exceptions=True,
@@ -256,11 +312,12 @@ class DebateEngine:
         for item in revised:
             if not isinstance(item, tuple):
                 continue
-            faction, data = item
+            faction, data, speaker = item
             if not (data.get("changed") and data.get("thesis")) or faction.platform is None:
                 continue
             faction.platform = Position(
-                model=faction.platform.model,
+                # round-9 §3: the revising speaker authors the revised platform
+                model=alias_of.get(speaker, faction.platform.model),
                 thesis=data["thesis"],
                 answer=data.get("answer", faction.platform.answer),
                 claims=faction.platform.claims,
@@ -306,6 +363,7 @@ class DebateEngine:
                         continue
                 self.supersede_objection(critique.id)
 
+        # switches — against REVISED platforms, first RESOLVABLE objection
         for faction in factions:
             open_against = self._open_against(faction)
             if not open_against or faction.platform is None:
@@ -347,8 +405,8 @@ class DebateEngine:
 
     def _open_against(self, faction: Faction) -> list[Critique]:
         return [
-            c for c in self.objections
-            if c.status == ObjectionStatus.OPEN and c.target_faction == faction.name
+            c for c in self.active_objections()
+            if c.target_faction == faction.name
         ]
 
     async def _critique(

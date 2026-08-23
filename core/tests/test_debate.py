@@ -6,8 +6,8 @@ from zhoda_core.debate import DebateEngine
 from zhoda_core.models import Critique, FactionSwitch, FlawType, ObjectionStatus
 
 
-def make_engine() -> DebateEngine:
-    return DebateEngine(provider=None)  # gates don't touch the provider
+def make_engine(**kwargs) -> DebateEngine:
+    return DebateEngine(provider=None, **kwargs)  # gates don't touch the provider
 
 
 def make_critique(**kwargs) -> Critique:
@@ -61,7 +61,7 @@ def test_switch_needs_open_objection_and_citation() -> None:
 
 
 def test_switch_only_toward_the_objections_author() -> None:
-    """Round-7 §3: with 3+ factions 'any other faction' is not the convincer."""
+    """With 3+ factions 'any other faction' is not the convincer."""
     engine = make_engine()
     critique = engine.register_critique(make_critique())  # author: Throughputists
     assert not engine.validate_switch(make_switch(
@@ -76,3 +76,18 @@ def test_superseded_objection_leaves_the_ledger() -> None:
     assert engine.supersede_objection(critique.id)
     assert critique.status == ObjectionStatus.SUPERSEDED
     assert not engine.validate_switch(make_switch(objection_id=critique.id))
+
+
+def test_objection_cap_defers_overflow() -> None:
+    """Round-9 §2: over-cap critiques are marked deferred, never dropped silently."""
+    from zhoda_core.models import Round
+
+    engine = make_engine(max_new_per_round=2)
+    round_ = Round(number=1)
+    assert engine.admit(make_critique(), round_)
+    assert engine.admit(make_critique(claim="a second concrete factual objection"), round_)
+    assert not engine.admit(
+        make_critique(claim="a third concrete factual objection"), round_,
+    )
+    assert len(round_.critiques) == 2
+    assert round_.deferred and "objection cap" in round_.deferred[0]["reason"]

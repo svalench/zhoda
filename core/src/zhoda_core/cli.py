@@ -1,7 +1,6 @@
 """`zhoda deliberate "..."` — interactive Stage 0 + verdict output.
 
-Prints the ROI metric (values №3): dead ends prevented — rejected paths that
-made it into the plan's constraints.
+Full config wiring, including objection caps and the escalation model.
 """
 
 import asyncio
@@ -57,6 +56,7 @@ def deliberate(
             in_council = [j for j in judges if j in cfg["council"]]
             if in_council:
                 console.print(f"[yellow]judges sit in the council: {in_council}[/yellow]")
+            escalation = cfg.get("escalation", {}) or {}
             engine = ZhodaEngine(
                 provider,
                 cfg["council"],
@@ -67,6 +67,11 @@ def deliberate(
                 stability_rounds=cfg.get("stability_rounds", 2),
                 devils_advocate=cfg.get("devils_advocate", True),
                 ambiguity_threshold=cfg.get("ambiguity_threshold", 0.6),
+                max_new_per_round=cfg.get("max_new_per_round", 3),
+                max_active=cfg.get("max_active", 6),
+                escalation_model=(
+                    escalation.get("model") if escalation.get("enabled") else None
+                ),
                 transcripts_dir=cfg.get("transcripts_dir", "transcripts"),
             )
             verdict = await engine.deliberate(
@@ -77,6 +82,8 @@ def deliberate(
             )
             console.print(f"\n[bold]zhoda_reached:[/bold] {verdict.zhoda_reached} "
                           f"({verdict.consensus_strength}, rounds: {verdict.rounds_taken})")
+            if verdict.escalated_to:
+                console.print(f"[bold]escalated to:[/bold] {verdict.escalated_to}")
             console.print(f"[bold]decision:[/bold]\n{verdict.decision}")
             if verdict.minority_report:
                 console.print(f"[bold]minority report:[/bold]\n{verdict.minority_report}")

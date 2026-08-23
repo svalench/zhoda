@@ -1,11 +1,8 @@
 """Orchestration state machine: router -> elicitor -> positions -> factions
 (chairman names them) -> debate rounds (revise BEFORE switches) -> verdict
--> plan contract + decision tree.
-
-Session state is created INSIDE deliberate() (round-8 §1). The verdict
-renders twice (values №2): human report + plan contract for a cheaper
-executor; rejected paths come from the ledger programmatically. The ROI
-metric (values №3): dead_ends_prevented.
+-> plan contract + decision tree. On DEADLOCK with escalation enabled, an
+appellate model reads the outcome and decides (round-9 §4) — the escalation
+ladder is real, not a config promise.
 """
 
 from collections.abc import Callable
@@ -31,6 +28,13 @@ Factions:
 
 ONLY valid JSON: {{"<current name>": "<descriptive name>"}}"""
 
+APPEAL_PROMPT = """The council deadlocked on: {question}
+Final theses: {theses}
+Unclosed objections: {objections}
+
+You are the appellate judge. Decide, and state which arguments won.
+ONLY valid JSON: {{"decision": "...", "winning_arguments": ["..."]}}"""
+
 MAX_FACTION_NAME = 40
 
 
@@ -47,6 +51,9 @@ class ZhodaEngine:
         stability_rounds: int = 2,
         devils_advocate: bool = True,
         ambiguity_threshold: float = 0.6,
+        max_new_per_round: int = 3,
+        max_active: int = 6,
+        escalation_model: str | None = None,
         transcripts_dir: str = "transcripts",
         alias_seed: int | None = None,
     ) -> None:
@@ -67,6 +74,9 @@ class ZhodaEngine:
         self.rounds_cap = rounds_cap
         self.stability_rounds = stability_rounds
         self.devils_advocate = devils_advocate
+        self.max_new_per_round = max_new_per_round
+        self.max_active = max_active
+        self.escalation_model = escalation_model
         self.alias_seed = alias_seed
         self.transcripts = TranscriptStore(transcripts_dir)
         self.router = ProtocolRouter(provider, classifiers=router_classifiers)
@@ -82,7 +92,12 @@ class ZhodaEngine:
         on_questions: Callable[[list[ClarifyingQuestion]], list[str]] | None = None,
     ) -> Verdict:
         # fresh session state per question (round-8 §1)
-        debate = DebateEngine(self.provider, devils_advocate=self.devils_advocate)
+        debate = DebateEngine(
+            self.provider,
+            devils_advocate=self.devils_advocate,
+            max_new_per_round=self.max_new_per_round,
+            max_active=self.max_active,
+        )
         clusterer = FactionClusterer(self.provider)
         consensus = ConsensusChecker(self.provider, stability_rounds=self.stability_rounds)
 
@@ -166,6 +181,29 @@ class ZhodaEngine:
             if not zhoda and strength == ConsensusStrength.SPLIT:
                 strength = ConsensusStrength.DEADLOCK
 
+        # escalation (round-9 §4): the appellate model decides a deadlock
+        escalated_to = None
+        appeal_decision = None
+        if strength == ConsensusStrength.DEADLOCK and self.escalation_model:
+            escalated_to = self.escalation_model
+            appeal = await self.provider.ask_json(
+                self.escalation_model,
+                APPEAL_PROMPT.format(
+                    question=question,
+                    theses="; ".join(
+                        f"{f.name}: {f.platform.thesis}" for f in factions if f.platform
+                    ),
+                    objections="; ".join(
+                        c.claim for c in debate.objections
+                        if c.status == ObjectionStatus.OPEN
+                    ),
+                ),
+            )
+            appeal_decision = appeal.get("decision")
+            self.transcripts.append(
+                tid, {"stage": "appeal", "model": self.escalation_model, **appeal},
+            )
+
         divergences = clusterer.divergences + [
             Disagreement(topic=c.claim, factions=[c.target_faction], summary=c.claim)
             for c in debate.objections
@@ -184,6 +222,9 @@ class ZhodaEngine:
             cost=cost,
             divergences=divergences,
         )
+        if appeal_decision:
+            verdict.decision = appeal_decision
+        verdict.escalated_to = escalated_to
         # second render + explainability + ROI metric (values №1–№3)
         verdict.plan_contract = await render_plan_contract(
             self.provider, self.chairman, verdict, debate.objections, factions,

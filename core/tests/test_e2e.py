@@ -1,8 +1,8 @@
 """End-to-end tests on a SCRIPTED provider (consumable script, deterministic
 via alias_seed, transcripts in tmp_path).
 
-Claims carry evidence_url (values №1); every verdict renders a plan contract
-(values №2) and counts dead ends prevented (values №3).
+Round-9: red_team attacks a unanimous platform; deadlock escalates to the
+appellate model.
 """
 
 import json
@@ -129,8 +129,8 @@ async def test_debate_loop_with_platform_revision(tmp_path) -> None:
     assert verdict.minority_report and "Kafka" in verdict.minority_report
     assert verdict.switches == []
     assert verdict.plan_contract is not None
-    assert verdict.dead_ends_prevented >= 1  # the Kafka minority path
-    assert verdict.decision_tree["children"]  # the explainability tree
+    assert verdict.dead_ends_prevented >= 1
+    assert verdict.decision_tree["children"]
     assert verdict.cost.breakdown
 
 
@@ -236,7 +236,93 @@ async def test_deadlock_on_rounds_cap(tmp_path) -> None:
     assert verdict.zhoda_reached is False
     assert verdict.consensus_strength == ConsensusStrength.DEADLOCK
     assert verdict.minority_report
-    assert verdict.dead_ends_prevented >= 1  # deadlock still prevents dead ends
+    assert verdict.dead_ends_prevented >= 1
+
+
+@pytest.mark.asyncio
+async def test_deadlock_escalates_to_appeal(tmp_path) -> None:
+    """Round-9 §4: deadlock + escalation enabled -> the appellate judge decides."""
+    aliases = make_aliases(COUNCIL, seed=42)
+    critique_pg = {
+        "target_faction": "Pragmatists", "flaw_type": "scope",
+        "claim": "PostgreSQL at 50k RPS writes needs a partitioning plan",
+        "specifics": "no write-scaling story beyond a single node",
+        "evidence_url": None}
+    critique_kf = {
+        "target_faction": "Throughputists", "flaw_type": "factual",
+        "claim": "Kafka adds operational complexity the team cannot staff",
+        "specifics": "", "evidence_url": None}
+    round_script = [
+        (None, ("You represent faction \"Pragmatists\"", "Produce ONE"), critique_kf),
+        (None, ("You represent faction \"Throughputists\"", "Produce ONE"), critique_pg),
+        (None, ("devil's advocate",), critique_pg),
+        (None, ("Rebut it concisely", "operational complexity"), "Accepted."),
+        (None, ("Rebut it concisely", "partitioning"), "Solved."),
+        (None, ("Did the rebuttal", "operational complexity"), {"closed": True}),
+        (None, ("Did the rebuttal", "operational complexity"), {"closed": True}),
+        (None, ("Did the rebuttal", "partitioning"), {"closed": False}),
+        (None, ("Did the rebuttal", "partitioning"), {"closed": False}),
+        (None, ("Did the rebuttal", "partitioning"), {"closed": False}),
+        (None, ("Did the rebuttal", "partitioning"), {"closed": False}),
+        ("m1", ("Revise your platform",), {
+            "thesis": PG, "answer": f"Answer: {PG}", "claims": [],
+            "falsifiability": "if load grows", "confidence": 0.7,
+            "changed": False, "change_note": "objection rejected"}),
+        ("m1", ("Do you switch factions?",), {"switch": False, "convinced_by": ""}),
+        ("m3", ("Do you switch factions?",), {"switch": False, "convinced_by": ""}),
+        (None, ("theses of all factions",), {"all_agree": False}),
+        (None, ("theses of all factions",), {"all_agree": False}),
+    ]
+    script = opening_script(aliases) + round_script + round_script + [
+        ("j3", ("appellate judge",), {
+            "decision": "Use PostgreSQL with a partitioning plan — appeal",
+            "winning_arguments": ["operational simplicity"]}),
+        (None, ("PLAN CONTRACT",), PLAN),
+    ]
+    engine = make_engine(
+        ScriptedProvider(script), tmp_path,
+        stability_rounds=2, rounds_cap=2, escalation_model="j3",
+    )
+    verdict = await engine.deliberate(
+        "PostgreSQL or Kafka for a 50k RPS ledger?",
+        force_protocol=Protocol.DEBATE, clarify_mode="no-clarify",
+    )
+    assert verdict.consensus_strength == ConsensusStrength.DEADLOCK
+    assert verdict.escalated_to == "j3"
+    assert "appeal" in verdict.decision  # the appellate decision, not the stalemate
+
+
+@pytest.mark.asyncio
+async def test_red_team_attacks_unanimous_platform(tmp_path) -> None:
+    """Round-9 §1: one faction (everyone said 'fine') -> the devil's advocate
+    still attacks. The transcript must contain the critique."""
+    aliases = make_aliases(COUNCIL, seed=42)
+    a1 = aliases["m1"]
+    script = [
+        ("m1", ("independent structured stance",), position(PG)),
+        ("m2", ("independent structured stance",), position(PG)),
+        ("m3", ("independent structured stance",), position(PG)),
+        (None, ("Synthesize the shared platform",), position(PG)),
+        (None, ("Name each faction",), {}),
+        (None, ("devil's advocate",), {
+            "target_faction": a1, "flaw_type": "logical",
+            "claim": "the platform never considers write amplification on SSDs",
+            "specifics": "", "evidence_url": None}),
+        (None, ("Rebut it concisely",), "Covered by the storage engine."),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("PLAN CONTRACT",), PLAN),
+    ]
+    engine = make_engine(ScriptedProvider(script), tmp_path)
+    verdict = await engine.deliberate(
+        "Is this storage layer fine?",
+        force_protocol=Protocol.RED_TEAM, clarify_mode="no-clarify",
+    )
+    assert verdict.zhoda_reached is True
+    assert verdict.rounds_taken == 1
+    events = engine.transcripts.read(verdict.transcript_id)
+    rounds = [e for e in events if e.get("stage") == "round"]
+    assert rounds and rounds[0]["critiques"]  # the advocate fired at unanimity
 
 
 @pytest.mark.asyncio

@@ -4,11 +4,10 @@ council:
   - google/gemma-3-27b:free
   - qwen/qwen3-32b:free
   - meta-llama/llama-4-scout:free
-chairman: google/gemini-3-pro        # names factions, appeals (paid, optional)
+chairman: google/gemini-3-pro        # names factions, renders the plan contract
 
-# Two DISTINCT judges, REQUIRED outside the council (round-7 §2):
+# Two DISTINCT judges, REQUIRED outside the council:
 # the engine refuses to start with fewer than two clean judges.
-# (example ids — pick any two models NOT listed in council)
 judges:
   - mistralai/mistral-small-3.1:free
   - microsoft/phi-4:free
@@ -21,15 +20,21 @@ router_classifiers:
 rounds_cap: 4
 stability_rounds: 2                  # consensus must persist 2 rounds
 ambiguity_threshold: 0.6             # TODO(calibrate): smart elicitation
-devils_advocate: true                # rotation excludes the leading faction
+devils_advocate: true                # attacks even a unanimous platform (red_team)
 max_concurrency: 4                   # parallel calls to OpenRouter
 transcripts_dir: transcripts
 # cache_path: .zhoda-cache.db        # optional persistent sqlite cache
 # prices:                            # USD per 1K output tokens (paid models)
 #   google/gemini-3-pro: 0.02
 
+# Objection caps (round-9 §2): bound the per-round cost of a stubborn debate
+max_new_per_round: 3                 # new critiques registered per round
+max_active: 6                        # open objections processed per round
+
+# Escalation (round-9 §4): on DEADLOCK the appellate model reads the outcome
+# and decides. Paid model -> needs budget_per_question_usd > 0.
 escalation:
-  enabled: false                     # true = paid appeal ladder (NOT IMPLEMENTED yet)
-  ladder: [free, mid, frontier]
+  enabled: false
+  model: google/gemini-3-pro         # the appellate judge
 
 budget_per_question_usd: 0.0         # hard cap PER QUESTION; 0 = free only
