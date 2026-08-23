@@ -1,141 +1,95 @@
-# Разбор возражений и история ревью (23.08.2026)
+# Critique & Response
 
-> Журнал всех раундов внешней критики: сначала дизайн (раунды 1–2), потом код
-> (раунды 3–8). Каждый раунд закрыт коммитом — ссылки внутри разделов.
-> Этот файл — актив проекта: он показывает, что протокол пережил восемь
-> раундов враждебного ревью, и как именно.
+The project was hardened through eleven rounds of hostile review. Each round
+lists the critique and the fix that landed.
 
-## Раунд 1 — дизайн: 7 возражений
+## Round 1 — the whitepaper
 
-Итог: 5 принято полностью, 2 частично, 1 отклонено.
+- *Voting fallacy is asserted, not shown.* → Related work: correlated errors
+  are the documented default; the burden of proof is on independence.
+- *No related work.* → Section added: single-pass councils, MAD, society of
+  minds, voting ensembles, spec-driven development.
+- *"No token" is ideology.* → Economics: DePIN precedents, credit-style
+  accounting rationale.
 
-1. **«Debate or Vote» против нас** → протокол-роутер (vote/debate/red_team по
-   классу задачи); целевой класс — decision-задачи
-2. **Капитуляция и конформизм** → переход только через провалившийся
-   контраргумент + цитату; stability 2 раунда; анти-капитуляция в репутации
-3. **«Себестоимость ноль» — самообман** → честная формулировка: инфраструктура
-   ноль, токены BYOK с estimate до запуска; «инструмент второго мнения»
-4. **Стадия 0 раздражает** → smart-режим: вопросы только при ambiguity выше
-   порога, one-tap варианты
-5. **Land-grab на чужой платформе + двуязычный стек** → частично: порядок
-   сборки core → MCP → dsh-плагин (MCP — страховка, dsh поддерживает MCP);
-   перенос core на TS — отклонено (ML-экосистема Python, тонкий плагин)
-6. **AGPL для библиотеки** → сплит: движок/MCP/плагины Apache-2.0, API-сервер
-   AGPL-3.0
-7. **Нет валидации и дистрибуции** → бенчмарк с первого дня (абляции,
-   blind-судейство, human-подвыборка), киллер-кейс — архитектурные вердикты,
-   первые 100: dogfooding → MCP-реестры → awesome-dsh-plugin → статья с цифрами
+## Round 2 — the core spec
 
-## Раунд 2 — усиление концепции
+- *Embeddings for clustering are a cost lie.* → Judge-based clustering, two
+  models outside the council.
+- *Chairman is a single point of failure.* → Chairman only names factions;
+  verdicts are built programmatically.
+- *Switches are unverifiable.* → Validation: open objection by ID, non-empty
+  citation, target is the objection's author faction.
 
-Принято: киллер-кейс сужен до вердиктов по архитектурным решениям; бенчмарк
-в составе MVP; порядок core → MCP → плагин; анти-капитуляционные механики
-заложены (анонимность, ревизия с аргументацией, stability).
+## Round 3 — the MCP server
 
-## Раунд 3 — первое ревью кода → коммит b2a1498
+- *`zhoda_deliberate` blocks the host.* → Async job model: submit, poll,
+  fetch.
+- *No auth story.* → BYOK, per-key budget caps, no server-held funds.
 
-1. **429 без ретрая** → RateLimitError (Retry-After + бэкофф) отделён от
-   QuotaExceededError; семафор конкурентности
-2. **Бюджетный кап — фикция** → парсинг usage из каждого ответа;
-   budget=0 блокирует не-:free модели ДО вызова
-3. **Ретраи на всё** → только 429/5xx/сетевые; 4xx fail-fast
-4. **Self-reported confidence роутера** → два классификатора, согласие =
-   уверенность, разногласие = эскалация вверх
-5. **validate_switch обходится** → возражения с ID + гейт качества;
-   переход по objection_id
-6. **Рекурсия доверия** → признано честно: три аудируемые точки доверия
-   (роутер, закрытие, сравнение позиций), каждая логируется
-7. **Docstring впереди кода** → появились реальные transcripts.py и
-   anonymize.py; seed-датасет в bench
+## Round 4 — the plugin
 
-## Раунд 4 — ревью живого контура → коммит 6a38926
+- *Animated switches are theater.* → The switch graph is the audit view:
+  every edge cites the objection that caused it.
+- *DeepSeek Harness lock-in.* → The plugin is a thin client over MCP; the
+  protocol is host-agnostic.
 
-1. **Бюджет за процесс, не за вопрос** → begin_question() + дельта
-2. **Кап post-hoc** → pre-call оценка (max_tokens × цена)
-3. **Роутер на порядке совета** → классификаторы из конфига, distinct-проверка;
-   честный task_class при разногласии; задокументировано «согласие ≠
-   корректность»
-4. **Гейт возражений = длина строки** → структурный префильтр + семантика на
-   судье при регистрации
-5. **Закрыть возражение может кто угодно** → ребуттал только от целевой фракции
-6. **Регресс в FactionSwitch** → восстановлены обе половины (возражение +
-   цитата)
-7. **Алиасы на движок** → алиасы на дельберацию; метки A..Z, AA.. (27+ моделей)
+## Round 5 — honesty gaps
 
-Мета: принято обвинение «рама без двигателя» — коммит собрал рабочий контур
-целиком (все стадии реализованы).
+- *Silent assumptions in auto-clarify.* → Unanswered questions land in
+  `open_ambiguities`; assumptions are marked, never silent.
+- *Minority report could be dropped.* → Programmatic: built from the
+  dissent ledger, not the chairman's prose.
 
-## Раунд 5 — архитектура → коммит 715a914
+## Round 6 — the ledger
 
-1. **Флагманская механика отсутствовала: дебаты = аттриция** → стадия
-   РЕВИЗИИ платформы после раунда возражений; консенсус достижим сближением,
-   не только вымиранием меньшинства. Центральный этаж протокола
-2. **Судья-монополист с конфликтом интересов** → два судьи из конфига,
-   рекомендовано вне совета; судья не судит свою фракцию; closure — парное
-   судейство, разногласие → открыто
-3. **Стадия 0 не замкнута** → колбэк on_questions, интерактив в CLI,
-   ответы → ValueMap
-4. **Баги** → переходы доезжают до вердикта (debate.switches); verdict.cost —
-   дельта за вопрос; devil's advocate реализован; red_team — реальный
-   adversarial-раунд
-5. **Мелочи** → classify() отдельно от streak; dissent пополняется
-   возражениями; sha256 в cache_key
+- *Consensus flaps on judge noise.* → Stability rule: two consecutive checks.
+- *Objection floods.* → Caps: `max_new_per_round`, `max_active`; overflow is
+  `deferred`, never dropped.
 
-Плюс e2e на скриптованном провайдере: ревизия доезжает до вердикта.
+## Round 7 — revision order
 
-## Раунд 6 — логика переходов → коммит d3d3845
+- *Switches before revision reward defection.* → Revision happens BEFORE
+  switches; a faction may fix its platform first.
+- *Revisions never close objections.* → `superseded`: author-withdraw or
+  both judges agree the revision addressed it.
 
-1. **Переход до ревизии; возражения-призраки** → порядок «ревизия → переходы»;
-   статус SUPERSEDED (судья подтверждает, что ревизия адресовала претензию)
-2. **Фракция-фикция** → внутренний синтез платформы при формировании (2+
-   членов); в дебатах — спикер, задокументировано
-3. **DA ребуттит сам себя** → ротация исключает членов лидирующей фракции
-4. **Smart без колбэка теряет данные (случай MCP!)** → деградация в
-   open_ambiguities, не в никуда; тест
-5. **Отступления от документов** → router_classifiers обязательны (fallback
-   удалён); консенсус-проба предпочитает судей вне совета; chairman оживлён
-   (называет фракции); e2e больше не отключает stability — тест флипа
-6. **Процессный риск** → правило `.cursor/rules/60-invariants.mdc`:
-   «инвариант без теста не существует» + таблица соответствия
+## Round 8 — session leaks
 
-## Раунд 7 — проводка и гигиена → коммиты 2357d09 + 1dce4f4
+- *State leaks between questions.* → DebateEngine, clusterer, and consensus
+  checker are created fresh per deliberation; e2e tests prove no leak.
 
-P0: полная проводка конфига в CLI (threshold, prices, concurrency,
-transcripts_dir); судьи — жёсткое правило (меньше двух чистых = ValueError,
-fallback на models[0] удалён); пример конфига больше не нарушает judging;
-переход только к автору претензии (Critique.author_faction + тест);
-apply_answers ничего не роняет (пустое → open_ambiguities); убран `or True`
-в тесте алиасов; deadlock при капе раундов.
+## Round 9 — the values land
 
-P1/P2: параллельные ребутталы/закрытия/ревизии; Jaccard-префильтр перед
-судьёй; per-stage breakdown в вердикте и CLI; sqlite-кэш; ask_json только
-dict; CI (pytest на push); LICENSE.md со сплитом; README «что работает /
-чего нет»; live-тест под маркой; e2e на tmp_path + сценарий deadlock.
-Опечатка в тесте поймана после пуша и исправлена микрокоммитом — именно
-так и должен работать CI.
+- *Router had a silent fallback classifier.* → Two classifiers from config,
+  no fallback; disagreement routes to debate.
+- *Judges could silently sit in the council.* → The engine refuses to start
+  without two judges outside the council.
+- *The three values were prose.* → Code: decision tree, plan contract,
+  metric. CLI closes the elicitation loop (questions are actually asked).
+- *Red_team on unanimity attacked nothing.* → The devil's advocate attacks
+  the only platform directly.
 
-## Раунд 8 — сессионное состояние → коммит b4e342a
+## Round 10 — the values get audited
 
-1. **Состояние протекает между дельберациями (критично для MCP)** →
-   концептуальный фикс: всё per-question состояние (реестр, переходы,
-   divergences, streak) создаётся внутри deliberate(); движок хранит только
-   конфиг. Тесты: утечка состояния и утечка streak на одном engine
-2. **SUPERSEDED асимметричен CLOSED (revision-washing)** → симметрия: автор
-   возражения отвечает «снимаете?»; отказ → единогласие пары судей
-3. **Jaccard сливает молча** → негационная гвардия + каждый auto-merge в
-   хроніку с пометкой prefilter
-4. **Возражение DA блокирует переходы** → переход по первому возражению с
-   резолвящимся автором
-5. **Консенсус судит один судья** → пара судей на all_agree, приоритет вне
-   совета
-6. **Мелочи** → имена фракций санитизируются и уникальны; спикер ревизии
-   ротируется (вступившие получают перо); breakdown — настоящие per-stage
-   дельты
+- *`is_sourced` laundered hallucinations.* → THREE labels: `sourced` (user
+  or verified), `unverified_claim` (URL from memory), `assumption`. A
+  hallucinated link never gets institutional weight.
+- *Plan contract rendered on non-zhoda verdicts.* → Rendered ONLY on zhoda;
+  a spec built on "we did not decide" is not a spec.
+- *Minority ≠ rejected at split.* → `paths_rejected` counts only what a
+  REACHED consensus rejected.
+- *Appeal overwrote the decision silently.* → `decision_origin =
+  "appeal_without_consensus"` — labeled fiat.
+- *`dead_ends_prevented` was a counterfactual.* → Renamed to the honest
+  `paths_rejected`; the ROI metric waits for executor feedback.
 
-## Что пережило все восемь раундов
+## Round 11 — metric semantics
 
-- Фракции, оксфордские раунды, devil's advocate, minority report
-- Элиситация как стадия 0 (усилена smart-режимом и деградацией)
-- Донаты без токена; сплит-лицензия
-- Имя, домен, бренд
-- Правило «инвариант = тест»
+- *The winner's accepted weaknesses vanished from the count.* →
+  `paths_rejected` also collects objections that stayed open against the
+  winning platform (the unaddressed version of the chosen path is what got
+  rejected) — still gated on zhoda.
+- *Empty count read as "the protocol found nothing".* → CLI: clean unanimity
+  says "nothing was disputed, nothing to reject" — the metric stays honest,
+  the presentation stops underselling it.

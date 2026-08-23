@@ -1,275 +1,133 @@
-# Слой 1: zhoda-core — движок дельберации
+# Zhoda Core
 
-> Python / FastAPI. Независимое ядро: не знает ни про dsh, ни про MCP.
-> Вход — вопрос пользователя, выход — вердикт + minority report + хроніка.
-> Статус: рабочий MVP-цикл реализован и покрыт тестами (§10).
-> Синхронизировано с кодом по раунд 8 (коммит b4e342a).
+The Python engine. Mirrors `core/src/zhoda_core/` — schema changes land in
+models.py and this file in the same commit (Cursor rule 10-python-core).
 
-## 1. Пайплайн одного вопроса (актуальный)
+## Principles
 
-```
-вопрос пользователя
-      │
-      ▼
-┌─────────────┐   ДВЕ модели-классификатора из ОБЯЗАТЕЛЬНОГО конфига;
-│ СТАДИЯ -1   │   согласие = уверенность, разногласие = эскалация
-│ Роутер      │   вверх (дебаты); ручной override --protocol
-└─────────────┘
-      │ (для debate/red_team)
-      ▼
-┌─────────────┐   неясности от всего совета; score = доля поднявших
-│ СТАДИЯ 0    │   (межмодельная); вопросы только при score ≥ порога,
-│ Элиситация  │   top-3, one-tap; без ответов → open_ambiguities
-└─────────────┘
-      │
-      ▼
-┌─────────────┐   N независимых JSON-stance, анонимно
-│ СТАДИЯ 1    │   (алиасы генерируются на КАЖДУЮ дельберацию)
-│ Позиции     │
-└─────────────┘
-      │
-      ▼
-┌─────────────┐   префильтр Jaccard с негационной гвардией (каждый
-│ СТАДИЯ 2    │   auto-merge пишется в хроніку!); попарный судья на
-│ Фракции     │   кандидатах; union-find; кластер 2+ СИНТЕЗИРУЕТ
-│             │   платформу из всех членов; председатель даёт
-│             │   санитизированные УНИКАЛЬНЫЕ имена
-└─────────────┘
-      │
-      ▼
-┌─────────────┐   критика → адвокат (вне лидера) → ребутталы
-│ СТАДИЯ 3    │   (параллельно) → закрытия (пара судей) → РЕВИЗИЯ
-│ Дебаты      │   платформы (спикер ротируется) → SUPERSEDED
-│             │   (автор снимает ИЛИ пара судей единогласно)
-│             │   → переходы (к автору претензии)
-└─────────────┘
-      │
-      ▼
-┌─────────────┐   пара судей на all_agree; stability 2 раунда;
-│ СТАДИЯ 4    │   кап раундов при расколе = DEADLOCK
-│ Згода       │
-└─────────────┘
-      │
-      ▼
-┌─────────────┐   вердикт большинства + minority report + dissent map
-│ СТАДИЯ 5    │   + переходы + per-stage breakdown; хроніка пишется
-│ Вердикт     │   ДО возврата вердикта
-└─────────────┘
-```
+1. **Understand before solving** — no answer before the goal is explicit.
+2. **Argue in factions** — deliberation between groups, not isolated reviewers.
+3. **Zhoda or honest dissent** — consensus or a structured disagreement map.
+4. **Auditability** — every verdict is reproducible from its transcript.
+5. **Cost honesty** — free models first, explicit budget caps, no hidden spend.
 
-**Сессионное состояние (раунд 8, §1):** всё per-question состояние — реестр
-возражений, переходы, divergences, streak консенсуса — создаётся ВНУТРИ
-`deliberate()`. Движок хранит только конфиг. Невидимо в CLI, критично для
-MCP: один engine обслуживает много вопросов, и второй вопрос не наследует
-ничего от первого (покрыто тестами утечек).
+## Protocols
 
-## 1.5. Стадия -1 — протокол-роутер
-
-Дебаты — не универсальное улучшение: для простых фактических задач голосование
-(self-consistency) дешевле при том же качестве. Классификатор выбирает
-протокол:
-
-| Класс задачи | Протокол | Почему |
+| Protocol | When | Rounds |
 |---|---|---|
-| `factual_lookup` | `vote` (N ответов + majority) | Дёшево, дебаты не добавляют |
-| `reasoning` | `debate` | Раунды критики поднимают точность |
-| `decision` | `debate` + элиситация | Ответ зависит от недосказанных ценностей |
-| `code_review` | `red_team` | Адversarial-поиск дыр |
-| `creative` | `vote` + председатель | Консенсус не нужен |
+| `vote` | factual_lookup, creative | 0 |
+| `debate` | decision, reasoning | up to `rounds_cap` (default 4) |
+| `red_team` | code_review | 1 |
 
-Целевой класс Zhoda — `decision`: архитектурные вердикты, выбор технологий,
-ревью планов.
+## Router
 
-**Уверенность роутера — межмодельная, не самооценка** (раунд 3, §4): задачу
-классифицируют ДВЕ разные модели из обязательного конфига
-(`router_classifiers`; fallback на порядок совета удалён в раунде 6).
-Согласие = confidence 1.0, разногласие = эскалация вверх (дебаты), task_class
-честно берётся из более thorough класса. Ограничение (раунд 4, §3): согласие
-двух классификаторов ≠ корректность — модели одного семейства ошибаются
-согласованно; fail-safe ловит разногласие, но не общий bias.
+Two cheap classifiers **from config** (`router_classifiers`), never a silent
+fallback (round-9 §1). Disagreement or confidence < 0.6 → `debate`. A forced
+protocol reports confidence 1.0.
 
-## 2. Стадия 0 — элиситация (smart по умолчанию)
+## Stage 0 — Elicitation
 
-1. Все модели совета получают сырой запрос и возвращают **не ответ**, а список
-   неясностей: `{ambiguity, why_it_matters, candidate_question, options[]}`
-2. Ambiguity-score — межмодельный: доля моделей, независимо поднявших
-   неясности. Вопросы — ТОЛЬКО если score ≥ порога (default 0.6,
-   TODO-calibrate), максимум 3, с вариантами ответов (one-tap)
-3. Ответы пользователя (колбэк `on_questions` в CLI): отвеченное →
-   `constraints`, неотвеченное → `open_ambiguities` — ничего не теряется
-   (раунд 7, §4)
-4. Без колбэка (случай MCP!) — деградация: поднятые вопросы уходят в
-   `open_ambiguities`, а не исчезают (раунд 6, §4; тест
-   `test_smart_mode_without_callback_degrades`)
-5. Режимы: `smart` (дефолт), `--no-clarify`, `--auto-clarify`
+Each council model returns ambiguities; an aggregator keeps the 2–4 with the
+highest decision impact. Modes: `smart` (ask the user), `no-clarify`,
+`auto-clarify` (marked assumptions). Unanswered questions land in
+`value_map.open_ambiguities` — honestly, never silently assumed (round-5 §2).
+
+## Stage 1 — Positions
 
 ```python
-class ValueMap(BaseModel):
-    goal: str
-    success_criteria: list[str]
-    constraints: list[str]       # включая Q&A пользователя
-    anti_goals: list[str]
-    assumptions: list[str]       # допущения, принятые без вопросов
-    open_ambiguities: list[str]  # поднятые, но неотвеченные
+Claim { claim, evidence_url?, confidence, verified }
+# label: "sourced" (verified or user-provided) |
+#        "unverified_claim" (URL named from memory) | "assumption" (no URL)
+# round-10 §1: a hallucinated link never gets institutional weight
+Position { model, thesis, answer, claims[], falsifiability, confidence }
 ```
 
-## 3. Стадии 1–2 — позиции и фракции
+Positions are anonymized from the start (`model` holds the alias).
+
+## Stage 2 — Factions
+
+Exact-normalized-thesis prefilter (free, logged as `prefilter_merges`), then
+two judges outside the council decide `same` per pair; disagreements are
+recorded in the divergence ledger. The chairman names factions — sanitized,
+unique names.
+
+## Stage 3 — Debate rounds
+
+Order per round: critiques → devil's advocate → rebuttals → closures →
+**revision** → switches (round-7 §2: a faction may fix its platform BEFORE
+anyone is asked to defect).
+
+- **Objection ledger**: `open | closed | superseded`. Caps:
+  `max_new_per_round` (3) and `max_active` (6); overflow is marked
+  `deferred`, never dropped (round-6 §2).
+- **Devil's advocate**: attacks the leading faction; on unanimity
+  (red_team) attacks the only platform directly (round-9 §4).
+- **Closure**: both judges (outside the council, no silent fallback —
+  round-9 §2) must agree the rebuttal addressed the objection.
+- **Superseded**: the author withdraws, or both judges agree the revision
+  addressed the objection (round-7 §1).
+- **Switches**: open objection by ID + non-empty citation + the target IS
+  the objection's author faction.
+
+## Stage 4 — Consensus
+
+Stability rule: two consecutive judge checks must agree before zhoda is
+declared (round-6 §1). `split` at the rounds cap becomes `deadlock`.
+Escalation is opt-in and fires on deadlock only; the appellate decision
+overwrites `decision` but carries `decision_origin =
+"appeal_without_consensus"` — a single model's fiat is labeled, never
+mistaken for zhoda (round-10 §2).
+
+## Stage 5 — Verdict
 
 ```python
-class Position(BaseModel):
-    model: str                   # АНОНИМНЫЙ алиас во время дебатов
-    thesis: str
-    answer: str
-    arguments: list[str]
-    falsifiability: str
-    confidence: float
+Verdict {
+  decision, zhoda_reached, consensus_strength, protocol,
+  decision_origin,        # "council" | "appeal_without_consensus"
+  router_confidence, value_map,
+  minority_report,        # preserved dissent — never erased
+  dissent_map[], switches[], rounds_taken, cost, transcript_id,
+  plan_contract?,         # rendered ONLY on zhoda (round-10 §2)
+  paths_rejected[],       # honest programmatic count (rounds 10-11)
+  decision_tree, escalated_to?,
+}
 ```
 
-Формирование фракций (снизу, не назначение ролей):
+### The three values (rounds 9–11)
 
-1. **Префильтр** (раунд 7, §11): Jaccard по токенам ≥ 0.9 → слияние без судьи.
-   Раунд 8, §3: негационная гвардия («use X» vs «don't use X» → судья),
-   и каждый auto-merge пишется в хроніку с пометкой `prefilter` — не
-   выглядит как судейское решение
-2. **Попарный судья** на кандидатах: «одна позиция? если нет — в чём
-   расхождение»; расхождения сидят dissent_map; union-find
-3. **Синтез платформы** (раунд 6, §2): кластер 2+ моделей синтезирует
-   платформу из позиций ВСЕХ членов (один вызов спикера) — фракция
-   коллективный автор при формировании
-4. **Имена от председателя** — санитизированные и уникальные (раунд 8, §6):
-   дубликат или мусор → остаётся алиас; все lookup'ы в протоколе по имени
+1. **Decision tree** — the verdict as a tree: argument → what closed it →
+   who switched. Evidence labels are THREE states; a URL named from memory
+   is `unverified_claim`, visually closer to an assumption than to a source.
+2. **Plan contract** — a spec for a CHEAPER executor model: steps with
+   goals, hard constraints, forbidden paths, acceptance criteria. Rendered
+   only when zhoda was reached — a plan built on "we did not decide" would
+   hand the executor a spec founded on dissent. `rejected_paths` and
+   `open_ambiguities` are overwritten programmatically: the model writes
+   prose, the protocol owns the facts.
+3. **`paths_rejected`** — an honest count of what a REACHED consensus
+   rejected: minority positions that lost the vote, plus objections that
+   stayed open against the winner (accepted weaknesses — the unaddressed
+   version of the chosen path is what got rejected). At split/deadlock:
+   empty — an unresolved dispute is not a rejection. The counterfactual
+   "dead ends prevented" ROI metric waits for executor feedback: we don't
+   promise unmeasured numbers.
 
-## 4. Стадия 3 — дебаты (оксфордский формат, анти-капитуляция)
+## Cost honesty
 
-Порядок раунда (раунд 6, §1 — ревизия ДО переходов):
+Per-question budget cap, config price table, semantic cache
+(`cache_hits` counted), per-stage request breakdown in every verdict.
 
-1. Каждая фракция критикует сильнейшую ДРУГУЮ (спикер ротируется по членам)
-2. Devil's advocate: детерминированная ротация, ИСКЛЮЧАЯ членов лидирующей
-   фракции, пока есть кандидаты снаружи (раунд 6, §3)
-3. Ребутталы целевых фракций — параллельно (раунд 7, §11)
-4. Закрытие возражений: пара бесконфликтных судей, единогласие; разногласие
-   → остаётся открытым (безопасная сторона)
-5. **Ревизия платформы** (флагманская стадия, раунд 5, §1): фракция с
-   открытыми возражениями переписывает платформу или отказывается с
-   мотивировкой; спикер ротируется по членам — вступившие через переход
-   получают перо (раунд 8, §6)
-6. **SUPERSEDED, симметрично CLOSED** (раунд 8, §2): фракция-автор
-   возражения отвечает «снимаете претензию?»; отказ → пара судей должна
-   единогласно подтвердить addressed. Revision-washing дороже честного
-   закрытия
-7. Переходы — против ОБНОВЛЁННОЙ платформы, по первому открытому возражению
-   с резолвящимся автором (раунд 8, §4), ТОЛЬКО к фракции-автору претензии
-   (раунд 7, §3)
+## Session state
 
-```python
-class Critique(BaseModel):
-    id: str                      # присваивает движок
-    author_faction: str          # присваивает движок — переходы указывают на неё
-    target_faction: str
-    flaw_type: Literal["factual", "logical", "scope", "values_mismatch"]
-    claim: str                   # factual/logical: конкретный claim
-    specifics: str               # scope/values: обязательные specifics
-    rebuttal: str
-    status: Literal["open", "closed", "superseded"]
+`DebateEngine`, `FactionClusterer`, `ConsensusChecker` are created fresh per
+question (round-8 §1) — no objections, divergences, or judge streaks leak
+between deliberations.
 
-class FactionSwitch(BaseModel):
-    model: str
-    from_faction: str
-    to_faction: str              # == author_faction возражения
-    convinced_by: str            # непустая цитата
-    objection_id: str            # открытая претензия
-```
+## Config (zhoda.yaml)
 
-Гейт качества при регистрации: factual/logical — конкретный claim;
-scope/values — обязательные specifics (структурный префильтр; семантика —
-на судьях, раунд 4, §4).
-
-## 5. Стадия 4 — згода и остановка
-
-- Схождение по тезисам через ПАРУ судей (раунд 8, §5): `all_agree` только
-  при единогласии; приоритет судьям вне совета; разногласие → не unanimous
-- **Stability-правило**: згода после 2 раундов согласия подряд (тест
-  флипа: согласие → флип → згоды нет)
-- Кап раундов (default 4) при расколе → **DEADLOCK**, не маскируется под
-  split (раунд 7, §8; тест `test_deadlock_on_rounds_cap`)
-- Эскалация по лестнице моделей — флаг в конфиге, НЕ реализована в v0.1
-  (честно помечено)
-
-## 6. Стадия 5 — вердикт
-
-```python
-class Verdict(BaseModel):
-    decision: str
-    zhoda_reached: bool
-    consensus_strength: Literal["unanimous", "majority", "split", "deadlock"]
-    protocol: Literal["vote", "debate", "red_team"]
-    router_confidence: float     # согласие двух классификаторов
-    value_map: ValueMap          # constraints + assumptions + open_ambiguities
-    minority_report: str | None  # никогда не стирается
-    dissent_map: list[Disagreement]   # divergences + открытые возражения
-    switches: list[FactionSwitch]
-    rounds_taken: int
-    cost: CostReport             # per-question дельта + breakdown по стадиям
-    transcript_id: str           # хроніка пишется ДО возврата
-```
-
-## 7. Репутация (planned, post-MVP)
-
-Не реализована в v0.1. Дизайн: ELO по доменам из исходов дебатов; анти-
-капитуляция (переход к ошибочной позиции штрафует сильнее). Честно (раунд 3,
-§4): до слоя отложенной верификации (opt-in «вердикт сработал?») репутация
-измеряет риторическую устойчивость, не истинность.
-
-## 7.5. Точки доверия (честность протокола)
-
-Zhoda не устраняет доверие к моделям — она концентрирует его в аудируемых
-точках, каждая — отдельный логируемый вызов в хроніце:
-
-1. Классификация роутера (две модели, согласие логируется)
-2. Закрытие возражений (пара судей)
-3. Попарное сравнение позиций (судья, бесконфликтный)
-4. Supersede-решения (автор + пара судей)
-5. Вердикт консенсуса (пара судей)
-
-## 8. Технические решения
-
-- **Стек:** Python 3.12+, FastAPI, async httpx, Pydantic v2, uv
-- **Параллелизм:** `asyncio.gather(return_exceptions=True)`; ребутталы,
-  закрытия и ревизии параллельны (раунд 7, §11)
-- **Провайдер:** семафор конкурентности, Retry-After + бэкофф на 429,
-  различение rate limit / quota, парсинг usage, fail-fast на 4xx,
-  per-question бюджет (begin_question + дельта) с pre-call оценкой,
-  опциональный sqlite-кэш, ключи sha256
-- **Хранение хронік:** JSONL через TranscriptStore
-- **Анонимизация:** алиасы на КАЖДУЮ дельберацию, метки A..Z, AA..
-- **Конфиг (zhoda.yaml):** council, chairman, judges (≥2 ВНЕ совета — жёсткая
-  ошибка иначе), router_classifiers (обязательны), rounds_cap,
-  stability_rounds, ambiguity_threshold, devils_advocate, max_concurrency,
-  transcripts_dir, cache_path, prices, budget_per_question_usd
-
-## 9. API ядра (черновик, не реализовано в v0.1)
-
-```
-POST /v1/clarify          → вопросы к пользователю | ValueMap (smart)
-POST /v1/deliberate       → полный цикл → Verdict (SSE-стрим стадий)
-GET  /v1/transcript/{id}  → полная хроніка дебатов
-GET  /v1/reputation       → рейтинг моделей по доменам (post-MVP)
-GET  /v1/health
-```
-
-## 10. Статус и задачи
-
-Реализовано и покрыто тестами (16 тестов: провайдер, гейты реестра, e2e):
-
-- [x] Роутер (две модели), элиситация (smart + деградация), позиции,
-  фракции (префильтр + судья + синтез + имена), дебаты (полный раунд с
-  ревизией и supersede), консенсус (пара + stability + deadlock), вердикт
-  (breakdown), CLI, хроніка, анонимизация, провайдер со всеми гейтами
-- [x] e2e: ревизия / флип / deadlock / smart-деградация / утечка состояния /
-  утечка streak
-- [x] CI (pytest на push), LICENSE.md (сплит), live-тест под маркой
-- [ ] **Первый живой прогон** на бесплатных моделях + починка вскрывшегося
-- [ ] Бенчмарк: 50–100 decision-задач, руки single / council / Zhoda /
-  абляции; blind-судейство, human-подвыборка 20–30
-- [ ] Эскалация по лестнице (deadlock → mid → frontier)
-- [ ] FastAPI-сервер (§9), MCP-сервер, dsh-плагин — после зелёного live
+`council`, `judges` (≥2 outside the council — the engine refuses to start
+otherwise), `router_classifiers` (two distinct), `chairman`, `rounds_cap`,
+`stability_rounds`, `devils_advocate`, `ambiguity_threshold`,
+`max_new_per_round`, `max_active`, `escalation.{enabled,model}`,
+`budget_per_question_usd`, `max_concurrency`, `prices`, `cache_path`,
+`transcripts_dir`.
