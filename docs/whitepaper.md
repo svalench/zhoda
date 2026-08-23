@@ -1,9 +1,15 @@
 # Zhoda: An Open Protocol for Multi-LLM Deliberation
 
-**Whitepaper v0.1 — August 2026**
+**Whitepaper v0.2 — August 2026**
 Alexander Valenchits · [github.com/svalench/zhoda](https://github.com/svalench/zhoda) · zhoda.dev
 
 > *Models argue until they reach zhoda.*
+
+Changelog v0.2: added the closest neighbor (Yes-Brainer) and the 2026
+debate-critical analyses to Related Work; narrowed the novelty claim
+accordingly. Iterative debate exists — what remains unclaimed is an
+anti-capitulation protocol with an auditable trust surface, shipped as
+agent infrastructure.
 
 ## Abstract
 
@@ -188,6 +194,15 @@ emerges around Zhoda, it will start with credit-style accounting
 
 - **llm-council** (Karpathy, 2025) — single-pass council: answer, rank,
   synthesize. No revision, no factions.
+- **Yes-Brainer** (Trekhleb, July 2026) — the closest neighbor, and proof the
+  UX demand is real: a browser-only BYOK council with three modes — parallel
+  answers, anonymized peer vote + judge, and a multi-round consensus debate
+  with reshuffled aliases and a mediator that either converges or honestly
+  reports what stayed contested. It ships a live demo today. It is a
+  human-facing web app without a backend: no factions, no objection lifecycle,
+  no anti-capitulation mechanics (participants re-answer freely each round,
+  but nothing tracks *why* a position moved), no conflict-of-interest handling
+  for its judge/mediator, no elicitation stage, and no agent-harness surface.
 - **Multi-agent debate** (Du et al., 2023) — iterative convergence; Zhoda adds
   elicitation, factions, structured critique, and dissent preservation.
 - **Mixture-of-Agents** (Together, 2024) — layered synthesis without
@@ -197,9 +212,19 @@ emerges around Zhoda, it will start with credit-style accounting
   Zhoda routes the protocol per task class.
 - **MARE / requirements-elicitation agents** — academic elicitation; Zhoda
   productizes it as Stage 0 for any question.
+- **The Consistency Illusion** (2026) and **Emergence of Biased Consensus**
+  (2026) — recent analyses caution that standard multi-agent debate may not
+  improve answer accuracy on its own and can amplify shared bias into
+  confident consensus. Zhoda's answer is structural, not assumed:
+  anti-capitulation mechanics, conflict-free judging — and a benchmark from
+  day one (§8), because gains must be measured, not declared.
 
-None combine clarification-first, factional debate, honest dissent, and
-reputation. That combination is Zhoda.
+The honest positioning as of August 2026: iterative multi-model debate exists
+(Yes-Brainer, the MAD lineage). What remains unclaimed is an anti-capitulation
+debate protocol with an auditable trust surface — typed objections with a
+lifecycle, switches only through unclosed objections, platform revision,
+conflict-free judge pairs — exposed as agent infrastructure (MCP, harness
+plugins), not only as a human-facing app.
 
 ## 10. Roadmap
 
@@ -209,11 +234,15 @@ See `docs/master-plan.md`. Near term: core MVP (elicitation → factions →
 ## References
 
 1. Karpathy, A. `llm-council`. github.com/karpathy/llm-council (2025)
-2. Du, Y. et al. *Improving Factuality and Reasoning in Language Models through
+2. Trekhleb, O. `yesbrainer`. github.com/trekhleb/yesbrainer, yesbrainer.ai (2026)
+3. Du, Y. et al. *Improving Factuality and Reasoning in Language Models through
    Multiagent Debate* (2023)
-3. Together AI. *Mixture-of-Agents* (2024)
-4. Chan, C.-M. et al. *ChatEval: Towards Better LLM-based Evaluators through
+4. Together AI. *Mixture-of-Agents* (2024)
+5. Chan, C.-M. et al. *ChatEval: Towards Better LLM-based Evaluators through
    Multi-Agent Debate* (ICLR 2024)
-5. *Debate or Vote: Which Yields Better Decisions in Multi-Agent LLMs?*
+6. *Debate or Vote: Which Yields Better Decisions in Multi-Agent LLMs?*
    (NeurIPS 2025)
-6. OpenRouter API limits — openrouter.ai/docs
+7. *The Consistency Illusion: How Multi-Agent Debate Hides Reasoning
+   Misalignment* (2026); Okawa, M. *Emergence of Biased Consensus in
+   Multi-Agent LLM Debate* (2026)
+8. OpenRouter API limits — openrouter.ai/docs
