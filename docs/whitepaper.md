@@ -7,7 +7,8 @@ Alexander Valenchits · [github.com/svalench/zhoda](https://github.com/svalench/
 
 Changelog v0.2: added the closest neighbor (Yes-Brainer) and the 2026
 debate-critical analyses to Related Work; narrowed the novelty claim
-accordingly. Iterative debate exists — what remains unclaimed is an
+accordingly; replaced the naive cost estimate with honest per-stage
+arithmetic. Iterative debate exists — what remains unclaimed is an
 anti-capitulation protocol with an auditable trust surface, shipped as
 agent infrastructure.
 
@@ -167,10 +168,35 @@ Three layers, strict downward dependencies only:
 - **@zhoda/dsh-plugin** — DeepSeek Harness plugin: debate room, faction graph
   with animated switches, verdict panel.
 
-Cost model: a 5-model, 3-round deliberation costs ~21 requests. OpenRouter free
-tier allows 20 req/min and 50 req/day (1000/day after a one-time $10 credit
-purchase) — sufficient for daily personal use with BYOK and caching; the
-escalation ladder turns free models into the first instance, not the ceiling.
+### Cost model — honest arithmetic
+
+A naive estimate (2N+1 per stage) suggests ~21 requests for a 5-model,
+3-round deliberation. The real engine does more: pairwise faction formation,
+council-wide elicitation, two judges per closure, revisions, supersede checks.
+Honest formula:
+
+```
+requests ≈ router (2) + elicitation (N) + positions (N)
+         + faction formation (≤ N(N−1)/2 pairwise + synthesis + naming)
+         + per round: F critiques + 1 devil's advocate + R rebuttals
+           + 2 closure votes per open objection + revisions
+           + supersede checks + switch prompts + 2 consensus votes
+```
+
+For a 4-model council, 2 factions, 2 rounds: **typically 35–50 requests, up
+to ~60 worst case**. Free-tier reality (20 req/min, 50 req/day — 1000/day
+after a one-time $10 credit): that is 1–2 full deliberations per day at
+50/day, or 20–25 at 1000/day. Two consequences:
+
+1. **Zhoda is a second-opinion instrument for rare, expensive questions —
+   not a chat loop.** The protocol router exists precisely so simple
+   questions never pay debate prices (the vote path costs ≈ 2 + 2N + ≤N²/2).
+2. **Cost cutting is protocol-level, not cosmetic:** the cheap vote path,
+   stage caching (persistent sqlite), early stopping on stable consensus,
+   the pairwise prefilter, and escalation only on deadlock. On cheap paid
+   models the same 50 calls cost cents — the binding constraint is free-tier
+   rate limits, not dollars. Every verdict carries a per-stage request
+   breakdown so costs stay debuggable.
 
 ## 7. Economics
 
