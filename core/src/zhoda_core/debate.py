@@ -1,18 +1,10 @@
 """Stage 3: Oxford-style debate rounds.
 
-Order (round-6 §1): critiques -> devil's advocate -> rebuttals -> closures ->
-REVISION -> switches against the REVISED platforms.
-
-Round-8:
-- SUPERSEDED is symmetric to CLOSED (§2): after a revision, the objection's
-  AUTHOR faction is asked to withdraw (one counter-round); if it refuses,
-  the non-conflicted judge PAIR must unanimously confirm the objection is
-  addressed. No revision-washing: the accused can't free itself alone.
-- switches pick the first open objection with a RESOLVABLE author faction
-  (§4) — a devil's advocate objection no longer blocks a valid switch.
-- the revision speaker ROTATES among faction members per round (§6) — members
-  who joined via a switch get the pen; the faction is not 'member[0] + crowd'
-  in dynamics.
+Order: critiques -> devil's advocate -> rebuttals -> closures -> REVISION ->
+switches against the REVISED platforms. Supersede is symmetric with closure:
+the objection's AUTHOR may withdraw, else the judge pair must unanimously
+confirm 'addressed'. Factual objections should cite (evidence_url); rebuttals
+may cite back (rebuttal_evidence_url) — evidence discipline (values №1).
 """
 
 import asyncio
@@ -33,7 +25,9 @@ Strongest opposing faction \"{opponent}\": {opponent_thesis}
 Produce ONE concrete critique of the opposing position. ONLY valid JSON:
 {{"target_faction": "{opponent}", "flaw_type": "factual|logical|scope|values_mismatch",
   "claim": "the specific statement you dispute",
-  "specifics": "what exactly is missing (required for scope/values_mismatch)"}}"""
+  "specifics": "what exactly is missing (required for scope/values_mismatch)",
+  "evidence_url": "https://source if factual, else null"}}
+Never invent URLs — null is honest."""
 
 DEVILS_ADVOCATE_PROMPT = """You are the rotating devil's advocate. Attack the leading
 position regardless of your own stance. Leading faction \"{opponent}\": {opponent_thesis}
@@ -41,12 +35,14 @@ position regardless of your own stance. Leading faction \"{opponent}\": {opponen
 Produce ONE concrete critique. ONLY valid JSON:
 {{"target_faction": "{opponent}", "flaw_type": "factual|logical|scope|values_mismatch",
   "claim": "the specific statement you dispute",
-  "specifics": "what exactly is missing (required for scope/values_mismatch)"}}"""
+  "specifics": "what exactly is missing (required for scope/values_mismatch)",
+  "evidence_url": null}}"""
 
 REBUTTAL_PROMPT = """Your faction \"{name}\" platform thesis: {platform}
 An objection was raised ({flaw_type}): {claim} {specifics}
 
-Rebut it concisely. If you genuinely cannot, answer with CONCEDE."""
+Rebut it concisely. If you cite a source, end with: SOURCE: <url>.
+If you genuinely cannot, answer with CONCEDE."""
 
 CLOSURE_PROMPT = """Objection ({flaw_type}): {claim} {specifics}
 Rebuttal: {rebuttal}
@@ -68,7 +64,8 @@ Open objections that survived this round:
 
 Revise your platform to account for valid criticism — or keep it and justify
 why the objections fail. ONLY valid JSON:
-{{"thesis": "...", "answer": "...", "arguments": ["..."],
+{{"thesis": "...", "answer": "...",
+  "claims": [{{"claim": "...", "evidence_url": null, "confidence": 0.0}}],
   "falsifiability": "...", "confidence": 0.0,
   "changed": true, "change_note": "what changed and why (or why not)"}}"""
 
@@ -93,8 +90,7 @@ class Round(BaseModel):
 
 
 class DebateEngine:
-    """Per-question state (objections, switches) — created per deliberation
-    by the engine (round-8 §1), never shared across questions."""
+    """Per-question state (objections, switches) — created per deliberation."""
 
     def __init__(self, provider: OpenRouterProvider, devils_advocate: bool = True) -> None:
         self.provider = provider
@@ -161,7 +157,6 @@ class DebateEngine:
         ordered = sorted(factions, key=lambda f: len(f.members), reverse=True)
         leading = ordered[0]
 
-        # 1. critiques: every faction vs the strongest OTHER faction
         pairs = [(f, leading if f is not leading else ordered[1]) for f in ordered]
         raw: list[tuple[str, object]] = list(
             zip(
@@ -174,7 +169,6 @@ class DebateEngine:
             )
         )
 
-        # 2. devil's advocate — deterministic rotation, excludes the leading faction
         if self.devils_advocate and leading.platform is not None:
             candidates = sorted(a for a in speakers if a not in leading.members)
             candidates = candidates or sorted(speakers)
@@ -195,7 +189,6 @@ class DebateEngine:
             except (ValueError, TypeError):
                 continue
 
-        # 3. rebuttals (parallel) + closure votes (judge pair, parallel)
         open_items = [c for c in self.objections if c.status == ObjectionStatus.OPEN]
 
         async def rebut(critique: Critique) -> tuple[Critique, str] | None:
@@ -238,12 +231,10 @@ class DebateEngine:
             return_exceptions=True,
         )
 
-        # 4. PLATFORM REVISION (rotating speaker) — then symmetric supersede
         async def revise(faction: Faction) -> tuple[Faction, dict] | None:
             open_against = self._open_against(faction)
             if not open_against or not faction.members or faction.platform is None:
                 return None
-            # rotating speaker: members who joined via a switch get the pen (§6)
             speaker = speakers.get(faction.members[(number - 1) % len(faction.members)])
             if speaker is None:
                 return None
@@ -272,15 +263,13 @@ class DebateEngine:
                 model=faction.platform.model,
                 thesis=data["thesis"],
                 answer=data.get("answer", faction.platform.answer),
-                arguments=data.get("arguments", faction.platform.arguments),
+                claims=faction.platform.claims,
                 falsifiability=data.get("falsifiability", faction.platform.falsifiability),
                 confidence=float(data.get("confidence", faction.platform.confidence)),
             )
             round_.revisions.append({
                 "faction": faction.name, "change_note": data.get("change_note", ""),
             })
-            # supersede, symmetric with closure (§2): author may withdraw;
-            # otherwise the judge PAIR must unanimously confirm 'addressed'
             for critique in self._open_against(faction):
                 author = next(
                     (f for f in factions if f.name == critique.author_faction), None,
@@ -314,10 +303,9 @@ class DebateEngine:
                         votes
                         and all(isinstance(v, dict) and v.get("addressed") for v in votes)
                     ):
-                        continue  # stays open — no revision-washing
+                        continue
                 self.supersede_objection(critique.id)
 
-        # 5. switches — against REVISED platforms, first RESOLVABLE objection
         for faction in factions:
             open_against = self._open_against(faction)
             if not open_against or faction.platform is None:
@@ -332,7 +320,7 @@ class DebateEngine:
                     None,
                 )
                 if speaker is None or objection is None:
-                    continue  # e.g. only devil's advocate objections — nowhere to switch
+                    continue
                 target = next(
                     f for f in factions if f.name == objection.author_faction
                 )

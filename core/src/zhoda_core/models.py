@@ -29,13 +29,11 @@ class ConsensusStrength(StrEnum):
     UNANIMOUS = "unanimous"
     MAJORITY = "majority"
     SPLIT = "split"
-    DEADLOCK = "deadlock"  # rounds cap exhausted while split (round-7 §8)
+    DEADLOCK = "deadlock"
 
 
 class ValueMap(BaseModel):
-    """What the answer is checked against. `assumptions` are marked guesses
-    taken without asking; `open_ambiguities` are questions that were raised
-    but never answered (round-6 §4, round-7 §4)."""
+    """What the answer is checked against."""
 
     goal: str = ""
     success_criteria: list[str] = Field(default_factory=list)
@@ -45,14 +43,28 @@ class ValueMap(BaseModel):
     open_ambiguities: list[str] = Field(default_factory=list)
 
 
+class Claim(BaseModel):
+    """An argument with evidence discipline (values №1): without a source it
+    is an OPINION, and every render must label it as such — we never sell
+    the illusion of rigor."""
+
+    claim: str
+    evidence_url: str | None = None  # None -> rendered as "assumption"
+    confidence: float = 0.5
+
+    @property
+    def is_sourced(self) -> bool:
+        return self.evidence_url is not None
+
+
 class Position(BaseModel):
-    """A model's stance. `model` holds the ANONYMIZED alias during debate
-    (protocol invariant: critics never see real model names; see anonymize.py)."""
+    """A model's stance. `model` holds the ANONYMIZED alias during debate.
+    `claims` carry mandatory evidence fields (values №1)."""
 
     model: str
     thesis: str
     answer: str
-    arguments: list[str] = Field(default_factory=list)
+    claims: list[Claim] = Field(default_factory=list)
     falsifiability: str = ""
     confidence: float = 0.5
 
@@ -66,33 +78,33 @@ class FlawType(StrEnum):
 
 class ObjectionStatus(StrEnum):
     OPEN = "open"
-    CLOSED = "closed"          # rebutted to the judges' satisfaction
-    SUPERSEDED = "superseded"  # addressed by a platform revision
+    CLOSED = "closed"
+    SUPERSEDED = "superseded"
 
 
 class Critique(BaseModel):
-    """A concrete charge in the objection ledger. `author_faction` is assigned
-    by the engine at registration (round-7 §3): a switch may only move TOWARD
-    the faction that authored the convincing objection."""
+    """A concrete charge in the objection ledger. Factual objections should
+    cite (`evidence_url`); the rebuttal may cite back (`rebuttal_evidence_url`)."""
 
-    id: str = ""                              # assigned by DebateEngine.register_critique
-    author_faction: str = ""                  # assigned by DebateEngine.run_round
+    id: str = ""
+    author_faction: str = ""
     target_faction: str
     flaw_type: FlawType
     claim: str
-    specifics: str = ""                       # mandatory for scope/values_mismatch
+    specifics: str = ""
+    evidence_url: str | None = None          # source behind a factual objection
     rebuttal: str = ""
+    rebuttal_evidence_url: str | None = None  # source behind the rebuttal
     status: ObjectionStatus = ObjectionStatus.OPEN
 
 
 class FactionSwitch(BaseModel):
-    """Public faction change. Valid only with BOTH halves (open objection by ID
-    targeting the current faction + non-empty citation) AND a target equal to
-    the objection's author faction (round-7 §3)."""
+    """Public faction change: open objection by ID + non-empty citation +
+    target IS the objection's author faction."""
 
     model: str
     from_faction: str
-    to_faction: str                           # must equal the objection's author_faction
+    to_faction: str
     convinced_by: str
     objection_id: str
 
@@ -110,12 +122,51 @@ class CostReport(BaseModel):
     cache_hits: int = 0
     usd: float = 0.0
     latency_s: float = 0.0
-    breakdown: dict[str, int] = Field(default_factory=dict)  # requests per stage
+    breakdown: dict[str, int] = Field(default_factory=dict)
+
+
+class PlanStep(BaseModel):
+    """One ticket for the cheap executor: nothing left to be inferred."""
+
+    step: str
+    goal: str
+    hard_constraints: list[str] = Field(default_factory=list)
+    forbidden_paths: list[str] = Field(default_factory=list)
+    acceptance: str = ""
+
+
+class RejectedPath(BaseModel):
+    """A path the council rejected — with WHO rejected it and WHY. Collected
+    programmatically from the ledger, never invented by a renderer."""
+
+    path: str
+    rejected_by: str
+    why: str
+
+
+class PlanContract(BaseModel):
+    """The second render (values №2): a spec for a CHEAPER executor model,
+    not a narrative for a human."""
+
+    goal: str = ""
+    steps: list[PlanStep] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    rejected_paths: list[RejectedPath] = Field(default_factory=list)
+    open_ambiguities: list[str] = Field(default_factory=list)
+
+
+class DecisionNode(BaseModel):
+    """Explainability view (values №1): argument -> what closed it -> who moved.
+    A tree, not a linear chronicle."""
+
+    kind: str  # faction | objection | resolution | switch | verdict
+    label: str
+    detail: dict = Field(default_factory=dict)
+    children: list[DecisionNode] = Field(default_factory=list)
 
 
 class Verdict(BaseModel):
-    """Final output. `router_confidence` is inter-model agreement of the two
-    classifiers, exposed so a misroute is visible to the user."""
+    """Final output — renders twice: human report + plan contract."""
 
     decision: str
     zhoda_reached: bool
@@ -129,3 +180,6 @@ class Verdict(BaseModel):
     rounds_taken: int = 0
     cost: CostReport = Field(default_factory=CostReport)
     transcript_id: str = ""
+    plan_contract: PlanContract | None = None   # second render (values №2)
+    dead_ends_prevented: int = 0                # the ROI metric (values №3)
+    decision_tree: dict = Field(default_factory=dict)  # explainability (values №1)

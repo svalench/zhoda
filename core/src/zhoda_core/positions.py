@@ -1,7 +1,7 @@
 """Stage 1: independent structured positions, anonymized from the start.
 
-Parallel fan-out with graceful degradation: a failed model is excluded,
-failure only if ALL models failed.
+Evidence discipline (values №1): every claim carries `evidence_url` — null
+means 'assumption', and renders label it accordingly.
 """
 
 import asyncio
@@ -17,9 +17,13 @@ Context (value map): {value_map}
 Respond with ONLY valid JSON:
 {{"thesis": "core position in 1-2 sentences",
   "answer": "full answer",
-  "arguments": ["key argument 1", "..."],
+  "claims": [{{"claim": "key argument",
+              "evidence_url": "https://source or null",
+              "confidence": 0.0}}],
   "falsifiability": "conditions under which this position is wrong",
-  "confidence": 0.0}}"""
+  "confidence": 0.0}}
+If you have no source for a claim, set evidence_url to null — the report
+will label it an assumption. Never invent URLs."""
 
 
 async def extract_positions(

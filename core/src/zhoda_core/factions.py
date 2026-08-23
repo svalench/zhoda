@@ -2,10 +2,9 @@
 
 A cluster of 2+ models SYNTHESIZES its platform from all member positions.
 Pairwise structural comparison by a conflict-checked judge is the source of
-truth — candidate pairs only. Round-8 §3: the Jaccard prefilter gets a
-NEGATION GUARD ('use X' vs 'don't use X' never auto-merges) and every
-auto-merge is recorded in `prefilter_merges` and logged to the transcript —
-it must not look like a judge decision.
+truth — candidate pairs only. The Jaccard prefilter has a NEGATION GUARD
+('use X' vs 'don't use X' never auto-merges) and every auto-merge is recorded
+in `prefilter_merges` and logged to the transcript.
 
 Per-question state (divergences, prefilter_merges): created per deliberation.
 """
@@ -29,14 +28,15 @@ Their individual answers:
 {answers}
 
 Synthesize the shared platform position. ONLY valid JSON:
-{{"thesis": "...", "answer": "...", "arguments": ["..."],
+{{"thesis": "...", "answer": "...",
+  "claims": [{{"claim": "...", "evidence_url": null, "confidence": 0.0}}],
   "falsifiability": "...", "confidence": 0.0}}"""
 
 NEGATION_TOKENS = {"no", "not", "never", "without", "don't", "dont", "avoid", "never"}
 
 
 def near_identical(a: str, b: str, threshold: float = 0.9) -> bool:
-    """Cheap prefilter with a negation guard (round-8 §3). TODO(calibrate)."""
+    """Cheap prefilter with a negation guard. TODO(calibrate)."""
     ta, tb = set(a.lower().split()), set(b.lower().split())
     if not ta or not tb:
         return False
@@ -46,16 +46,16 @@ def near_identical(a: str, b: str, threshold: float = 0.9) -> bool:
 
 
 class Faction(BaseModel):
-    name: str = ""                                  # alias until the chairman names it
-    members: list[str] = Field(default_factory=list)  # anonymized aliases
-    platform: Position | None = None                # synthesized for 2+ members
+    name: str = ""
+    members: list[str] = Field(default_factory=list)
+    platform: Position | None = None
 
 
 class FactionClusterer:
     def __init__(self, provider: OpenRouterProvider) -> None:
         self.provider = provider
         self.divergences: list[Disagreement] = []
-        self.prefilter_merges: list[dict[str, str]] = []  # audit trail (round-8 §3)
+        self.prefilter_merges: list[dict[str, str]] = []
 
     async def cluster(
         self,
@@ -77,8 +77,8 @@ class FactionClusterer:
         candidates = []
         for i, j in pairs:
             if near_identical(positions[i].thesis, positions[j].thesis):
-                parent[find(j)] = find(i)  # auto-merge, no judge call...
-                self.prefilter_merges.append({  # ...but ALWAYS audited
+                parent[find(j)] = find(i)
+                self.prefilter_merges.append({
                     "a": positions[i].thesis, "b": positions[j].thesis, "via": "prefilter",
                 })
             else:
@@ -90,7 +90,7 @@ class FactionClusterer:
         )
         for (i, j), res in zip(candidates, results, strict=True):
             if not isinstance(res, dict):
-                continue  # failed comparison -> keep separate (safe side)
+                continue
             if res.get("same"):
                 parent[find(j)] = find(i)
             elif res.get("divergence"):

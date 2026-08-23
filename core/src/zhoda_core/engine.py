@@ -1,12 +1,11 @@
 """Orchestration state machine: router -> elicitor -> positions -> factions
-(chairman names them) -> debate rounds (revise BEFORE switches) -> verdict.
+(chairman names them) -> debate rounds (revise BEFORE switches) -> verdict
+-> plan contract + decision tree.
 
-Round-8 §1 — SESSION STATE: anything per-question (objection ledger, switches,
-divergences, consensus streak) is created INSIDE deliberate(), never on the
-long-lived engine. The engine holds config only. This is invisible in the CLI
-and critical for MCP, where one engine serves many questions: without it,
-question #2 inherits the consensus streak, foreign switches, and ghost
-objections from question #1 (chairman-given faction names repeat easily).
+Session state is created INSIDE deliberate() (round-8 §1). The verdict
+renders twice (values №2): human report + plan contract for a cheaper
+executor; rejected paths come from the ledger programmatically. The ROI
+metric (values №3): dead_ends_prevented.
 """
 
 from collections.abc import Callable
@@ -18,10 +17,12 @@ from .elicitor import ClarifyingQuestion, Elicitor
 from .factions import Faction, FactionClusterer
 from .judges import Judges
 from .models import ConsensusStrength, Disagreement, ObjectionStatus, Protocol, ValueMap, Verdict
+from .plan import render_plan_contract
 from .positions import extract_positions
 from .providers.openrouter import OpenRouterProvider
 from .router import ProtocolRouter
 from .transcripts import TranscriptStore
+from .tree import build_decision_tree
 from .verdict import VerdictBuilder
 
 NAMING_PROMPT = """Name each faction descriptively (e.g. \"Pragmatists\", \"Maximalists\").
@@ -47,7 +48,7 @@ class ZhodaEngine:
         devils_advocate: bool = True,
         ambiguity_threshold: float = 0.6,
         transcripts_dir: str = "transcripts",
-        alias_seed: int | None = None,  # testability hook
+        alias_seed: int | None = None,
     ) -> None:
         if len(council) < 2:
             raise ValueError("council needs at least 2 models")
@@ -57,9 +58,8 @@ class ZhodaEngine:
         if len(clean_judges) < 2:
             raise ValueError(
                 "at least two judges must sit OUTSIDE the council "
-                f"(clean: {clean_judges}) — no silent fallback (round-7 §2)"
+                f"(clean: {clean_judges}) — no silent fallback"
             )
-        # config only — no per-question state on the engine (round-8 §1)
         self.provider = provider
         self.council = council
         self.chairman = chairman
@@ -97,7 +97,7 @@ class ZhodaEngine:
         def mark(stage: str) -> None:
             nonlocal last_mark
             now = self.provider.question_report().requests
-            breakdown[stage] = now - last_mark  # per-stage delta (round-8 §6)
+            breakdown[stage] = now - last_mark
             last_mark = now
 
         route = await self.router.route(question, force_protocol)
@@ -134,7 +134,7 @@ class ZhodaEngine:
         self.transcripts.append(tid, {
             "stage": "factions",
             "factions": [f.model_dump() for f in factions],
-            "prefilter_merges": clusterer.prefilter_merges,  # audited (round-8 §3)
+            "prefilter_merges": clusterer.prefilter_merges,
         })
         mark("factions")
 
@@ -184,20 +184,27 @@ class ZhodaEngine:
             cost=cost,
             divergences=divergences,
         )
+        # second render + explainability + ROI metric (values №1–№3)
+        verdict.plan_contract = await render_plan_contract(
+            self.provider, self.chairman, verdict, debate.objections, factions,
+        )
+        verdict.dead_ends_prevented = len(verdict.plan_contract.rejected_paths)
+        verdict.decision_tree = build_decision_tree(
+            factions, debate.objections, debate.switches, verdict.decision,
+        ).model_dump()
+        mark("render")
         self.transcripts.append(tid, {"stage": "verdict", "verdict": verdict.model_dump()})
         return verdict
 
     async def _name_factions(self, factions: list[Faction]) -> None:
-        """The chairman names factions — sanitized and UNIQUE (round-8 §6):
-        duplicate or malformed names fall back to the alias, because every
-        lookup in the protocol is by name."""
+        """The chairman names factions — sanitized and UNIQUE."""
         lines = "\n".join(f"- {f.name}: {f.platform.thesis}" for f in factions if f.platform)
         if not lines:
             return
         try:
             names = await self.provider.ask_json(self.chairman, NAMING_PROMPT.format(lines=lines))
         except Exception:
-            return  # naming is cosmetic; aliases remain
+            return
         seen: set[str] = set()
         for faction in factions:
             name = str(names.get(faction.name, "")).strip().strip('"\'').replace("\n", " ")

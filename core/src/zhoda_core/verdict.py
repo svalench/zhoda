@@ -1,7 +1,9 @@
 """Stage 5: verdict assembly.
 
 The minority report is NEVER erased (protocol invariant). The dissent map is
-seeded by the pairwise divergences from faction clustering.
+seeded by the pairwise divergences from faction clustering. The plan
+contract, decision tree and dead-ends metric are attached by the engine
+(values №1–№3).
 """
 
 from .factions import Faction
