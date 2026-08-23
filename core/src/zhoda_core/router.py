@@ -1,11 +1,16 @@
 """Stage -1: protocol router.
 
-Round-3 §4: LLM self-reported confidence is uncalibrated by definition — a
-model returns 0.85–0.95 almost always, and a fail-safe on it never fires.
-So confidence here is INTER-MODEL AGREEMENT, not self-assessment: two
-different models classify the question; agreement = confident, disagreement
-= escalate to the more thorough protocol. The router finally follows the
-project's own philosophy.
+Round-3 §4: confidence is INTER-MODEL AGREEMENT, not self-assessment — two
+DIFFERENT models classify; agreement = confident, disagreement = escalate up.
+
+Round-4 §3:
+- classifiers come from explicit config, never from council order;
+  two identical classifiers are rejected at construction.
+- on disagreement, task_class reports the more thorough classifier's class —
+  never a fabricated DECISION.
+- documented limitation: agreement of two classifiers is NOT calibrated
+  correctness — two same-family models can be confidently wrong together.
+  The fail-safe catches disagreement, not shared bias.
 """
 
 import asyncio
@@ -23,9 +28,20 @@ PROTOCOL_BY_CLASS: dict[TaskClass, Protocol] = {
     TaskClass.CREATIVE: Protocol.VOTE,
 }
 
-# Fail-safe landing protocol when classifiers disagree: debate is the
-# thorough default. There is no downward path.
-FALLBACK_PROTOCOL = Protocol.DEBATE
+THOROUGHNESS: dict[Protocol, int] = {
+    Protocol.VOTE: 0,
+    Protocol.DEBATE: 1,
+    Protocol.RED_TEAM: 2,
+}
+
+FALLBACK_PROTOCOL = Protocol.DEBATE  # disagreement always lands here
+
+CLASSIFY_PROMPT = """Classify this user question into exactly one class:
+factual_lookup | reasoning | decision | code_review | creative
+
+Question: {question}
+
+Respond with ONLY valid JSON: {{"task_class": "..."}}"""
 
 
 class RouteDecision(BaseModel):
@@ -37,8 +53,10 @@ class RouteDecision(BaseModel):
 
 class ProtocolRouter:
     def __init__(self, provider: OpenRouterProvider, classifiers: tuple[str, str]) -> None:
+        if len(set(classifiers)) < 2:
+            raise ValueError("router needs two DISTINCT classifier models")
         self.provider = provider
-        self.classifiers = classifiers  # two DIFFERENT models
+        self.classifiers = classifiers
 
     async def route(self, question: str, force: Protocol | None = None) -> RouteDecision:
         if force is not None:
@@ -54,11 +72,15 @@ class ProtocolRouter:
             return RouteDecision(
                 task_class=first, protocol=PROTOCOL_BY_CLASS[first], confidence=1.0,
             )
+        # disagreement: honestly report the more thorough class, land on debate
+        thorough = max((first, second), key=lambda c: THOROUGHNESS[PROTOCOL_BY_CLASS[c]])
         return RouteDecision(
-            task_class=TaskClass.DECISION, protocol=FALLBACK_PROTOCOL, confidence=0.0,
+            task_class=thorough, protocol=FALLBACK_PROTOCOL, confidence=0.0,
         )
 
     async def _classify(self, question: str, model: str) -> TaskClass:
-        """Single cheap model call, strict JSON: {task_class}. No confidence
-        self-report — agreement between two classifiers is the signal."""
-        raise NotImplementedError  # TODO(mvp)
+        data = await self.provider.ask_json(
+            model, CLASSIFY_PROMPT.format(question=question),
+            cache_key=f"route:{model}:{hash(question)}",
+        )
+        return TaskClass(data["task_class"])

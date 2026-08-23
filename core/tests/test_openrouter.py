@@ -1,5 +1,6 @@
 """Provider tests — mocked transport, no live API calls (Cursor rule).
-Covers the round-3 bug fixes: 429 handling, budget cap, retry policy.
+Round-3: 429 handling, budget cap, retry policy.
+Round-4: per-question budget delta, pre-call estimate.
 """
 
 import httpx
@@ -22,6 +23,11 @@ def make_provider(handler: httpx.MockTransport, **kwargs) -> OpenRouterProvider:
 OK_RESPONSE = {
     "choices": [{"message": {"content": "ok"}}],
     "usage": {"prompt_tokens": 3, "completion_tokens": 5, "cost": 0.0},
+}
+
+PAID_RESPONSE = {
+    "choices": [{"message": {"content": "ok"}}],
+    "usage": {"prompt_tokens": 3, "completion_tokens": 5, "cost": 0.01},
 }
 
 
@@ -79,3 +85,38 @@ async def test_usage_is_accumulated() -> None:
     assert provider.cost.requests == 2
     assert provider.cost.tokens_in == 6
     assert provider.cost.tokens_out == 10
+
+
+@pytest.mark.asyncio
+async def test_budget_is_per_question_not_per_process() -> None:
+    """Round-4 §1: begin_question() snapshots spend; the cap checks the delta."""
+    provider = make_provider(
+        httpx.MockTransport(lambda r: httpx.Response(200, json=PAID_RESPONSE)),
+        budget_usd=0.02,
+        prices={"paid/model": 0.0},  # zero estimate -> only accumulated delta matters
+    )
+    provider.begin_question()
+    await provider.complete("paid/model", "one")   # +$0.01
+    await provider.complete("paid/model", "two")   # +$0.01 -> at cap, allowed
+    with pytest.raises(BudgetExceededError):
+        await provider.complete("paid/model", "three")  # delta $0.02 >= cap
+    provider.begin_question()  # new question -> fresh delta
+    await provider.complete("paid/model", "four")  # works again
+
+
+@pytest.mark.asyncio
+async def test_precall_estimate_blocks_before_call() -> None:
+    """Round-4 §2: estimate (max_tokens x price) is checked BEFORE the call."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json=PAID_RESPONSE)
+
+    provider = make_provider(
+        httpx.MockTransport(handler), budget_usd=0.005, prices={"paid/model": 0.01},
+    )
+    provider.begin_question()
+    with pytest.raises(BudgetExceededError):  # estimate 0.01 * 2 = $0.02 > cap
+        await provider.complete("paid/model", "hi")
+    assert calls["n"] == 0  # no request was made
