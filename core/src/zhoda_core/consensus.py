@@ -1,10 +1,10 @@
 """Stage 4: consensus (zhoda) detection.
 
-Computed on structured theses via a conflict-checked judge, never prose
-similarity. Stability rule: consensus counts only if agreement PERSISTS for
-`stability_rounds` consecutive rounds. classify() is exposed separately for
-single-pass protocols (vote, red_team) where the streak must not apply
-(round-5 §5).
+Computed on structured theses via a judge, never prose similarity. The probe
+judge prefers judges OUTSIDE the council entirely (round-6 §5). Stability
+rule: consensus counts only if agreement PERSISTS for `stability_rounds`
+consecutive rounds. classify() is exposed separately for single-pass
+protocols (vote, red_team) where the streak must not apply.
 """
 
 from .factions import Faction
@@ -34,8 +34,10 @@ class ConsensusChecker:
             return ConsensusStrength.UNANIMOUS
         theses = "\n".join(f"- {f.name}: {f.platform.thesis}" for f in factions if f.platform)
         probe = Faction(name="probe", members=[m for f in factions for m in f.members])
+        outside = judges.outside()
+        judge = outside[0] if outside else judges.for_faction(probe)
         verdict = await self.provider.ask_json(
-            judges.for_faction(probe), AGREEMENT_PROMPT.format(theses=theses),
+            judge, AGREEMENT_PROMPT.format(theses=theses),
         )
         if verdict.get("all_agree"):
             return ConsensusStrength.UNANIMOUS

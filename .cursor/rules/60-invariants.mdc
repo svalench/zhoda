@@ -1,0 +1,29 @@
+---
+description: Protocol invariant = test. Process rule from review round 6
+alwaysApply: true
+---
+
+# Invariant = test (process rule)
+
+Pattern from review rounds 3–6: a docstring/doc promises a mechanic, the code
+implements a simplification, review finds the gap. From now on:
+
+**Every protocol invariant ships with a test in the same commit. An invariant
+without a test does not exist.**
+
+Current mapping (keep updated):
+
+| Invariant | Test |
+|---|---|
+| Aliases per deliberation, 27+ models | tests/test_anonymize.py |
+| 429 transient vs quota, 4xx fail-fast | tests/test_openrouter.py |
+| Budget per question (delta), pre-call estimate | tests/test_openrouter.py |
+| Revision converges platforms (not attrition) | tests/test_e2e.py::test_debate_loop_with_platform_revision |
+| Stability rule blocks a flip | tests/test_e2e.py::test_stability_rule_blocks_a_flip |
+| Smart mode without callback degrades, never drops | tests/test_e2e.py::test_smart_mode_without_callback_degrades |
+| Switch needs open objection + cited argument | tests/test_debate.py |
+| Closure only by target faction; supersede leaves ledger | tests/test_debate.py |
+
+When you add a mechanic to a docstring or docs/, add its test first or in the
+same commit. When you change a schema, update docs/01-core.md in the same
+commit (rule 10-python-core).

@@ -34,7 +34,8 @@ class ConsensusStrength(StrEnum):
 
 class ValueMap(BaseModel):
     """What the answer is checked against. `assumptions` are marked guesses
-    taken without asking (smart elicitation, docs/01-core.md §2)."""
+    taken without asking; `open_ambiguities` are questions that were raised
+    but never answered (smart mode without a callback — round-6 §4)."""
 
     goal: str = ""
     success_criteria: list[str] = Field(default_factory=list)
@@ -65,14 +66,15 @@ class FlawType(StrEnum):
 
 class ObjectionStatus(StrEnum):
     OPEN = "open"
-    CLOSED = "closed"
+    CLOSED = "closed"          # rebutted to the judges' satisfaction
+    SUPERSEDED = "superseded"  # addressed by a platform revision (round-6 §1)
 
 
 class Critique(BaseModel):
     """A concrete charge with a typed flaw, registered in the objection ledger
-    with an ID. Quality gate (round-3 §5): factual/logical need a concrete
-    `claim`; scope/values_mismatch need `specifics` — vague objections can't
-    be weaponized to force switches."""
+    with an ID. Quality gate: factual/logical need a concrete `claim`;
+    scope/values_mismatch need `specifics`. Leaves the ledger via CLOSED
+    (rebuttal) or SUPERSEDED (platform revision) — never lingers as a ghost."""
 
     id: str = ""                              # assigned by DebateEngine.register_critique
     target_faction: str
@@ -85,7 +87,8 @@ class Critique(BaseModel):
 
 class FactionSwitch(BaseModel):
     """Public faction change. Valid only against an OPEN objection referenced
-    by `objection_id` (round-3 §5) — a fabricated string no longer works."""
+    by `objection_id` AND a non-empty cited argument (both halves, round-4 §6).
+    Decided AFTER the platform revision — against the updated platform."""
 
     model: str
     from_faction: str
@@ -111,7 +114,7 @@ class CostReport(BaseModel):
 
 class Verdict(BaseModel):
     """Final output. `router_confidence` is inter-model agreement of the two
-    classifiers (round-3 §4), exposed so a misroute is visible to the user."""
+    classifiers, exposed so a misroute is visible to the user."""
 
     decision: str
     zhoda_reached: bool

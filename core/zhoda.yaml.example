@@ -4,22 +4,23 @@ council:
   - google/gemma-3-27b:free
   - qwen/qwen3-32b:free
   - meta-llama/llama-4-scout:free
-chairman: google/gemini-3-pro        # appeals (paid, optional)
+chairman: google/gemini-3-pro        # names factions, appeals (paid, optional)
 
-# Two DISTINCT judges, RECOMMENDED outside the council (round-5 §2):
+# Two DISTINCT judges, RECOMMENDED outside the council:
 # a judge never rules on their own faction; closure needs the pair to agree.
 judges:
   - deepseek/deepseek-chat-v3:free
   - qwen/qwen3-32b:free
 
-router_classifiers:                  # explicit, NOT from council order
+# MANDATORY, two distinct models (round-6 §5: never derived from council order)
+router_classifiers:
   - deepseek/deepseek-chat-v3:free
   - google/gemma-3-27b:free
 
 rounds_cap: 4
 stability_rounds: 2                  # consensus must persist 2 rounds
 ambiguity_threshold: 0.6             # TODO(calibrate): smart elicitation
-devils_advocate: true
+devils_advocate: true                # rotation excludes the leading faction
 
 escalation:
   enabled: false                     # true = paid appeal ladder

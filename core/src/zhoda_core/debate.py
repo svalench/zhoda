@@ -1,15 +1,14 @@
-"""Stage 3: Oxford-style debate rounds — WITH platform revision (round-5 §1).
+"""Stage 3: Oxford-style debate rounds.
 
-The flagship stage: after critiques, rebuttals and judged closures, every
-faction carrying OPEN objections REVISES its platform (or explicitly refuses
-with justification). Without this, debate degenerates into attrition —
-consensus was only reachable by everyone migrating to one faction, and two
-platforms could never converge. Now they can.
+Round order (round-6 §1): critiques -> devil's advocate -> rebuttals ->
+judged closures -> PLATFORM REVISION (with SUPERSEDED) -> switches.
+Revision comes BEFORE switches: a model decides whether to leave against the
+UPDATED platform — nobody flees a ship that was just repaired. A revision
+that addresses an objection supersedes it (judge-confirmed): objections
+never linger as ghosts pressuring a text that no longer exists.
 
-Judging (round-5 §2): closure requires the whole non-conflicted judge pair
-to agree; disagreement leaves the objection OPEN (safe side). A judge never
-rules on their own faction. Devil's advocate is real: a rotating model must
-attack the leading faction even if it belongs to it.
+Devil's advocate rotation EXCLUDES leading-faction members while candidates
+exist outside (round-6 §3) — no model argues with itself.
 """
 
 import asyncio
@@ -51,9 +50,8 @@ Rebuttal: {rebuttal}
 Did the rebuttal substantively address the objection? ONLY valid JSON:
 {{"closed": true}} or {{"closed": false}}"""
 
-SWITCH_PROMPT = """An open objection stands against your faction's position.
+SWITCH_PROMPT = """An open objection stands against your faction's CURRENT platform.
 Objection: {claim}
-Your rebuttal failed to close it.
 Opposing thesis: {opponent_thesis}
 
 Do you switch factions? ONLY valid JSON:
@@ -70,12 +68,18 @@ why the objections fail. ONLY valid JSON:
   "falsifiability": "...", "confidence": 0.0,
   "changed": true, "change_note": "what changed and why (or why not)"}}"""
 
+SUPERSEDE_PROMPT = """Objection ({flaw_type}): {claim} {specifics}
+The faction revised its platform. New thesis: {thesis}
+
+Does the revised platform substantively address the objection? ONLY valid JSON:
+{{"addressed": true}} or {{"addressed": false}}"""
+
 
 class Round(BaseModel):
     number: int
     critiques: list[Critique] = Field(default_factory=list)
     switches: list[FactionSwitch] = Field(default_factory=list)
-    revisions: list[dict] = Field(default_factory=list)  # platform revisions
+    revisions: list[dict] = Field(default_factory=list)
 
 
 class DebateEngine:
@@ -83,7 +87,7 @@ class DebateEngine:
         self.provider = provider
         self.devils_advocate = devils_advocate
         self.objections: list[Critique] = []
-        self.switches: list[FactionSwitch] = []  # accumulated across rounds
+        self.switches: list[FactionSwitch] = []
 
     def register_critique(self, critique: Critique) -> Critique:
         """Structural prefilter + ID assignment (semantic validation: judges)."""
@@ -107,6 +111,14 @@ class DebateEngine:
                 return True
         return False
 
+    def supersede_objection(self, objection_id: str) -> bool:
+        """Mark an objection as addressed by a platform revision (round-6 §1)."""
+        for item in self.objections:
+            if item.id == objection_id and item.status == ObjectionStatus.OPEN:
+                item.status = ObjectionStatus.SUPERSEDED
+                return True
+        return False
+
     def validate_switch(self, switch: FactionSwitch) -> bool:
         """BOTH halves: an OPEN objection by ID targeting the model's current
         faction AND a non-empty cited argument."""
@@ -126,8 +138,6 @@ class DebateEngine:
         speakers: dict[str, str],
         judges: Judges,
     ) -> Round:
-        """critiques -> devil's advocate -> rebuttals -> judged closures ->
-        switches -> PLATFORM REVISION (the stage that lets positions converge)."""
         round_ = Round(number=number)
         if len(factions) < 2:
             return round_
@@ -135,16 +145,17 @@ class DebateEngine:
         ordered = sorted(factions, key=lambda f: len(f.members), reverse=True)
         leading = ordered[0]
 
-        # 1. every faction critiques the strongest OTHER faction
+        # 1. critiques: every faction vs the strongest OTHER faction
         pairs = [(f, leading if f is not leading else ordered[1]) for f in ordered]
         raw = await asyncio.gather(
             *(self._critique(f, target, speakers, CRITIQUE_PROMPT) for f, target in pairs),
             return_exceptions=True,
         )
 
-        # 2. devil's advocate: rotating model attacks the leading faction
+        # 2. devil's advocate — rotation EXCLUDES leading-faction members
         if self.devils_advocate and leading.platform is not None:
-            advocate_alias = list(speakers)[(number - 1) % len(speakers)]
+            candidates = [a for a in speakers if a not in leading.members] or list(speakers)
+            advocate_alias = candidates[(number - 1) % len(candidates)]
             raw.append(await self._critique(
                 Faction(name="devils_advocate", members=[advocate_alias]),
                 leading, speakers, DEVILS_ADVOCATE_PROMPT,
@@ -156,7 +167,7 @@ class DebateEngine:
             try:
                 round_.critiques.append(self.register_critique(Critique(**item)))
             except (ValueError, TypeError):
-                continue  # failed the quality gate
+                continue
 
         # 3. rebuttals from target factions + closure by the judge PAIR
         for critique in [c for c in self.objections if c.status == ObjectionStatus.OPEN]:
@@ -184,16 +195,55 @@ class DebateEngine:
                 ) for judge in judges.pair_for(target)),
                 return_exceptions=True,
             )
-            # disagreement between judges -> stays OPEN (safe side)
-            if all(isinstance(v, dict) and v.get("closed") for v in votes) and votes:
+            if votes and all(isinstance(v, dict) and v.get("closed") for v in votes):
                 self.close_objection(critique.id, rebuttal, rebuttal_by=target.name)
 
-        # 4. switches: only models carrying an open objection may move
+        # 4. PLATFORM REVISION — before switches (round-6 §1)
         for faction in factions:
-            open_against = [
-                c for c in self.objections
-                if c.status == ObjectionStatus.OPEN and c.target_faction == faction.name
-            ]
+            open_against = self._open_against(faction)
+            if not open_against or not faction.members or faction.platform is None:
+                continue
+            speaker = speakers.get(faction.members[0])
+            if speaker is None:
+                continue
+            objections_text = "\n".join(
+                f"- [{c.flaw_type}] {c.claim} {c.specifics}" for c in open_against
+            )
+            data = await self.provider.ask_json(
+                speaker,
+                REVISE_PROMPT.format(
+                    name=faction.name, thesis=faction.platform.thesis,
+                    objections=objections_text,
+                ),
+            )
+            if not (data.get("changed") and data.get("thesis")):
+                continue
+            faction.platform = Position(
+                model=faction.platform.model,
+                thesis=data["thesis"],
+                answer=data.get("answer", faction.platform.answer),
+                arguments=data.get("arguments", faction.platform.arguments),
+                falsifiability=data.get("falsifiability", faction.platform.falsifiability),
+                confidence=float(data.get("confidence", faction.platform.confidence)),
+            )
+            round_.revisions.append({
+                "faction": faction.name, "change_note": data.get("change_note", ""),
+            })
+            # supersede: judge confirms the revised platform addresses each objection
+            for critique in open_against:
+                verdict = await self.provider.ask_json(
+                    judges.for_faction(faction),
+                    SUPERSEDE_PROMPT.format(
+                        flaw_type=critique.flaw_type, claim=critique.claim,
+                        specifics=critique.specifics, thesis=faction.platform.thesis,
+                    ),
+                )
+                if verdict.get("addressed"):
+                    self.supersede_objection(critique.id)
+
+        # 5. switches — decided against the REVISED platforms
+        for faction in factions:
+            open_against = self._open_against(faction)
             if not open_against or faction.platform is None:
                 continue
             opponent = next((f for f in factions if f is not faction), None)
@@ -220,43 +270,13 @@ class DebateEngine:
                     opponent.members.append(member)
                     round_.switches.append(switch)
                     self.switches.append(switch)
-
-        # 5. PLATFORM REVISION — the flagship stage (round-5 §1):
-        #    factions with open objections revise their platform or justify refusal
-        for faction in factions:
-            open_against = [
-                c for c in self.objections
-                if c.status == ObjectionStatus.OPEN and c.target_faction == faction.name
-            ]
-            if not open_against or not faction.members or faction.platform is None:
-                continue
-            speaker = speakers.get(faction.members[0])
-            if speaker is None:
-                continue
-            objections_text = "\n".join(
-                f"- [{c.flaw_type}] {c.claim} {c.specifics}" for c in open_against
-            )
-            data = await self.provider.ask_json(
-                speaker,
-                REVISE_PROMPT.format(
-                    name=faction.name, thesis=faction.platform.thesis,
-                    objections=objections_text,
-                ),
-            )
-            if data.get("changed") and data.get("thesis"):
-                faction.platform = Position(
-                    model=faction.platform.model,
-                    thesis=data["thesis"],
-                    answer=data.get("answer", faction.platform.answer),
-                    arguments=data.get("arguments", faction.platform.arguments),
-                    falsifiability=data.get("falsifiability", faction.platform.falsifiability),
-                    confidence=float(data.get("confidence", faction.platform.confidence)),
-                )
-                round_.revisions.append({
-                    "faction": faction.name,
-                    "change_note": data.get("change_note", ""),
-                })
         return round_
+
+    def _open_against(self, faction: Faction) -> list[Critique]:
+        return [
+            c for c in self.objections
+            if c.status == ObjectionStatus.OPEN and c.target_faction == faction.name
+        ]
 
     async def _critique(
         self,

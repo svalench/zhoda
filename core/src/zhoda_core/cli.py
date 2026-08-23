@@ -17,7 +17,7 @@ console = Console()
 
 
 def ask_user(questions: list[ClarifyingQuestion]) -> list[str]:
-    """Close the elicitation loop (round-5 §3): show questions, collect answers."""
+    """Close the elicitation loop: show questions, collect answers."""
     answers = []
     for q in questions:
         console.print(f"\n[bold]{q.question}[/bold]\n[dim]{q.why_it_matters}[/dim]")
@@ -47,13 +47,19 @@ def deliberate(
                 console.print("[yellow]no judges configured — defaulting to council members; "
                               "conflict of interest possible[/yellow]")
                 judges = (cfg.get("chairman", cfg["council"][0]), cfg["council"][-1])
+            in_council = [j for j in judges if j in cfg["council"]]
+            if in_council:
+                console.print(f"[yellow]judges sit in the council: {in_council} — "
+                              "they will be excluded from rulings on their own faction[/yellow]")
             engine = ZhodaEngine(
                 provider,
                 cfg["council"],
                 chairman=cfg.get("chairman", cfg["council"][0]),
                 judges=tuple(judges),
+                router_classifiers=tuple(cfg["router_classifiers"]),  # mandatory (round-6 §5)
                 rounds_cap=cfg.get("rounds_cap", 4),
                 stability_rounds=cfg.get("stability_rounds", 2),
+                devils_advocate=cfg.get("devils_advocate", True),
             )
             verdict = await engine.deliberate(
                 question,
@@ -66,6 +72,9 @@ def deliberate(
             console.print(f"[bold]decision:[/bold]\n{verdict.decision}")
             if verdict.minority_report:
                 console.print(f"[bold]minority report:[/bold]\n{verdict.minority_report}")
+            if verdict.value_map.open_ambiguities:
+                console.print(f"[dim]unanswered ambiguities: "
+                              f"{len(verdict.value_map.open_ambiguities)}[/dim]")
             if verdict.switches:
                 console.print(f"[bold]switches:[/bold] {len(verdict.switches)}")
             console.print(f"cost: {verdict.cost.requests} requests, "

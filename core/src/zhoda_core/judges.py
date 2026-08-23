@@ -1,10 +1,9 @@
-"""Judge selection with conflict-of-interest avoidance (round-5 §2).
+"""Judge selection with conflict-of-interest avoidance (round-5 §2, round-6 §5).
 
-The protocol distrusts single models — so it cannot rest on a single
-INTERESTED one. Two judge models come from config (recommended: outside the
-council). A judge never rules on anything involving their own faction;
-closure requires the whole non-conflicted pair to agree — disagreement
-leaves the objection OPEN (safe side).
+Two judge models come from config (recommended: OUTSIDE the council — then
+`conflicts()` is empty and `outside()` is the full pair). A judge never rules
+on anything involving their own faction; closure requires the whole
+non-conflicted pair to agree — disagreement leaves the objection OPEN.
 """
 
 from .factions import Faction
@@ -31,3 +30,11 @@ class Judges:
             m for m, a in self.alias_of.items() if a is None or a not in faction.members
         )
         return clean or (self.models[0],)
+
+    def outside(self) -> tuple[str, ...]:
+        """Judges outside the council — zero possible conflict (consensus probe)."""
+        return tuple(m for m, a in self.alias_of.items() if a is None)
+
+    def conflicts(self) -> list[str]:
+        """Judge models that sit in the council — the CLI warns about these."""
+        return [m for m, a in self.alias_of.items() if a is not None]
