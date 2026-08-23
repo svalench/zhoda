@@ -26,6 +26,7 @@ Runs on free OpenRouter `:free` models with BYOK. Your keys, your budget cap.
 
 Early design stage. See [docs/](docs/):
 
+- [Whitepaper](docs/whitepaper.md) — the Zhoda protocol (EN)
 - [Master plan](docs/master-plan.md) — vision, roadmap, funding model
 - [01: Core](docs/01-core.md) — deliberation engine design
 - [02: MCP server](docs/02-mcp-server.md) — cross-harness distribution
@@ -34,7 +35,6 @@ Early design stage. See [docs/](docs/):
 ## Links
 
 - Site: https://zhoda.dev (soon)
-- Community & donations: https://zhoda.org (soon)
 
 ## License
 

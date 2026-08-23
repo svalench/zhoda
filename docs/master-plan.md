@@ -29,11 +29,11 @@ Zhoda — open-source система, в которой несколько LLM �
 - **Zhoda / Згода** — беларуские корни, семантика «согласие после спора» зашита
   в механику продукта
 - Свободно на GitHub (проверено 23.08.2026: 11 нерелевантных репо)
-- Домены: **zhoda.dev** — лендинг, документация, демо; **zhoda.org** — о проекте,
-  донаты, сообщество
+- Домен: **zhoda.dev** — единственный домен: лендинг, документация, демо, сообщество
 - Словарь продукта: вердикт `zhoda_reached: true`, транскрипт — «хроніка»,
   фракции — «фракцыі»
 - Пакеты: `zhoda-core`, `zhoda-mcp` (PyPI), `@zhoda/dsh-plugin` (npm)
+- Whitepaper: [docs/whitepaper.md](whitepaper.md) (EN)
 
 ## 3. Почему сейчас и почему мы
 
@@ -92,7 +92,8 @@ Zhoda — open-source система, в которой несколько LLM �
 ### Этап 0 — фундамент (неделя 1)
 - [x] Репозиторий `zhoda` (monorepo: `core/`, `mcp/`, `plugins/dsh/`, `docs/`)
 - [ ] README, LICENSE (AGPL-3.0), CONTRIBUTING, FUNDING.yml
-- [x] Домены zhoda.dev + zhoda.org
+- [x] Домен zhoda.dev
+- [x] Whitepaper v0.1 (docs/whitepaper.md)
 - [ ] Локальный dsh поднят и изучен (docs/architecture.md, протокол плагинов)
 
 ### Этап 1 — Core MVP (недели 1–3)
