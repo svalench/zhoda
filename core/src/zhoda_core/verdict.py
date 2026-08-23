@@ -10,12 +10,15 @@ from .factions import Faction
 from .models import (
     ConsensusStrength,
     CostReport,
+    Critique,
     Disagreement,
     FactionSwitch,
+    ObjectionStatus,
     Protocol,
     ValueMap,
     Verdict,
 )
+from .providers.openrouter import OpenRouterProvider
 
 
 class VerdictBuilder:
@@ -36,11 +39,22 @@ class VerdictBuilder:
     ) -> Verdict:
         leading = max(factions, key=lambda f: len(f.members))
         others = [f for f in factions if f is not leading and f.platform]
-        minority_report = (
-            "\n\n".join(f"{f.name}: {f.platform.thesis}" for f in others) or None
-        )
+        # UNANIMOUS: судьи уже сказали «одна позиция» — minority не дублирует её
+        minority_report = None
+        if strength != ConsensusStrength.UNANIMOUS:
+            minority_report = (
+                "\n\n".join(
+                    f"{f.name}: {f.platform.thesis}" for f in others if f.platform is not None
+                )
+                or None
+            )
+        if strength in (ConsensusStrength.SPLIT, ConsensusStrength.DEADLOCK):
+            decision = _dissent_decision(strength, factions)
+        else:
+            # черновик: thesis, не сырой answer платформы (тот — текст для спора)
+            decision = leading.platform.thesis if leading.platform else ""
         return Verdict(
-            decision=leading.platform.answer if leading.platform else "",
+            decision=decision,
             zhoda_reached=zhoda_reached,
             consensus_strength=strength,
             protocol=protocol,
@@ -53,3 +67,71 @@ class VerdictBuilder:
             cost=cost,
             transcript_id=transcript_id,
         )
+
+
+def _dissent_decision(strength: ConsensusStrength, factions: list[Faction]) -> str:
+    """Карта разногласий: answer лидера не выдаём за решение совета."""
+    lines = [f"No zhoda ({strength.value})."]
+    for faction in factions:
+        thesis = faction.platform.thesis if faction.platform else ""
+        lines.append(f"{faction.name}: {thesis}")
+    return "\n".join(lines)
+
+
+DECISION_PROMPT = """SYNTHESIZE THE COUNCIL DECISION for the user — not a debate rebuttal.
+First line: the recommended action.
+Then: why, which objections were closed, conditions that would overturn this.
+Do NOT write in first person as a faction (no "we", "our platform").
+Do NOT treat unresolved ambiguities as confirmed facts — list them as unresolved.
+
+Question: {question}
+Winner thesis: {thesis}
+Winner platform (debate text, context only): {answer}
+Closed objections: {closed}
+Open objections against the winner: {open_objections}
+Overturn if (falsifiability): {falsifiability}
+Confirmed constraints: {constraints}
+Unresolved (NOT facts): {open_ambiguities}
+
+ONLY valid JSON: {{"decision": "..."}}"""
+
+
+async def synthesize_decision(
+    provider: OpenRouterProvider,
+    chairman: str,
+    *,
+    question: str,
+    leading: Faction,
+    objections: list[Critique],
+    value_map: ValueMap,
+) -> str:
+    """Председатель пишет решение пользователю. Сбой парсинга — на стороне engine."""
+    if leading.platform is None:
+        return ""
+    closed = [
+        c.claim
+        for c in objections
+        if c.status in (ObjectionStatus.CLOSED, ObjectionStatus.SUPERSEDED)
+    ]
+    open_against = [
+        c.claim
+        for c in objections
+        if c.status == ObjectionStatus.OPEN and c.target_faction == leading.name
+    ]
+    data = await provider.ask_json(
+        chairman,
+        DECISION_PROMPT.format(
+            question=question,
+            thesis=leading.platform.thesis,
+            answer=leading.platform.answer,
+            closed="; ".join(closed) or "(none)",
+            open_objections="; ".join(open_against) or "(none)",
+            falsifiability=leading.platform.falsifiability,
+            constraints="; ".join(value_map.constraints) or "(none)",
+            open_ambiguities="; ".join(value_map.open_ambiguities) or "(none)",
+        ),
+    )
+    decision = str(data.get("decision") or "").strip()
+    if not decision:
+        raise ValueError("empty synthesized decision")
+    return decision

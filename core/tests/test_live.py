@@ -8,7 +8,10 @@ import os
 
 import pytest
 
+from zhoda_core.env import load_zhoda_env
 from zhoda_core.providers.openrouter import OpenRouterProvider
+
+load_zhoda_env()
 
 pytestmark = pytest.mark.live
 
@@ -19,7 +22,7 @@ async def test_free_model_answers() -> None:
     provider = OpenRouterProvider()
     try:
         text = await provider.complete(
-            "deepseek/deepseek-chat-v3:free", "Answer with exactly: OK",
+            "nvidia/nemotron-3-nano-30b-a3b:free", "Answer with exactly: OK",
         )
         assert text.strip()
         assert provider.cost.requests == 1

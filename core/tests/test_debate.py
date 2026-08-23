@@ -80,7 +80,7 @@ def test_superseded_objection_leaves_the_ledger() -> None:
 
 def test_objection_cap_defers_overflow() -> None:
     """Round-9 §2: over-cap critiques are marked deferred, never dropped silently."""
-    from zhoda_core.models import Round
+    from zhoda_core.debate import Round
 
     engine = make_engine(max_new_per_round=2)
     round_ = Round(number=1)

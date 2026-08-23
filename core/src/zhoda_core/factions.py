@@ -9,18 +9,30 @@ in `prefilter_merges` and logged to the transcript.
 Per-question state (divergences, prefilter_merges): created per deliberation.
 """
 
+from __future__ import annotations
+
 import asyncio
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from .judges import Judges
 from .models import Disagreement, Position
 from .providers.openrouter import OpenRouterProvider, make_cache_key
 
-PAIRWISE_PROMPT = """Position A thesis: {a}
-Position B thesis: {b}
+if TYPE_CHECKING:
+    from .judges import Judges  # только аннотации — иначе цикл с judges.py
 
-For practical purposes, are these the same position? Respond with ONLY valid JSON:
+PAIRWISE_PROMPT = """Position A thesis: {a_thesis}
+Position A answer: {a_answer}
+Position B thesis: {b_thesis}
+Position B answer: {b_answer}
+
+Same primary recommendation (same stack/system as the main choice)?
+If recommended actions / architecture in the critical path are the same, they
+agree even when labels differ (e.g. both put ACID state on PostgreSQL and
+stream through Kafka).
+Managed vs self-hosted, caveats, and optional complements (e.g. Cassandra after Kafka)
+are NOT different positions. ONLY valid JSON:
 {{"same": true, "divergence": ""}} or {{"same": false, "divergence": "one sentence"}}"""
 
 SYNTHESIS_PROMPT = """Several council members independently took the same position.
@@ -32,7 +44,10 @@ Synthesize the shared platform position. ONLY valid JSON:
   "claims": [{{"claim": "...", "evidence_url": null, "confidence": 0.0}}],
   "falsifiability": "...", "confidence": 0.0}}"""
 
-NEGATION_TOKENS = {"no", "not", "never", "without", "don't", "dont", "avoid", "never"}
+NEGATION_TOKENS = {"no", "not", "never", "without", "don't", "dont", "avoid"}
+
+# Зарезервированный член оппозиции: играет роль, в majority не голос.
+ADVOCATE_ALIAS = "devils_advocate"
 
 
 def near_identical(a: str, b: str, threshold: float = 0.9) -> bool:
@@ -78,9 +93,13 @@ class FactionClusterer:
         for i, j in pairs:
             if near_identical(positions[i].thesis, positions[j].thesis):
                 parent[find(j)] = find(i)
-                self.prefilter_merges.append({
-                    "a": positions[i].thesis, "b": positions[j].thesis, "via": "prefilter",
-                })
+                self.prefilter_merges.append(
+                    {
+                        "a": positions[i].thesis,
+                        "b": positions[j].thesis,
+                        "via": "prefilter",
+                    }
+                )
             else:
                 candidates.append((i, j))
 
@@ -93,12 +112,16 @@ class FactionClusterer:
                 continue
             if res.get("same"):
                 parent[find(j)] = find(i)
-            elif res.get("divergence"):
-                self.divergences.append(Disagreement(
-                    topic=res["divergence"],
-                    factions=[positions[i].model, positions[j].model],
-                    summary=res["divergence"],
-                ))
+            else:
+                divergence = res.get("divergence")
+                if isinstance(divergence, str) and divergence:
+                    self.divergences.append(
+                        Disagreement(
+                            topic=divergence,
+                            factions=[positions[i].model, positions[j].model],
+                            summary=divergence,
+                        )
+                    )
 
         groups: dict[int, list[Position]] = {}
         for i, position in enumerate(positions):
@@ -110,19 +133,26 @@ class FactionClusterer:
                 platform = await self._synthesize(members, speakers)
             else:
                 platform = members[0]
-            factions.append(Faction(
-                name=members[0].model,
-                members=[p.model for p in members],
-                platform=platform,
-            ))
+            factions.append(
+                Faction(
+                    name=members[0].model,
+                    members=[p.model for p in members],
+                    platform=platform,
+                )
+            )
         return factions
 
-    async def _compare(self, a: Position, b: Position, judges: Judges) -> dict:
+    async def _compare(self, a: Position, b: Position, judges: Judges) -> dict[str, object]:
         probe = Faction(name="probe", members=[a.model, b.model])
         return await self.provider.ask_json(
             judges.for_faction(probe),
-            PAIRWISE_PROMPT.format(a=a.thesis, b=b.thesis),
-            cache_key=make_cache_key("pair", a.thesis, b.thesis),
+            PAIRWISE_PROMPT.format(
+                a_thesis=a.thesis,
+                a_answer=a.answer,
+                b_thesis=b.thesis,
+                b_answer=b.answer,
+            ),
+            cache_key=make_cache_key("pair", a.thesis, a.answer, b.thesis, b.answer),
         )
 
     async def _synthesize(self, members: list[Position], speakers: dict[str, str]) -> Position:

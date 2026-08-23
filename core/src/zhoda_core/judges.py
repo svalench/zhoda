@@ -7,7 +7,12 @@ to agree. There is NO silent fallback to a conflicted judge — a full
 conflict is a hard error, not a soft surrender of the invariant.
 """
 
-from .factions import Faction
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .factions import Faction  # только аннотации — иначе цикл с factions.py
 
 
 class JudgesConflictError(Exception):

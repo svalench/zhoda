@@ -15,6 +15,9 @@ POSITION_PROMPT = """You are one member of a council. Give your independent stru
 Question: {question}
 Context (value map): {value_map}
 
+Open ambiguities in the value map are UNRESOLVED — never treat them as
+confirmed constraints or as facts the user affirmed.
+
 Respond with ONLY valid JSON:
 {{"thesis": "core position in 1-2 sentences",
   "answer": "full answer",

@@ -21,3 +21,5 @@ alwaysApply: false
 - Tests: pytest, recorded fixtures only (no live API calls in CI). Three
   canonical scenarios: consensus, split, escalation.
 - CLI entry: `zhoda deliberate "..."` (typer), live round output via rich.
+- BYOK: load the nearest `.env` walking up to the git root (`zhoda_core.env`).
+  Never override an already-set variable. Never commit `.env`.

@@ -16,6 +16,7 @@ import sqlite3
 
 import httpx
 
+from ..env import load_zhoda_env
 from ..models import CostReport
 
 DEFAULT_MAX_TOKENS = 2000
@@ -62,6 +63,8 @@ class OpenRouterProvider:
         prices: dict[str, float] | None = None,
         cache_path: str | None = None,
     ) -> None:
+        if not api_key:
+            load_zhoda_env()
         self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY is required (BYOK)")

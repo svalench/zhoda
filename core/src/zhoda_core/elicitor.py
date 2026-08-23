@@ -44,14 +44,21 @@ class Elicitor:
         self.provider = provider
         self.ambiguity_threshold = ambiguity_threshold  # TODO(calibrate): bench
 
-    async def elicit(self, question: str, council: list[str], mode: str = "smart") -> ElicitationResult:
+    async def elicit(
+        self, question: str, council: list[str], mode: str = "smart"
+    ) -> ElicitationResult:
         if mode == "no-clarify":
             return ElicitationResult(ambiguity_score=0.0)
 
         results = await asyncio.gather(
-            *(self.provider.ask_json(m, ELICIT_PROMPT.format(question=question),
-                                     cache_key=make_cache_key("elic", m, question))
-              for m in council),
+            *(
+                self.provider.ask_json(
+                    m,
+                    ELICIT_PROMPT.format(question=question),
+                    cache_key=make_cache_key("elic", m, question),
+                )
+                for m in council
+            ),
             return_exceptions=True,
         )
         payloads = [r for r in results if isinstance(r, dict)]
@@ -79,14 +86,40 @@ class Elicitor:
 
     @staticmethod
     def apply_answers(questions: list[ClarifyingQuestion], answers: list[str]) -> ValueMap:
-        """Answered -> constraints; unanswered -> open_ambiguities (round-7 §4)."""
+        """Отвеченные -> constraints; неотвеченные -> open_ambiguities (round-7 §4).
+
+        Цифра 1..n мапится на options[i-1]. Мусор и пустая строка — не constraint.
+        """
         constraints, open_ambiguities = [], []
         for q, a in zip(questions, answers, strict=False):
-            if a.strip():
-                constraints.append(f"Q: {q.question} A: {a}")
+            normalized = normalize_answer(q, a)
+            if normalized is not None:
+                constraints.append(f"Q: {q.question} A: {normalized}")
             else:
                 open_ambiguities.append(q.question)
-        # fewer answers than questions: the tail is unanswered
-        for q in questions[len(answers):]:
+        for q in questions[len(answers) :]:
             open_ambiguities.append(q.question)
         return ValueMap(constraints=constraints, open_ambiguities=open_ambiguities)
+
+
+def normalize_answer(question: ClarifyingQuestion, raw: str) -> str | None:
+    """None = не отвечено. Цифра 1..n -> текст опции; мусор при опциях -> None."""
+    text = raw.strip()
+    if not text:
+        return None
+    options = question.options
+    if not options:
+        return text
+    if text.isdigit():
+        idx = int(text)
+        if 1 <= idx <= len(options):
+            return options[idx - 1]
+        return None
+    folded = text.casefold()
+    exact = [opt for opt in options if opt.casefold() == folded]
+    if len(exact) == 1:
+        return exact[0]
+    contained = [opt for opt in options if opt.casefold() in folded]
+    if len(contained) >= 2:
+        return None
+    return None

@@ -1,0 +1,17 @@
+---
+description: No circular imports in zhoda_core; type-only deps use TYPE_CHECKING
+globs: core/**/*.py
+alwaysApply: false
+---
+
+# Imports
+
+Runtime cycle `factions.py` ↔ `judges.py` breaks `zhoda` on startup
+(`ImportError: cannot import name 'Faction' from partially initialized module`).
+
+- Type-only dependencies: `from __future__ import annotations` +
+  `if TYPE_CHECKING:`.
+- `judges` must not import `Faction` at runtime; `factions` must not import
+  `Judges` at runtime.
+- After touching import graph: `from zhoda_core.cli import app` must succeed.
+  Covered by `tests/test_imports.py`.

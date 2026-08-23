@@ -33,6 +33,6 @@ core/
 ```bash
 cd core
 uv sync
-export OPENROUTER_API_KEY=sk-or-...
+# OPENROUTER_API_KEY in ../.env or ./.env
 uv run zhoda deliberate "Which database for a 10k RPS event store?" --auto-clarify
 ```

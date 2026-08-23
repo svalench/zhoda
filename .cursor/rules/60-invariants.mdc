@@ -23,6 +23,15 @@ Current mapping (keep updated):
 | Smart mode without callback degrades, never drops | tests/test_e2e.py::test_smart_mode_without_callback_degrades |
 | Switch needs open objection + cited argument | tests/test_debate.py |
 | Closure only by target faction; supersede leaves ledger | tests/test_debate.py |
+| CLI imports without factions↔judges cycle | tests/test_imports.py |
+| CLI --auto-clarify / --no-clarify flags | tests/test_cli.py |
+| Nearest .env up to git root, no override | tests/test_env.py |
+| Progress callback optional; stages emitted | tests/test_e2e.py::test_progress_emits_protocol_stages |
+| Near-duplicate primary rec merges; negation never auto-merges | tests/test_factions.py |
+| UNANIMOUS ⇒ no minority; deadlock decision lists all theses | tests/test_verdict.py |
+| Garbage/index/empty elicitation answers never become constraints | tests/test_elicitor.py |
+| Zhoda decision synthesized, not raw platform.answer | tests/test_verdict.py + tests/test_e2e.py |
+| Birth unanimity fast-pass / DA spawn opposition | tests/test_e2e.py |
 
 When you add a mechanic to a docstring or docs/, add its test first or in the
 same commit. When you change a schema, update docs/01-core.md in the same

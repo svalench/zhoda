@@ -27,7 +27,7 @@ One vertical wedge, not "any question":
 
 Explicitly not: medicine, finance, CISO theater — regulated domains would eat the project.
 
-Runs on free OpenRouter `:free` models with BYOK. Your keys, your budget cap.
+Runs on OpenRouter with BYOK — `:free` or cheap paid, hard per-question budget.
 
 ## What works / what doesn't
 
@@ -47,7 +47,7 @@ Runs on free OpenRouter `:free` models with BYOK. Your keys, your budget cap.
 cd core
 uv sync
 cp zhoda.yaml.example zhoda.yaml   # set council + judges (outside the council!)
-export OPENROUTER_API_KEY=sk-or-...
+# .env in repo root or core/ — no export needed
 uv run zhoda deliberate "Monolith or microservices for a 4-person B2B SaaS MVP?"
 uv run pytest -m "not live"          # test suite, no network
 ```
