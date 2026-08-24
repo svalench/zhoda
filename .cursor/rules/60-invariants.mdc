@@ -36,6 +36,12 @@ Current mapping (keep updated):
 | Paraphrased elicitation questions asked once | tests/test_elicitor.py::test_paraphrased_questions_are_asked_once |
 | One-option substring maps to that option | tests/test_elicitor.py::test_single_option_substring_counts_as_answer |
 | --context files appear in position prompts | tests/test_e2e.py::test_context_files_land_in_position_prompt |
+| Unasked elicitation → open_ambiguities, never assumptions | tests/test_elicitor.py + tests/test_e2e.py::test_auto_clarify_grounding_is_insufficient_without_context |
+| Synthetic opposition labeled in minority / tree | tests/test_verdict.py::test_synthetic_opposition_is_labeled_in_minority + tests/test_plan.py::test_synthetic_faction_is_labeled_on_the_tree |
+| Rotating DA skipped when synthetic opposition exists | tests/test_e2e.py::test_advocate_spawns_opposition_on_unanimous_debate |
+| SOURCE: parsed into rebuttal_evidence_url | tests/test_debate.py::test_source_line_becomes_rebuttal_evidence_url |
+| String "null" evidence_url → None / assumption | tests/test_plan.py::test_three_evidence_labels |
+| Cost after all LLM; sum(breakdown)==requests; latency_s | tests/test_openrouter.py::test_latency_s_is_measured + tests/test_e2e.py::test_mixed_elicitation_answers_stay_honest |
 
 When you add a mechanic to a docstring or docs/, add its test first or in the
 same commit. When you change a schema, update docs/01-core.md in the same

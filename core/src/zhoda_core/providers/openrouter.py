@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import time
 
 import httpx
 
@@ -73,6 +74,7 @@ class OpenRouterProvider:
         self.prices = prices or {}
         self.cost = CostReport()
         self._question_start = CostReport()
+        self._question_t0: float | None = None
         self._cache: dict[str, str] = {}
         self._db: sqlite3.Connection | None = None
         if cache_path:
@@ -84,15 +86,19 @@ class OpenRouterProvider:
     def begin_question(self) -> None:
         """Snapshot ALL counters at the start of a deliberation."""
         self._question_start = self.cost.model_copy()
+        self._question_t0 = time.monotonic()
 
     def question_report(self) -> CostReport:
         """Per-question delta: what THIS deliberation spent."""
+        started = self._question_t0
+        latency = (time.monotonic() - started) if started is not None else 0.0
         return CostReport(
             requests=self.cost.requests - self._question_start.requests,
             tokens_in=self.cost.tokens_in - self._question_start.tokens_in,
             tokens_out=self.cost.tokens_out - self._question_start.tokens_out,
             cache_hits=self.cost.cache_hits - self._question_start.cache_hits,
             usd=self.cost.usd - self._question_start.usd,
+            latency_s=latency,
         )
 
     @property

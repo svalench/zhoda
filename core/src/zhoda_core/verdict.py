@@ -20,6 +20,10 @@ from .models import (
 )
 from .providers.openrouter import OpenRouterProvider
 
+SYNTHETIC_LABEL = (
+    "[synthetic opposition — no council model held this position]"
+)
+
 
 class VerdictBuilder:
     def build(
@@ -44,7 +48,7 @@ class VerdictBuilder:
         if strength != ConsensusStrength.UNANIMOUS:
             minority_report = (
                 "\n\n".join(
-                    f"{f.name}: {f.platform.thesis}" for f in others if f.platform is not None
+                    _minority_line(f) for f in others if f.platform is not None
                 )
                 or None
             )
@@ -69,12 +73,19 @@ class VerdictBuilder:
         )
 
 
+def _minority_line(faction: Faction) -> str:
+    """Синтетическая оппозиция помечается — иначе minority врёт о диссенте."""
+    thesis = faction.platform.thesis if faction.platform is not None else ""
+    if faction.synthetic:
+        return f"{faction.name} {SYNTHETIC_LABEL}: {thesis}"
+    return f"{faction.name}: {thesis}"
+
+
 def _dissent_decision(strength: ConsensusStrength, factions: list[Faction]) -> str:
     """Карта разногласий: answer лидера не выдаём за решение совета."""
     lines = [f"No zhoda ({strength.value})."]
     for faction in factions:
-        thesis = faction.platform.thesis if faction.platform else ""
-        lines.append(f"{faction.name}: {thesis}")
+        lines.append(_minority_line(faction))
     return "\n".join(lines)
 
 

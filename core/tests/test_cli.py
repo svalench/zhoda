@@ -36,6 +36,7 @@ def test_help_lists_auto_clarify_on_deliberate_subcommand() -> None:
     result = CliRunner().invoke(app, ["deliberate", "--help"])
     assert result.exit_code == 0, result.stdout
     assert "--auto-clarify" in result.stdout
+    assert "open_ambiguities" in result.stdout
     assert "--no-clarify" in result.stdout
     assert "--clarify" in result.stdout
     assert "--context" in result.stdout

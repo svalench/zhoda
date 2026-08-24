@@ -62,6 +62,7 @@ class ScriptedProvider(OpenRouterProvider):
         for i, (want_model, patterns, response) in enumerate(self.script):
             if (want_model is None or want_model == model) and all(p in prompt for p in patterns):
                 self.script.pop(i)
+                self.cost.requests += 1  # честный breakdown: скрипт = вызов
                 return response if isinstance(response, str) else json.dumps(response)
         raise AssertionError(f"no scripted response: model={model} prompt={prompt[:80]}")
 
@@ -750,17 +751,6 @@ async def test_advocate_spawns_opposition_on_unanimous_debate(tmp_path) -> None:
                 "evidence_url": None,
             },
         ),
-        (
-            None,
-            ("devil's advocate",),
-            {
-                "target_faction": "Pragmatists",
-                "flaw_type": "logical",
-                "claim": "the platform never considers write amplification on SSDs",
-                "specifics": "",
-                "evidence_url": None,
-            },
-        ),
         (None, ("Rebut it concisely",), "ok"),
         (None, ("Rebut it concisely",), "ok"),
         (None, ("Rebut it concisely",), "ok"),
@@ -792,8 +782,12 @@ async def test_advocate_spawns_opposition_on_unanimous_debate(tmp_path) -> None:
     spawned = next(e for e in events if e.get("stage") == "opposition_spawned")
     members = spawned["faction"]["members"]
     assert members == ["devils_advocate"]
+    assert spawned["faction"]["synthetic"] is True
     rounds = [e for e in events if e.get("stage") == "round"]
     assert rounds and rounds[0]["critiques"]
+    authors = [c["author_faction"] for c in rounds[0]["critiques"]]
+    assert "devils_advocate" not in authors
+    assert "Skeptics" in authors
 
 
 @pytest.mark.asyncio
@@ -856,6 +850,7 @@ async def test_mixed_elicitation_answers_stay_honest(tmp_path) -> None:
     assert not any("Postgres | Kafka" in c for c in verdict.value_map.constraints)
     assert verdict.decision != ""
     assert "absolute zero" not in verdict.decision.lower()
+    assert sum(verdict.cost.breakdown.values()) == verdict.cost.requests
 
 
 @pytest.mark.asyncio
@@ -896,6 +891,43 @@ async def test_url_answer_is_insufficient_context_and_skips_debate(tmp_path) -> 
     assert verdict.decision.startswith("INSUFFICIENT_CONTEXT:")
     assert verdict.rounds_taken == 0
     assert "positions" not in verdict.cost.breakdown
+    assert provider.script == []
+
+
+@pytest.mark.asyncio
+async def test_auto_clarify_grounding_is_insufficient_without_context(tmp_path) -> None:
+    """auto-clarify не спрашивает, но grounding-вопрос остаётся открытым → IC."""
+    grounding = {
+        "ambiguities": [
+            {
+                "ambiguity": "object unstated",
+                "why_it_matters": "cannot judge an unseen artifact",
+                "candidate_question": "Which project are we evaluating?",
+                "options": [],
+            }
+        ],
+    }
+    provider = ScriptedProvider(
+        [
+            ("m1", ("Do NOT answer",), grounding),
+            ("m2", ("Do NOT answer",), grounding),
+            ("m3", ("Do NOT answer",), grounding),
+        ]
+    )
+    engine = make_engine(provider, tmp_path)
+    verdict = await engine.deliberate(
+        "Evaluate project X",
+        force_protocol=Protocol.VOTE,
+        clarify_mode="auto-clarify",
+    )
+    assert verdict.insufficient_context is True
+    assert verdict.zhoda_reached is False
+    assert verdict.consensus_strength == ConsensusStrength.SPLIT
+    assert verdict.decision.startswith("INSUFFICIENT_CONTEXT:")
+    assert verdict.rounds_taken == 0
+    assert "positions" not in verdict.cost.breakdown
+    assert verdict.value_map.assumptions == []
+    assert "Which project are we evaluating?" in verdict.value_map.open_ambiguities
     assert provider.script == []
 
 

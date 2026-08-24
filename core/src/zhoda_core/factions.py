@@ -64,6 +64,7 @@ class Faction(BaseModel):
     name: str = ""
     members: list[str] = Field(default_factory=list)
     platform: Position | None = None
+    synthetic: bool = False  # порождена протоколом, не советом
 
 
 class FactionClusterer:

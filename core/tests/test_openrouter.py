@@ -120,3 +120,13 @@ async def test_precall_estimate_blocks_before_call() -> None:
     with pytest.raises(BudgetExceededError):  # estimate 0.01 * 2 = $0.02 > cap
         await provider.complete("paid/model", "hi")
     assert calls["n"] == 0  # no request was made
+
+
+@pytest.mark.asyncio
+async def test_latency_s_is_measured() -> None:
+    provider = make_provider(httpx.MockTransport(lambda r: httpx.Response(200, json=OK_RESPONSE)))
+    provider.begin_question()
+    await provider.complete("m:free", "hi")
+    report = provider.question_report()
+    assert report.latency_s >= 0.0
+    assert report.requests == 1

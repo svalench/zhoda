@@ -12,6 +12,7 @@ from zhoda_core.models import (
 )
 from zhoda_core.plan import collect_rejected_paths
 from zhoda_core.tree import build_decision_tree
+from zhoda_core.verdict import SYNTHETIC_LABEL
 
 
 def test_three_evidence_labels() -> None:
@@ -21,6 +22,10 @@ def test_three_evidence_labels() -> None:
     assert (
         Claim(claim="x", evidence_url="https://h", verified=True).label == "sourced"
     )
+    assert Claim(claim="x", evidence_url="null").evidence_url is None
+    assert Claim(claim="x", evidence_url="null").label == "assumption"
+    assert Claim(claim="x", evidence_url="None").evidence_url is None
+    assert Claim(claim="x", evidence_url="").evidence_url is None
 
 
 def test_paths_rejected_only_by_a_reached_consensus() -> None:
@@ -87,3 +92,17 @@ def test_decision_tree_three_labels() -> None:
     assert objection_node.detail["resolution"] == "addressed by platform revision"
     assert objection_node.detail["evidence"] == "unverified_claim"
     assert tree.children[0].detail["claims"][0]["label"] == "unverified_claim"
+    assert tree.children[0].detail["synthetic"] is False
+    assert "note" not in tree.children[0].detail
+
+
+def test_synthetic_faction_is_labeled_on_the_tree() -> None:
+    faction = Faction(
+        name="Pivot Advocates",
+        members=["devils_advocate"],
+        synthetic=True,
+        platform=Position(model="devils_advocate", thesis="Pivot", answer="..."),
+    )
+    tree = build_decision_tree([faction], [], [], "Continue")
+    assert tree.children[0].detail["synthetic"] is True
+    assert tree.children[0].detail["note"] == SYNTHETIC_LABEL

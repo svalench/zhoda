@@ -1,11 +1,13 @@
 """Stage 0: smart elicitation.
 
-Questions are asked ONLY when the ambiguity score clears the threshold;
-otherwise the council proceeds with marked assumptions. The score is
+Questions are asked ONLY when the ambiguity score clears the threshold
+AND mode is smart. auto-clarify and below-threshold never invent facts:
+unasked items land in open_ambiguities, never in assumptions. The score is
 inter-model agreement, not self-report. Round-6 §4: the loop is closed via
 the on_questions callback; without it, questions degrade to open_ambiguities.
 Round-7 §4: apply_answers keeps EVERYTHING — answered questions become
 constraints, unanswered ones become open_ambiguities (nothing is dropped).
+Round-12: leftover after top-3 also stays in open_ambiguities.
 """
 
 from __future__ import annotations
@@ -74,7 +76,8 @@ class ClarifyingQuestion(BaseModel):
 
 class ElicitationResult(BaseModel):
     ambiguity_score: float
-    questions: list[ClarifyingQuestion] = Field(default_factory=list)
+    questions: list[ClarifyingQuestion] = Field(default_factory=list)  # UI: ask these
+    all_questions: list[ClarifyingQuestion] = Field(default_factory=list)  # grounding
     value_map: ValueMap = Field(default_factory=ValueMap)
 
 
@@ -115,21 +118,23 @@ class Elicitor:
         score = len(flagged) / len(payloads)
 
         ambiguities = [a for p in flagged for a in p["ambiguities"]]
+        questions = [q for a in ambiguities if (q := _as_question(a)) is not None]
+        questions = await self._dedup_questions(questions, dedup_model=dedup_model)
+        # auto-clarify / ниже порога: не спрашиваем и не выдаём вопросы за факты
         if mode == "auto-clarify" or score < self.ambiguity_threshold:
             return ElicitationResult(
                 ambiguity_score=score,
-                value_map=ValueMap(assumptions=[a["ambiguity"] for a in ambiguities]),
+                questions=[],
+                all_questions=questions,
+                value_map=ValueMap(open_ambiguities=[q.question for q in questions]),
             )
-        questions = [
-            ClarifyingQuestion(
-                question=a["candidate_question"],
-                why_it_matters=a["why_it_matters"],
-                options=a.get("options", []),
-            )
-            for a in ambiguities
-        ]
-        questions = await self._dedup_questions(questions, dedup_model=dedup_model)
-        return ElicitationResult(ambiguity_score=score, questions=questions[:3])
+        leftover = questions[3:]
+        return ElicitationResult(
+            ambiguity_score=score,
+            questions=questions[:3],
+            all_questions=questions,
+            value_map=ValueMap(open_ambiguities=[q.question for q in leftover]),
+        )
 
     async def _dedup_questions(
         self,
@@ -263,6 +268,21 @@ def grounding_need(
                 "not a URL the council cannot fetch)"
             )
     return None
+
+
+def _as_question(payload: dict) -> ClarifyingQuestion | None:
+    """candidate_question, иначе текст ambiguity — пустое отбрасываем."""
+    text = str(payload.get("candidate_question") or payload.get("ambiguity") or "").strip()
+    if not text:
+        return None
+    options = payload.get("options") or []
+    if not isinstance(options, list):
+        options = []
+    return ClarifyingQuestion(
+        question=text,
+        why_it_matters=str(payload.get("why_it_matters") or ""),
+        options=[str(o) for o in options],
+    )
 
 
 def _unique_by_text(questions: list[ClarifyingQuestion]) -> list[ClarifyingQuestion]:

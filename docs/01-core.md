@@ -31,8 +31,10 @@ Each council model returns ambiguities; an aggregator keeps the 2–4 with the
 highest decision impact. Duplicate questions from different models are
 merged (exact match, then a cheap model groups paraphrases) before the
 user sees at most three. Modes: `smart` (ask the user), `no-clarify`,
-`auto-clarify` (marked assumptions). Unanswered questions land in
-`value_map.open_ambiguities` — honestly, never silently assumed (round-5 §2).
+`auto-clarify` (no prompts; unasked items land in `open_ambiguities`,
+never in `assumptions`). Unanswered questions land in
+`value_map.open_ambiguities` — honestly, never silently assumed (round-5 §2,
+round-12). Leftover questions after the top-3 also stay in `open_ambiguities`.
 Answers are validated against options: a digit `1..n` maps to that option;
 a free-text reply that contains **exactly one** option as a substring maps
 to that option; pasting the option list or a non-matching string is treated
@@ -69,6 +71,8 @@ the main choice. Managed vs self-hosted, caveats, and optional complements
 do not split a pair. The judge **pair** is reserved for consensus and
 closure — pairwise AND of two judges would under-merge. Disagreements go to
 the divergence ledger. The chairman names factions — sanitized, unique names.
+A spawned opposition faction carries `synthetic=True` (reserved member, not a
+council vote). Naming does not clear that flag.
 
 ## Stage 3 — Debate rounds
 
@@ -83,9 +87,13 @@ anyone is asked to defect).
   (red_team) attacks the only platform directly (round-9 §4). On `debate`,
   if clustering produced a single faction, the advocate **spawns an
   opposition faction** with a different primary action (reserved member,
-  not a council vote). If spawn is off or fails, birth unanimity
+  `synthetic=True`, not a council vote). The rotating devil's advocate is
+  **skipped** while that synthetic faction already sits at the table — one
+  chair, not two. If spawn is off or fails, birth unanimity
   **fast-passes** (`rounds_taken = 0`, transcript `fast_pass:
   unanimity_at_birth`) instead of empty stability rounds.
+- **Rebuttal `SOURCE:`** lines are parsed into `rebuttal_evidence_url` and
+  stripped from prose; a URL named from memory is `unverified_claim`.
 - **Closure**: both judges (outside the council, no silent fallback —
   round-9 §2) must agree the rebuttal addressed the objection.
 - **Superseded**: the author withdraws, or both judges agree the revision
@@ -111,7 +119,8 @@ Verdict {
   decision, zhoda_reached, consensus_strength, protocol,
   decision_origin,        # "council" | "appeal_without_consensus"
   router_confidence, value_map,
-  minority_report,        # preserved dissent — never erased
+  minority_report,        # preserved dissent — never erased; synthetic
+                          # opposition is labeled (round-12)
   dissent_map[], switches[], rounds_taken, cost, transcript_id,
   plan_contract?,         # rendered ONLY on zhoda (round-10 §2)
   paths_rejected[],       # honest programmatic count (rounds 10-11)
@@ -140,7 +149,10 @@ Verdict {
    promise unmeasured numbers.
 
 On `UNANIMOUS`, `minority_report` is empty — the judges already said it is
-one position, even if faction objects were not merged. On split/deadlock,
+one position, even if faction objects were not merged. A synthetic
+opposition in the minority is labeled
+`[synthetic opposition — no council model held this position]` (round-12;
+same honesty as `decision_origin = "appeal_without_consensus"`). On split/deadlock,
 `decision` is a dissent map of every faction thesis, not the leading
 faction's raw `answer`. On zhoda, the chairman **synthesizes** `decision`
 for the user (action first, closed objections, overturn conditions);
@@ -153,6 +165,9 @@ no zhoda, no position or debate spend.
 
 Per-question budget cap, config price table, semantic cache
 (`cache_hits` counted), per-stage request breakdown in every verdict.
+`sum(breakdown.values()) == requests`. `latency_s` is wall-clock from
+`begin_question` to the final snapshot, taken **after** all LLM calls
+(including decision synthesis and plan contract).
 
 ## Session state
 

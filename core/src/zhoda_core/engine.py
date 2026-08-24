@@ -18,6 +18,7 @@ from .factions import ADVOCATE_ALIAS, Faction, FactionClusterer
 from .judges import Judges
 from .models import (
     ConsensusStrength,
+    CostReport,
     Disagreement,
     ObjectionStatus,
     Position,
@@ -163,12 +164,17 @@ class ZhodaEngine:
                 context=context,
                 dedup_model=self.chairman,
             )
-            value_map = elicitation.value_map
-            elicit_questions = elicitation.questions
+            leftover = list(elicitation.value_map.open_ambiguities)
+            elicit_questions = elicitation.all_questions or elicitation.questions
             if elicitation.questions:
                 elicit_answers = on_questions(elicitation.questions) if on_questions else []
                 value_map = self.elicitor.apply_answers(elicitation.questions, elicit_answers)
+                for item in leftover:
+                    if item not in value_map.open_ambiguities:
+                        value_map.open_ambiguities.append(item)
                 self.transcripts.append(tid, {"stage": "answers", "answers": elicit_answers})
+            else:
+                value_map = elicitation.value_map
             self.transcripts.append(tid, {"stage": "elicit", **elicitation.model_dump()})
             emit(
                 "elicit",
@@ -328,8 +334,6 @@ class ZhodaEngine:
             if c.status == ObjectionStatus.OPEN
         ]
 
-        cost = self.provider.question_report()
-        cost.breakdown = breakdown
         verdict = self.verdicts.build(
             factions,
             strength,
@@ -340,7 +344,7 @@ class ZhodaEngine:
             rounds_taken=rounds_taken,
             transcript_id=tid,
             switches=debate.switches,
-            cost=cost,
+            cost=CostReport(),
             divergences=divergences,
         )
         if appeal_decision:
@@ -381,6 +385,9 @@ class ZhodaEngine:
             verdict.decision,
         ).model_dump()
         mark("render")
+        cost = self.provider.question_report()
+        cost.breakdown = breakdown
+        verdict.cost = cost
         self.transcripts.append(tid, {"stage": "verdict", "verdict": verdict.model_dump()})
         emit("verdict", f"verdict zhoda={zhoda}", done=True)
         return verdict
@@ -431,4 +438,5 @@ class ZhodaEngine:
             name=ADVOCATE_ALIAS,
             members=[ADVOCATE_ALIAS],
             platform=platform,
+            synthetic=True,
         )

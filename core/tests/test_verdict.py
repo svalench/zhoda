@@ -8,7 +8,7 @@ from zhoda_core.models import (
     Protocol,
     ValueMap,
 )
-from zhoda_core.verdict import VerdictBuilder
+from zhoda_core.verdict import SYNTHETIC_LABEL, VerdictBuilder
 
 
 def _faction(name: str, thesis: str, answer: str) -> Faction:
@@ -60,3 +60,16 @@ def test_deadlock_decision_lists_all_theses_not_leader_answer() -> None:
     assert "No zhoda" in verdict.decision
     assert verdict.minority_report
     assert "Cassandra" in verdict.minority_report
+
+
+def test_synthetic_opposition_is_labeled_in_minority() -> None:
+    real = _faction("Pragmatists", "Continue as-is", "keep the protocol")
+    real.members = ["A", "B", "C"]
+    fake = _faction("Pivot Advocates", "Pivot to plan-contracts", "pivot now")
+    fake.members = ["devils_advocate"]
+    fake.synthetic = True
+    verdict = _build([real, fake], ConsensusStrength.MAJORITY, zhoda=True)
+    assert verdict.minority_report
+    assert SYNTHETIC_LABEL in verdict.minority_report
+    assert "Pivot Advocates" in verdict.minority_report
+    assert "Pragmatists" not in (verdict.minority_report or "")

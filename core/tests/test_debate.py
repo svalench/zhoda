@@ -91,3 +91,24 @@ def test_objection_cap_defers_overflow() -> None:
     )
     assert len(round_.critiques) == 2
     assert round_.deferred and "objection cap" in round_.deferred[0]["reason"]
+
+
+def test_source_line_becomes_rebuttal_evidence_url() -> None:
+    from zhoda_core.debate import extract_source
+
+    prose, url = extract_source(
+        "The experiment needs a control.\nSOURCE: https://hbr.org/2018/05/x"
+    )
+    assert url == "https://hbr.org/2018/05/x"
+    assert "SOURCE:" not in prose
+    assert "control" in prose
+
+    engine = make_engine()
+    critique = engine.register_critique(make_critique())
+    assert engine.close_objection(
+        critique.id,
+        "Rebuttal with a citation.\nSOURCE: https://example.com/a",
+        rebuttal_by="Pragmatists",
+    )
+    assert critique.rebuttal_evidence_url == "https://example.com/a"
+    assert "SOURCE:" not in critique.rebuttal

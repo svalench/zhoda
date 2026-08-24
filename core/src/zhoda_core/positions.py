@@ -24,7 +24,7 @@ Respond with ONLY valid JSON:
 {{"thesis": "core position in 1-2 sentences",
   "answer": "full answer",
   "claims": [{{"claim": "key argument",
-              "evidence_url": "https://source or null",
+              "evidence_url": null,
               "confidence": 0.0}}],
   "falsifiability": "conditions under which this position is wrong",
   "confidence": 0.0}}

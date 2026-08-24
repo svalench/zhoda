@@ -78,7 +78,8 @@ ValueMap { goal, success_criteria[], constraints[], anti_goals[], open_ambiguiti
 
 Deliberation may pause mid-debate to request clarification: factions discovered
 that the verdict depends on an unstated value. Modes: `--no-clarify`,
-`--auto-clarify` (assumptions are generated and explicitly marked).
+`--auto-clarify` (no prompts; unanswered items land in `open_ambiguities`,
+never marked as facts).
 
 ### Stage 1 — Positions
 

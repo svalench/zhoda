@@ -4,6 +4,7 @@ what closed it -> who switched. Evidence labels are THREE states
 
 from .factions import Faction
 from .models import Critique, DecisionNode, FactionSwitch, ObjectionStatus
+from .verdict import SYNTHETIC_LABEL
 
 _RESOLUTION = {
     ObjectionStatus.CLOSED: "closed by rebuttal",
@@ -31,6 +32,8 @@ def build_decision_tree(
             label=faction.name,
             detail={
                 "members": faction.members,
+                "synthetic": faction.synthetic,
+                **({"note": SYNTHETIC_LABEL} if faction.synthetic else {}),
                 "thesis": faction.platform.thesis if faction.platform else "",
                 "claims": [
                     {

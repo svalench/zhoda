@@ -6,16 +6,30 @@ labeled UNVERIFIED — null is more honest.
 """
 
 import asyncio
+import re
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from .factions import Faction
+from .factions import ADVOCATE_ALIAS, Faction
 from .judges import Judges
 from .models import Critique, FactionSwitch, FlawType, ObjectionStatus, Position
 from .providers.openrouter import OpenRouterProvider
 
 MIN_CLAIM_LEN = 20
+
+_SOURCE_RE = re.compile(r"SOURCE:\s*(https?://\S+)", re.IGNORECASE)
+
+
+def extract_source(text: str) -> tuple[str, str | None]:
+    """SOURCE: url → (prose without the line, url). URL без fetch = unverified."""
+    match = _SOURCE_RE.search(text)
+    if not match:
+        return text.strip(), None
+    url = match.group(1).rstrip(").,]")
+    prose = _SOURCE_RE.sub("", text).strip()
+    return prose, url
+
 
 CRITIQUE_PROMPT = """You represent faction \"{name}\". Platform thesis: {platform}
 Strongest opposing faction \"{opponent}\": {opponent_thesis}
@@ -141,7 +155,9 @@ class DebateEngine:
             if item.id == objection_id and item.status == ObjectionStatus.OPEN:
                 if rebuttal_by != item.target_faction:
                     return False
-                item.rebuttal = rebuttal
+                item.rebuttal, url = extract_source(rebuttal)
+                if url:
+                    item.rebuttal_evidence_url = url
                 item.status = ObjectionStatus.CLOSED
                 return True
         return False
@@ -201,15 +217,22 @@ class DebateEngine:
                     strict=True,
                 )
             )
-            if self.devils_advocate and leading.platform is not None:
+            synthetic_opposition = any(
+                f.synthetic or f.members == [ADVOCATE_ALIAS] for f in factions
+            )
+            if (
+                self.devils_advocate
+                and leading.platform is not None
+                and not synthetic_opposition
+            ):
                 candidates = sorted(a for a in speakers if a not in leading.members)
                 candidates = candidates or sorted(speakers)
                 advocate_alias = candidates[(number - 1) % len(candidates)]
                 da = await self._critique(
-                    Faction(name="devils_advocate", members=[advocate_alias]),
+                    Faction(name=ADVOCATE_ALIAS, members=[advocate_alias]),
                     leading, speakers, DEVILS_ADVOCATE_PROMPT, number,
                 )
-                raw.append(("devils_advocate", da))
+                raw.append((ADVOCATE_ALIAS, da))
         elif self.devils_advocate and factions[0].platform is not None:
             # red_team on unanimity: attack the only platform directly
             only = factions[0]
@@ -267,6 +290,11 @@ class DebateEngine:
             )
             if votes and all(isinstance(v, dict) and v.get("closed") for v in votes):
                 self.close_objection(critique.id, rebuttal, rebuttal_by=target.name)
+            else:
+                prose, url = extract_source(rebuttal)
+                critique.rebuttal = prose
+                if url:
+                    critique.rebuttal_evidence_url = url
 
         await asyncio.gather(
             *(judge_closure(item) for item in rebuttals if isinstance(item, tuple)),

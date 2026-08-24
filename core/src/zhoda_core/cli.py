@@ -99,7 +99,7 @@ def deliberate(
     auto_clarify: bool = typer.Option(
         False,
         "--auto-clarify",
-        help="Stage 0: marked assumptions, no prompts",
+        help="Stage 0: no prompts; unanswered → open_ambiguities",
     ),
     no_clarify: bool = typer.Option(
         False,

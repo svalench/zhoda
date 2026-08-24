@@ -93,3 +93,19 @@ lists the critique and the fix that landed.
 - *Empty count read as "the protocol found nothing".* → CLI: clean unanimity
   says "nothing was disputed, nothing to reject" — the metric stays honest,
   the presentation stops underselling it.
+
+## Round 12 — Stage 0, synthetic opposition, cost
+
+- *Unasked elicitation dumped into assumptions.* → Always collect/dedup;
+  unasked items (auto-clarify, below threshold, leftover after top-3) land in
+  `open_ambiguities`. Grounding still sees them.
+- *Spawned opposition looked like a real minority.* → `Faction.synthetic`;
+  minority/tree/CLI carry
+  `[synthetic opposition — no council model held this position]`.
+- *Rotating DA sat beside the spawned faction.* → Skip rotating DA while a
+  synthetic opposition already exists.
+- *`SOURCE:` was prompt-only.* → Parsed into `rebuttal_evidence_url`,
+  stripped from prose; string `"null"` URLs collapse to `None`.
+- *Cost snapshot froze before synthesize/plan; `latency_s` stayed 0.* →
+  Snapshot after all LLM + `mark("render")`; `sum(breakdown) == requests`;
+  `latency_s` from `begin_question`.

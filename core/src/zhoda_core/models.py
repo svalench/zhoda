@@ -8,7 +8,19 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+_NULLISH = {"null", "none", "", "undefined"}
+
+
+def _none_if_nullish(value: object) -> str | None:
+    """Модель часто пишет строку \"null\" вместо JSON null."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text.casefold() in _NULLISH:
+        return None
+    return text
 
 
 class TaskClass(StrEnum):
@@ -57,6 +69,11 @@ class Claim(BaseModel):
     confidence: float = 0.5
     verified: bool = False  # set by a source verifier, or for user-provided sources
 
+    @field_validator("evidence_url", mode="before")
+    @classmethod
+    def _nullish_url(cls, value: object) -> str | None:
+        return _none_if_nullish(value)
+
     @property
     def label(self) -> str:
         if self.evidence_url is None:
@@ -102,6 +119,11 @@ class Critique(BaseModel):
     rebuttal: str = ""
     rebuttal_evidence_url: str | None = None
     status: ObjectionStatus = ObjectionStatus.OPEN
+
+    @field_validator("evidence_url", "rebuttal_evidence_url", mode="before")
+    @classmethod
+    def _nullish_url(cls, value: object) -> str | None:
+        return _none_if_nullish(value)
 
 
 class FactionSwitch(BaseModel):
