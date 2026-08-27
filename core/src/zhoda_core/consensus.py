@@ -14,7 +14,7 @@ import asyncio
 
 from .factions import ADVOCATE_ALIAS, Faction
 from .judges import Judges
-from .models import ConsensusStrength
+from .models import ConsensusStrength, bind_user_context
 from .providers.openrouter import OpenRouterProvider
 
 AGREEMENT_PROMPT = """Here are the theses of all factions:
@@ -35,6 +35,7 @@ class ConsensusChecker:
     def __init__(self, provider: OpenRouterProvider, stability_rounds: int = 2) -> None:
         self.provider = provider
         self.stability_rounds = stability_rounds
+        self.user_context: str = ""
         self._stable_streak = 0
 
     async def classify(self, factions: list[Faction], *, judges: Judges) -> ConsensusStrength:
@@ -53,7 +54,13 @@ class ConsensusChecker:
         pair = judges.outside() or judges.pair_for(probe)
         votes = await asyncio.gather(
             *(
-                self.provider.ask_json(judge, AGREEMENT_PROMPT.format(theses=theses))
+                self.provider.ask_json(
+                    judge,
+                    bind_user_context(
+                        AGREEMENT_PROMPT.format(theses=theses),
+                        self.user_context,
+                    ),
+                )
                 for judge in pair
             ),
             return_exceptions=True,

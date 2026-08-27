@@ -25,6 +25,7 @@ from .models import (
     Protocol,
     ValueMap,
     Verdict,
+    bind_user_context,
 )
 from .plan import collect_rejected_paths, render_plan_contract
 from .positions import extract_positions
@@ -134,13 +135,17 @@ class ZhodaEngine:
         speakers = {alias: real for real, alias in aliases.items()}
         judges = Judges(self.judge_models, aliases)
         breakdown: dict[str, int] = {}
+        cache_breakdown: dict[str, int] = {}
         last_mark = 0
+        last_hits = 0
 
         def mark(stage: str) -> None:
-            nonlocal last_mark
-            now = self.provider.question_report().requests
-            breakdown[stage] = now - last_mark
-            last_mark = now
+            nonlocal last_mark, last_hits
+            report = self.provider.question_report()
+            breakdown[stage] = report.requests - last_mark
+            cache_breakdown[stage] = report.cache_hits - last_hits
+            last_mark = report.requests
+            last_hits = report.cache_hits
 
         def emit(stage: str, message: str, *, done: bool = False) -> None:
             if on_progress is not None:
@@ -187,6 +192,7 @@ class ZhodaEngine:
         if need is not None:
             cost = self.provider.question_report()
             cost.breakdown = breakdown
+            cost.cache_breakdown = cache_breakdown
             verdict = Verdict(
                 decision=f"INSUFFICIENT_CONTEXT: {need}",
                 zhoda_reached=False,
@@ -205,6 +211,11 @@ class ZhodaEngine:
             emit("verdict", "insufficient_context — no debate", done=True)
             return verdict
 
+        user_context = value_map.as_prompt_block()
+        debate.user_context = user_context
+        clusterer.user_context = user_context
+        consensus.user_context = user_context
+
         emit("positions", f"collecting positions ({len(self.council)} models)…")
         positions = await extract_positions(
             self.provider,
@@ -219,12 +230,17 @@ class ZhodaEngine:
             {"stage": "positions", "positions": [p.model_dump() for p in positions]},
         )
         mark("positions")
-        emit("positions", f"positions: {len(positions)} models", done=True)
+        if breakdown["positions"] == 0 and cache_breakdown.get("positions", 0) > 0:
+            emit("positions", f"positions: cached ({len(positions)} models)", done=True)
+        else:
+            emit("positions", f"positions: {len(positions)} models", done=True)
 
         emit("factions", "clustering factions…")
         factions = await clusterer.cluster(positions, judges=judges, speakers=speakers)
         if route.protocol == Protocol.DEBATE and len(factions) == 1 and self.devils_advocate:
-            opposition = await self._spawn_opposition(question, factions[0], speakers)
+            opposition = await self._spawn_opposition(
+                question, factions[0], speakers, user_context,
+            )
             if opposition is not None:
                 factions.append(opposition)
                 self.transcripts.append(
@@ -311,14 +327,17 @@ class ZhodaEngine:
             escalated_to = self.escalation_model
             appeal = await self.provider.ask_json(
                 self.escalation_model,
-                APPEAL_PROMPT.format(
-                    question=question,
-                    theses="; ".join(
-                        f"{f.name}: {f.platform.thesis}" for f in factions if f.platform
+                bind_user_context(
+                    APPEAL_PROMPT.format(
+                        question=question,
+                        theses="; ".join(
+                            f"{f.name}: {f.platform.thesis}" for f in factions if f.platform
+                        ),
+                        objections="; ".join(
+                            c.claim for c in debate.objections if c.status == ObjectionStatus.OPEN
+                        ),
                     ),
-                    objections="; ".join(
-                        c.claim for c in debate.objections if c.status == ObjectionStatus.OPEN
-                    ),
+                    user_context,
                 ),
             )
             appeal_decision = appeal.get("decision")
@@ -387,6 +406,7 @@ class ZhodaEngine:
         mark("render")
         cost = self.provider.question_report()
         cost.breakdown = breakdown
+        cost.cache_breakdown = cache_breakdown
         verdict.cost = cost
         self.transcripts.append(tid, {"stage": "verdict", "verdict": verdict.model_dump()})
         emit("verdict", f"verdict zhoda={zhoda}", done=True)
@@ -414,6 +434,7 @@ class ZhodaEngine:
         question: str,
         leading: Faction,
         speakers: dict[str, str],
+        user_context: str,
     ) -> Faction | None:
         """Адвокат порождает вторую фракцию с другим primary action."""
         if leading.platform is None:
@@ -423,10 +444,13 @@ class ZhodaEngine:
         try:
             data = await self.provider.ask_json(
                 actor,
-                OPPOSITION_PROMPT.format(
-                    question=question,
-                    thesis=leading.platform.thesis,
-                    answer=leading.platform.answer,
+                bind_user_context(
+                    OPPOSITION_PROMPT.format(
+                        question=question,
+                        thesis=leading.platform.thesis,
+                        answer=leading.platform.answer,
+                    ),
+                    user_context,
                 ),
             )
             platform = Position(model=ADVOCATE_ALIAS, **data)

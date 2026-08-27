@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from .models import Disagreement, Position
+from .models import Disagreement, Position, bind_user_context
 from .providers.openrouter import OpenRouterProvider, make_cache_key
 
 if TYPE_CHECKING:
@@ -70,6 +70,7 @@ class Faction(BaseModel):
 class FactionClusterer:
     def __init__(self, provider: OpenRouterProvider) -> None:
         self.provider = provider
+        self.user_context: str = ""
         self.divergences: list[Disagreement] = []
         self.prefilter_merges: list[dict[str, str]] = []
 
@@ -145,15 +146,19 @@ class FactionClusterer:
 
     async def _compare(self, a: Position, b: Position, judges: Judges) -> dict[str, object]:
         probe = Faction(name="probe", members=[a.model, b.model])
-        return await self.provider.ask_json(
-            judges.for_faction(probe),
+        prompt = bind_user_context(
             PAIRWISE_PROMPT.format(
                 a_thesis=a.thesis,
                 a_answer=a.answer,
                 b_thesis=b.thesis,
                 b_answer=b.answer,
             ),
-            cache_key=make_cache_key("pair", a.thesis, a.answer, b.thesis, b.answer),
+            self.user_context,
+        )
+        return await self.provider.ask_json(
+            judges.for_faction(probe),
+            prompt,
+            cache_key=make_cache_key("pair", prompt),
         )
 
     async def _synthesize(self, members: list[Position], speakers: dict[str, str]) -> Position:
@@ -162,9 +167,13 @@ class FactionClusterer:
         if speaker is None:
             return members[0]
         answers = "\n\n".join(f"- {p.thesis}: {p.answer}" for p in members)
+        prompt = bind_user_context(
+            SYNTHESIS_PROMPT.format(answers=answers),
+            self.user_context,
+        )
         data = await self.provider.ask_json(
             speaker,
-            SYNTHESIS_PROMPT.format(answers=answers),
-            cache_key=make_cache_key("synth", answers),
+            prompt,
+            cache_key=make_cache_key("synth", prompt),
         )
         return Position(model=members[0].model, **data)

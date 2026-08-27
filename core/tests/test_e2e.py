@@ -952,3 +952,64 @@ async def test_context_files_land_in_position_prompt(tmp_path) -> None:
     )
     assert verdict.zhoda_reached is True
     assert verdict.insufficient_context is False
+
+
+@pytest.mark.asyncio
+async def test_elicitation_answers_reach_positions_and_verdict(tmp_path) -> None:
+    """Ответы Stage 0 попадают в промпты позиций и вердикта (не в cache по одному вопросу)."""
+    payload = {
+        "ambiguities": [
+            {
+                "ambiguity": "stakes unstated",
+                "why_it_matters": "changes urgency",
+                "candidate_question": "What if we miss the deadline?",
+                "options": ["minimal consequences", "serious consequences"],
+            }
+        ],
+    }
+
+    async def run(answer: str, thesis: str, decision: str) -> tuple:
+        script = [
+            ("m1", ("Do NOT answer",), payload),
+            ("m2", ("Do NOT answer",), payload),
+            ("m3", ("Do NOT answer",), payload),
+            ("m1", ("independent structured stance", answer), position(thesis)),
+            ("m2", ("independent structured stance", answer), position(thesis)),
+            ("m3", ("independent structured stance", answer), position(thesis)),
+            (None, ("Synthesize the shared platform", answer), position(thesis)),
+            (None, ("Name each faction",), {}),
+            (None, ("SYNTHESIZE THE COUNCIL DECISION", answer), {"decision": decision}),
+            (None, ("PLAN CONTRACT",), PLAN),
+        ]
+        engine = make_engine(
+            ScriptedProvider(script),
+            tmp_path,
+            devils_advocate=False,
+        )
+        verdict = await engine.deliberate(
+            "Should we ship next week?",
+            force_protocol=Protocol.VOTE,
+            clarify_mode="smart",
+            on_questions=lambda qs: [answer],
+        )
+        events = engine.transcripts.read(verdict.transcript_id)
+        pos_event = next(e for e in events if e.get("stage") == "positions")
+        theses = [p["thesis"] for p in pos_event["positions"]]
+        return verdict, theses
+
+    cheap = "minimal consequences"
+    costly = "serious consequences"
+    v1, t1 = await run(
+        cheap, "Ship now — miss is cheap", "Ship now; missing the deadline is cheap",
+    )
+    v2, t2 = await run(
+        costly, "Slip the date — miss is costly", "Slip; missing the deadline is costly",
+    )
+    assert cheap in v1.value_map.constraints[0]
+    assert costly in v2.value_map.constraints[0]
+    assert t1 != t2
+    assert all("cheap" in t.lower() for t in t1)
+    assert all("costly" in t.lower() for t in t2)
+    assert v1.decision != v2.decision
+    assert "cheap" in v1.decision.lower()
+    assert "costly" in v2.decision.lower()

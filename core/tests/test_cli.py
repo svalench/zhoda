@@ -3,7 +3,8 @@
 import pytest
 from typer.testing import CliRunner
 
-from zhoda_core.cli import app, apply_progress, resolve_clarify_mode
+from zhoda_core.cli import app, apply_progress, format_cost_breakdown, resolve_clarify_mode
+from zhoda_core.models import CostReport
 from zhoda_core.progress import ProgressEvent
 
 
@@ -67,3 +68,16 @@ def test_apply_progress_prints_done_and_updates_spinner() -> None:
     apply_progress(ProgressEvent("route", "protocol=debate", done=True), status)
     assert status.messages[-1] == "[cyan]protocol=debate[/cyan]"
     assert status.messages[0] == "[cyan]routing protocol…[/cyan]"
+
+
+def test_breakdown_shows_cached_not_zero() -> None:
+    cost = CostReport(
+        requests=2,
+        cache_hits=3,
+        breakdown={"route": 2, "positions": 0},
+        cache_breakdown={"route": 0, "positions": 3},
+    )
+    text = format_cost_breakdown(cost)
+    assert "positions: cached" in text
+    assert "route: 2" in text
+    assert "positions: 0" not in text

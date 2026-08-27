@@ -13,7 +13,14 @@ from pydantic import BaseModel, Field
 
 from .factions import ADVOCATE_ALIAS, Faction
 from .judges import Judges
-from .models import Critique, FactionSwitch, FlawType, ObjectionStatus, Position
+from .models import (
+    Critique,
+    FactionSwitch,
+    FlawType,
+    ObjectionStatus,
+    Position,
+    bind_user_context,
+)
 from .providers.openrouter import OpenRouterProvider
 
 MIN_CLAIM_LEN = 20
@@ -124,8 +131,12 @@ class DebateEngine:
         self.devils_advocate = devils_advocate
         self.max_new_per_round = max_new_per_round
         self.max_active = max_active
+        self.user_context: str = ""
         self.objections: list[Critique] = []
         self.switches: list[FactionSwitch] = []
+
+    def _bind(self, prompt: str) -> str:
+        return bind_user_context(prompt, self.user_context)
 
     def register_critique(self, critique: Critique) -> Critique:
         """Structural prefilter + ID assignment (semantic validation: judges)."""
@@ -263,11 +274,11 @@ class DebateEngine:
                 return None
             text = await self.provider.complete(
                 speaker,
-                REBUTTAL_PROMPT.format(
+                self._bind(REBUTTAL_PROMPT.format(
                     name=target.name, platform=target.platform.thesis,
                     flaw_type=critique.flaw_type, claim=critique.claim,
                     specifics=critique.specifics,
-                ),
+                )),
             )
             return critique, text
 
@@ -281,10 +292,10 @@ class DebateEngine:
             votes = await asyncio.gather(
                 *(self.provider.ask_json(
                     judge,
-                    CLOSURE_PROMPT.format(
+                    self._bind(CLOSURE_PROMPT.format(
                         flaw_type=critique.flaw_type, claim=critique.claim,
                         specifics=critique.specifics, rebuttal=rebuttal,
-                    ),
+                    )),
                 ) for judge in judges.pair_for(target)),
                 return_exceptions=True,
             )
@@ -315,10 +326,10 @@ class DebateEngine:
             )
             data = await self.provider.ask_json(
                 speaker,
-                REVISE_PROMPT.format(
+                self._bind(REVISE_PROMPT.format(
                     name=faction.name, thesis=faction.platform.thesis,
                     objections=objections_text,
-                ),
+                )),
             )
             return faction, data, speaker
 
@@ -352,22 +363,22 @@ class DebateEngine:
                     if author_speaker is not None:
                         answer = await self.provider.ask_json(
                             author_speaker,
-                            WITHDRAW_PROMPT.format(
+                            self._bind(WITHDRAW_PROMPT.format(
                                 flaw_type=critique.flaw_type, claim=critique.claim,
                                 specifics=critique.specifics,
                                 thesis=faction.platform.thesis,
-                            ),
+                            )),
                         )
                         withdrawn = bool(answer.get("withdraw"))
                 if not withdrawn:
                     votes = await asyncio.gather(
                         *(self.provider.ask_json(
                             judge,
-                            SUPERSEDE_PROMPT.format(
+                            self._bind(SUPERSEDE_PROMPT.format(
                                 flaw_type=critique.flaw_type, claim=critique.claim,
                                 specifics=critique.specifics,
                                 thesis=faction.platform.thesis,
-                            ),
+                            )),
                         ) for judge in judges.pair_for(faction)),
                         return_exceptions=True,
                     )
@@ -398,10 +409,10 @@ class DebateEngine:
                 )
                 data = await self.provider.ask_json(
                     speaker,
-                    SWITCH_PROMPT.format(
+                    self._bind(SWITCH_PROMPT.format(
                         claim=objection.claim,
                         opponent_thesis=target.platform.thesis if target.platform else "",
-                    ),
+                    )),
                 )
                 if not data.get("switch"):
                     continue
@@ -438,9 +449,9 @@ class DebateEngine:
             return None
         return await self.provider.ask_json(
             speaker,
-            prompt.format(
+            self._bind(prompt.format(
                 name=faction.name,
                 platform=faction.platform.thesis if faction.platform else "(none)",
                 opponent=target.name, opponent_thesis=target.platform.thesis,
-            ),
+            )),
         )

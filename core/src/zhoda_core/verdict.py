@@ -17,6 +17,7 @@ from .models import (
     Protocol,
     ValueMap,
     Verdict,
+    bind_user_context,
 )
 from .providers.openrouter import OpenRouterProvider
 
@@ -131,15 +132,18 @@ async def synthesize_decision(
     ]
     data = await provider.ask_json(
         chairman,
-        DECISION_PROMPT.format(
-            question=question,
-            thesis=leading.platform.thesis,
-            answer=leading.platform.answer,
-            closed="; ".join(closed) or "(none)",
-            open_objections="; ".join(open_against) or "(none)",
-            falsifiability=leading.platform.falsifiability,
-            constraints="; ".join(value_map.constraints) or "(none)",
-            open_ambiguities="; ".join(value_map.open_ambiguities) or "(none)",
+        bind_user_context(
+            DECISION_PROMPT.format(
+                question=question,
+                thesis=leading.platform.thesis,
+                answer=leading.platform.answer,
+                closed="; ".join(closed) or "(none)",
+                open_objections="; ".join(open_against) or "(none)",
+                falsifiability=leading.platform.falsifiability,
+                constraints="; ".join(value_map.constraints) or "(none)",
+                open_ambiguities="; ".join(value_map.open_ambiguities) or "(none)",
+            ),
+            value_map.as_prompt_block(),
         ),
     )
     decision = str(data.get("decision") or "").strip()

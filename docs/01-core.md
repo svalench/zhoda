@@ -61,6 +61,12 @@ Position { model, thesis, answer, claims[], falsifiability, confidence }
 ```
 
 Positions are anonymized from the start (`model` holds the alias).
+A shared **user context** block (`ValueMap.as_prompt_block`: goal, success
+criteria, constraints including answered Q&A, anti-goals, unresolved
+ambiguities) is prepended to every prompt that reasons about the question
+(positions, faction synthesis, critiques, rebuttals, revision, consensus,
+verdict, appeal). The cache key hashes the full prompt, so a new answer
+cannot replay a stale position.
 
 ## Stage 2 — Factions
 
@@ -165,7 +171,8 @@ no zhoda, no position or debate spend.
 
 Per-question budget cap, config price table, semantic cache
 (`cache_hits` counted), per-stage request breakdown in every verdict.
-`sum(breakdown.values()) == requests`. `latency_s` is wall-clock from
+`sum(breakdown.values()) == requests`. A stage with 0 requests and
+`cache_hits > 0` is shown as `cached`, not `0`. `latency_s` is wall-clock from
 `begin_question` to the final snapshot, taken **after** all LLM calls
 (including decision synthesis and plan contract).
 

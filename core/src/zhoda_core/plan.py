@@ -9,7 +9,14 @@ rejected — an unresolved dispute is not a rejection.
 """
 
 from .factions import Faction
-from .models import Critique, ObjectionStatus, PlanContract, RejectedPath, Verdict
+from .models import (
+    Critique,
+    ObjectionStatus,
+    PlanContract,
+    RejectedPath,
+    Verdict,
+    bind_user_context,
+)
 from .providers.openrouter import OpenRouterProvider, make_cache_key
 
 PLAN_PROMPT = """Render this deliberation outcome as a PLAN CONTRACT for a cheaper
@@ -74,11 +81,14 @@ async def render_plan_contract(
     owns the facts."""
     data = await provider.ask_json(
         chairman,
-        PLAN_PROMPT.format(
-            decision=verdict.decision,
-            value_map=verdict.value_map.model_dump(),
-            rejected=[p.model_dump() for p in verdict.paths_rejected],
-            ambiguities=verdict.value_map.open_ambiguities,
+        bind_user_context(
+            PLAN_PROMPT.format(
+                decision=verdict.decision,
+                value_map=verdict.value_map.model_dump(),
+                rejected=[p.model_dump() for p in verdict.paths_rejected],
+                ambiguities=verdict.value_map.open_ambiguities,
+            ),
+            verdict.value_map.as_prompt_block(),
         ),
         cache_key=make_cache_key("plan", verdict.transcript_id),
     )

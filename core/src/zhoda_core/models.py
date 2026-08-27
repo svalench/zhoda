@@ -54,6 +54,29 @@ class ValueMap(BaseModel):
     assumptions: list[str] = Field(default_factory=list)
     open_ambiguities: list[str] = Field(default_factory=list)
 
+    def as_prompt_block(self) -> str:
+        """Общий блок ответов пользователя для всех промптов рассуждения."""
+
+        def _join(items: list[str]) -> str:
+            return "; ".join(items) if items else "(none)"
+
+        return (
+            "User context (elicited — constraints ARE given facts, not hypotheses):\n"
+            f"Goal: {self.goal or '(unspecified)'}\n"
+            f"Success criteria: {_join(self.success_criteria)}\n"
+            f"Constraints: {_join(self.constraints)}\n"
+            f"Anti-goals: {_join(self.anti_goals)}\n"
+            f"Unresolved ambiguities (NOT facts): {_join(self.open_ambiguities)}"
+        )
+
+
+def bind_user_context(prompt: str, user_context: str) -> str:
+    """Приклеить user context в начало промпта — cache key должен покрывать блок."""
+    block = user_context.strip()
+    if not block:
+        return prompt
+    return f"{block}\n\n{prompt}"
+
 
 class Claim(BaseModel):
     """An argument with evidence discipline (values №1, fixed in round-10 §1):
@@ -151,6 +174,7 @@ class CostReport(BaseModel):
     usd: float = 0.0
     latency_s: float = 0.0
     breakdown: dict[str, int] = Field(default_factory=dict)
+    cache_breakdown: dict[str, int] = Field(default_factory=dict)
 
 
 class PlanStep(BaseModel):

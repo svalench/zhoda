@@ -16,7 +16,7 @@ from rich.status import Status
 from .elicitor import ClarifyingQuestion
 from .engine import ZhodaEngine
 from .env import load_zhoda_env
-from .models import Protocol
+from .models import CostReport, Protocol
 from .progress import ProgressEvent
 from .providers.openrouter import OpenRouterProvider
 
@@ -73,6 +73,18 @@ def apply_progress(event: ProgressEvent, status: Status) -> None:
     if event.done:
         console.print(f"[green]✓[/green] {event.message}")
     status.update(f"[cyan]{event.message}[/cyan]")
+
+
+def format_cost_breakdown(cost: CostReport) -> str:
+    """Нули из-за cache hit — 'cached', не '0' (ноль читается как баг)."""
+    parts: list[str] = []
+    for stage, count in cost.breakdown.items():
+        hits = cost.cache_breakdown.get(stage, 0)
+        if count == 0 and hits > 0:
+            parts.append(f"{stage}: cached")
+        else:
+            parts.append(f"{stage}: {count}")
+    return ", ".join(parts)
 
 
 def ask_user(questions: list[ClarifyingQuestion]) -> list[str]:
@@ -226,7 +238,7 @@ def deliberate(
                 f"${verdict.cost.usd:.4f}, transcript: {verdict.transcript_id}"
             )
             if verdict.cost.breakdown:
-                console.print(f"[dim]breakdown: {verdict.cost.breakdown}[/dim]")
+                console.print(f"[dim]breakdown: {format_cost_breakdown(verdict.cost)}[/dim]")
         finally:
             await provider.close()
 

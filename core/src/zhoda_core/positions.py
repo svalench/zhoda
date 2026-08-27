@@ -7,7 +7,7 @@ institutional weight.
 
 import asyncio
 
-from .models import Position, ValueMap
+from .models import Position, ValueMap, bind_user_context
 from .providers.openrouter import OpenRouterProvider, make_cache_key
 
 POSITION_PROMPT = """You are one member of a council. Give your independent structured stance.
@@ -15,9 +15,8 @@ POSITION_PROMPT = """You are one member of a council. Give your independent stru
 Question: {question}
 Context:
 {context}
-Context (value map): {value_map}
 
-Open ambiguities in the value map are UNRESOLVED — never treat them as
+Open ambiguities in the user context are UNRESOLVED — never treat them as
 confirmed constraints or as facts the user affirmed.
 
 Respond with ONLY valid JSON:
@@ -42,14 +41,17 @@ async def extract_positions(
     context: str = "",
 ) -> list[Position]:
     async def one(model: str) -> Position:
-        data = await provider.ask_json(
-            model,
+        prompt = bind_user_context(
             POSITION_PROMPT.format(
                 question=question,
                 context=context.strip() or "(none)",
-                value_map=value_map.model_dump(),
             ),
-            cache_key=make_cache_key("pos", model, question, context),
+            value_map.as_prompt_block(),
+        )
+        data = await provider.ask_json(
+            model,
+            prompt,
+            cache_key=make_cache_key("pos", model, prompt),
         )
         return Position(model=aliases[model], **data)
 
