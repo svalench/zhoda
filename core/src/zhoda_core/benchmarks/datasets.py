@@ -25,6 +25,9 @@ KIND_TRUE_MINORITY = "true_minority"
 
 DEFAULT_RESISTANCE_MARKERS: Tuple[str, ...] = (
     "false premise",
+    "premise is false",
+    "rejected premise",
+    "rejects the premise",
     "not always",
     "not true",
     "incorrect",
@@ -236,7 +239,12 @@ def load_cases(path: Union[str, Path]) -> List[BenchmarkCase]:
                 continue
             raw = json.loads(line)
             raw["seed_agents"] = tuple(
-                SeedAgent(**a) for a in raw.get("seed_agents", [])
+                SeedAgent(
+                    name=a["name"],
+                    position=a["position"],
+                    arguments=tuple(a.get("arguments", ())),
+                )
+                for a in raw.get("seed_agents", [])
             )
             for key in ("truth_keywords", "resistance_markers"):
                 if key in raw:
