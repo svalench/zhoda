@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "zhoda": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["--directory", "${workspaceFolder}/mcp", "run", "zhoda-mcp"],
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "ZHODA_COUNCIL": "${workspaceFolder}/core/zhoda.yaml",
+        "ZHODA_BUDGET_USD": "10"
+      }
+    }
+  }
+}

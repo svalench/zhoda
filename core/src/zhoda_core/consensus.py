@@ -5,9 +5,12 @@ PAIR, like closure — `all_agree` only when every non-conflicted judge
 (outside the council preferred) says so; any disagreement reads as 'not
 unanimous' (safe side). No single-judge bias point.
 
-Stability rule: consensus counts only if agreement PERSISTS for
-`stability_rounds` consecutive rounds. classify() is exposed separately for
-single-pass protocols (vote, red_team) where the streak must not apply.
+Stability rule: UNANIMOUS (judge pair `all_agree` on theses) counts as zhoda
+only if it PERSISTS for `stability_rounds` consecutive rounds. Headcount
+majority does not early-stop the debate — it may become zhoda only at the
+rounds cap, if the majority streak also lasted `stability_rounds`.
+classify() is exposed separately for single-pass protocols (vote, red_team)
+where the streak must not apply.
 """
 
 import asyncio
@@ -36,7 +39,13 @@ class ConsensusChecker:
         self.provider = provider
         self.stability_rounds = stability_rounds
         self.user_context: str = ""
-        self._stable_streak = 0
+        self._unanimous_streak = 0
+        self._majority_streak = 0
+
+    @property
+    def majority_is_stable(self) -> bool:
+        """Headcount majority держалась `stability_rounds` подряд."""
+        return self._majority_streak >= self.stability_rounds
 
     async def classify(self, factions: list[Faction], *, judges: Judges) -> ConsensusStrength:
         """Strength of the current agreement — no streak side effects."""
@@ -76,9 +85,16 @@ class ConsensusChecker:
         self, factions: list[Faction], *, judges: Judges
     ) -> tuple[bool, ConsensusStrength]:
         strength = await self.classify(factions, judges=judges)
-        agreed = strength in (ConsensusStrength.UNANIMOUS, ConsensusStrength.MAJORITY)
-        self._stable_streak = self._stable_streak + 1 if agreed else 0
-        return self._stable_streak >= self.stability_rounds, strength
+        if strength is ConsensusStrength.UNANIMOUS:
+            self._unanimous_streak += 1
+            self._majority_streak += 1
+        elif strength is ConsensusStrength.MAJORITY:
+            self._unanimous_streak = 0
+            self._majority_streak += 1
+        else:
+            self._unanimous_streak = 0
+            self._majority_streak = 0
+        return self._unanimous_streak >= self.stability_rounds, strength
 
 
 def _voting_heads(faction: Faction) -> int:

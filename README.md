@@ -39,7 +39,9 @@ Runs on OpenRouter with BYOK — `:free` or cheap paid, hard per-question budget
 - Honest provider: per-question budget with pre-call estimate, 429/quota split, sqlite cache
 - Test suite: provider gates, ledger gates, scripted e2e (revision / stability flip / deadlock / smart degradation / state isolation)
 
-**Doesn't exist yet:** MCP server, dsh plugin, FastAPI server, escalation ladder, reputation. They land only after the core is green on live models.
+**Works today (mcp/):** stdio MCP server — `zhoda_clarify` / `zhoda_deliberate` (estimate, then `confirm=true`) / `zhoda_verdict` / `zhoda_transcript` / `zhoda_reputation`. In-process core. Cursor: `.cursor/mcp.json`. DeepSeek Harness: patch in `mcp/examples/dsh.cordis.patch.yml` (not `mcpServers` JSON). See [mcp/README.md](mcp/README.md).
+
+**Doesn't exist yet:** dsh plugin, FastAPI hosted server, PyPI/MCP-registry publish. Live ELO updates after each verdict are still a follow-up.
 
 ## Quickstart
 

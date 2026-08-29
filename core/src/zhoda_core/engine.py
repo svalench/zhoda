@@ -13,7 +13,13 @@ from collections.abc import Callable
 from .anonymize import make_aliases
 from .consensus import ConsensusChecker
 from .debate import DebateEngine
-from .elicitor import ClarifyingQuestion, Elicitor, grounding_need
+from .elicitor import (
+    DEFAULT_MAX_ELICIT_TURNS,
+    ClarifyingQuestion,
+    ElicitationResult,
+    Elicitor,
+    grounding_need,
+)
 from .factions import ADVOCATE_ALIAS, Faction, FactionClusterer
 from .judges import Judges
 from .models import (
@@ -79,6 +85,7 @@ class ZhodaEngine:
         ambiguity_threshold: float = 0.6,
         max_new_per_round: int = 3,
         max_active: int = 6,
+        max_elicit_turns: int = DEFAULT_MAX_ELICIT_TURNS,
         escalation_model: str | None = None,
         transcripts_dir: str = "transcripts",
         alias_seed: int | None = None,
@@ -102,6 +109,7 @@ class ZhodaEngine:
         self.devils_advocate = devils_advocate
         self.max_new_per_round = max_new_per_round
         self.max_active = max_active
+        self.max_elicit_turns = max_elicit_turns
         self.escalation_model = escalation_model
         self.alias_seed = alias_seed
         self.transcripts = TranscriptStore(transcripts_dir)
@@ -118,6 +126,7 @@ class ZhodaEngine:
         on_questions: Callable[[list[ClarifyingQuestion]], list[str]] | None = None,
         on_progress: Callable[[ProgressEvent], None] | None = None,
         context: str = "",
+        value_map: ValueMap | None = None,
     ) -> Verdict:
         # fresh session state per question (round-8 §1)
         debate = DebateEngine(
@@ -157,35 +166,48 @@ class ZhodaEngine:
         mark("route")
         emit("route", f"protocol={route.protocol}", done=True)
 
-        value_map = ValueMap()
         elicit_questions: list[ClarifyingQuestion] = []
         elicit_answers: list[str] = []
-        if clarify_mode != "no-clarify":
+        if value_map is not None:
+            emit("elicit", "value_map provided — skip Stage 0", done=True)
+        elif clarify_mode != "no-clarify":
             emit("elicit", "eliciting clarifying questions…")
-            elicitation = await self.elicitor.elicit(
+
+            def on_turn(turn: int, result: ElicitationResult) -> None:
+                self.transcripts.append(
+                    tid, {"stage": "elicit", "turn": turn, **result.model_dump()}
+                )
+
+            def stop_after_batch(
+                qs: list[ClarifyingQuestion],
+                ans: list[str],
+                _vm: ValueMap,
+            ) -> bool:
+                return grounding_need(question, qs, ans, context) is not None
+
+            session = await self.elicitor.interview(
                 question,
                 self.council,
                 mode=clarify_mode,
                 context=context,
                 dedup_model=self.chairman,
+                on_questions=on_questions,
+                max_turns=self.max_elicit_turns,
+                stop_after_batch=stop_after_batch,
+                on_turn=on_turn,
             )
-            leftover = list(elicitation.value_map.open_ambiguities)
-            elicit_questions = elicitation.all_questions or elicitation.questions
-            if elicitation.questions:
-                elicit_answers = on_questions(elicitation.questions) if on_questions else []
-                value_map = self.elicitor.apply_answers(elicitation.questions, elicit_answers)
-                for item in leftover:
-                    if item not in value_map.open_ambiguities:
-                        value_map.open_ambiguities.append(item)
-                self.transcripts.append(tid, {"stage": "answers", "answers": elicit_answers})
-            else:
-                value_map = elicitation.value_map
-            self.transcripts.append(tid, {"stage": "elicit", **elicitation.model_dump()})
+            elicit_questions = session.questions or session.all_questions
+            elicit_answers = session.answers
+            value_map = session.value_map
+            if session.answers:
+                self.transcripts.append(tid, {"stage": "answers", "answers": session.answers})
             emit(
                 "elicit",
-                f"elicit: {len(elicitation.questions)} questions",
+                f"elicit: {len(session.questions)} questions",
                 done=True,
             )
+        else:
+            value_map = ValueMap()
         mark("elicit")
 
         need = grounding_need(question, elicit_questions, elicit_answers, context)
@@ -308,6 +330,13 @@ class ZhodaEngine:
                     factions = [f for f in factions if f.members]
                     emit("consensus", "checking consensus…")
                     zhoda, strength = await consensus.check(factions, judges=judges)
+                    if (
+                        not zhoda
+                        and rounds_taken == self.rounds_cap
+                        and strength is ConsensusStrength.MAJORITY
+                        and consensus.majority_is_stable
+                    ):
+                        zhoda = True
                     self.transcripts.append(
                         tid,
                         {"stage": "consensus", "zhoda": zhoda, "strength": str(strength)},

@@ -97,7 +97,8 @@ lists the critique and the fix that landed.
 ## Round 12 — Stage 0, synthetic opposition, cost
 
 - *Unasked elicitation dumped into assumptions.* → Always collect/dedup;
-  unasked items (auto-clarify, below threshold, leftover after top-3) land in
+  unasked items (auto-clarify, below threshold, leftover when the elicit
+  loop stops) land in
   `open_ambiguities`. Grounding still sees them.
 - *Spawned opposition looked like a real minority.* → `Faction.synthetic`;
   minority/tree/CLI carry

@@ -1,0 +1,28 @@
+# DeepSeek Harness — user patch layer
+# File: ~/.dsh/profiles/web/cordis.patch.yml
+#
+# If the file is currently `[]`, replace it with the block below.
+# Do not put the OpenRouter key in this file: export OPENROUTER_API_KEY
+# in the shell that starts `dsh web`.
+#
+# Tools appear as mcp__zhoda__zhoda_clarify, mcp__zhoda__zhoda_deliberate, …
+# toolCallTimeoutMs is 10 minutes: a debate is 15–40 model calls, not a chat turn.
+
+- insert:
+    - id: mcp-zhoda
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: zhoda
+        transport: stdio
+        command: uv
+        args:
+          - --directory
+          - /ABS/PATH/zhoda/mcp
+          - run
+          - zhoda-mcp
+        env:
+          OPENROUTER_API_KEY: !!js process.env.OPENROUTER_API_KEY
+          ZHODA_COUNCIL: /ABS/PATH/zhoda/core/zhoda.yaml
+          ZHODA_BUDGET_USD: "10"
+        toolCallTimeoutMs: 600000
+        failOnStartupError: true

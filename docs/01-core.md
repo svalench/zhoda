@@ -27,14 +27,18 @@ protocol reports confidence 1.0.
 
 ## Stage 0 — Elicitation
 
-Each council model returns ambiguities; an aggregator keeps the 2–4 with the
-highest decision impact. Duplicate questions from different models are
-merged (exact match, then a cheap model groups paraphrases) before the
-user sees at most three. Modes: `smart` (ask the user), `no-clarify`,
+Each council model returns ambiguities; an aggregator keeps the questions
+with the highest decision impact. Duplicate questions from different models
+are merged (exact match, then a cheap model groups paraphrases). Each turn
+the user sees at most three questions. After answers the council is asked
+again: if high-impact ambiguities remain, another batch is asked, until
+models return none, the user skips the batch, or `max_elicit_turns`
+(default 4). Modes: `smart` (ask the user), `no-clarify`,
 `auto-clarify` (no prompts; unasked items land in `open_ambiguities`,
 never in `assumptions`). Unanswered questions land in
 `value_map.open_ambiguities` — honestly, never silently assumed (round-5 §2,
-round-12). Leftover questions after the top-3 also stay in `open_ambiguities`.
+round-12). Leftover questions unasked when the loop stops also stay in
+`open_ambiguities`. Grounding questions are asked first in a batch.
 Answers are validated against options: a digit `1..n` maps to that option;
 a free-text reply that contains **exactly one** option as a substring maps
 to that option; pasting the option list or a non-matching string is treated
@@ -42,7 +46,9 @@ as unanswered, never as a constraint. Empty answers always stay in
 `open_ambiguities`.
 
 `--context path` (repeatable) injects file contents into elicitation and
-position prompts as `Context:`. If the question refers to an external
+position prompts as `Context:`. A caller may pass a pre-built `value_map`
+(MCP after `zhoda_clarify`) — Stage 0 LLM calls are skipped; grounding
+still runs. If the question refers to an external
 object (project, repo, document) and Stage 0 still cannot name that object
 — the user answered a URL, “this project”, or nothing, and no `--context`
 was given — the engine returns `insufficient_context=True`,
@@ -112,8 +118,11 @@ anyone is asked to defect).
 The judge pair scores `all_agree` on the same primary-recommendation
 criterion (thesis + answer), not prose similarity: **recommended actions /
 architecture on the critical path**, not labels. Stability rule: two
-consecutive checks must agree before zhoda is declared (round-6 §1).
-`split` at the rounds cap becomes `deadlock`. Escalation is opt-in and
+consecutive **unanimous** checks (`all_agree`) must agree before zhoda is
+declared early (round-6 §1). Headcount majority (2/3 of voting heads) does
+**not** end the debate — it may count as zhoda only at `rounds_cap` if that
+majority also persisted for `stability_rounds`. `split` at the rounds cap
+becomes `deadlock`. Escalation is opt-in and
 fires on deadlock only; the appellate decision overwrites `decision` but
 carries `decision_origin = "appeal_without_consensus"` — a single model's
 fiat is labeled, never mistaken for zhoda (round-10 §2).
@@ -187,6 +196,7 @@ between deliberations.
 `council`, `judges` (≥2 outside the council — the engine refuses to start
 otherwise), `router_classifiers` (two distinct), `chairman`, `rounds_cap`,
 `stability_rounds`, `devils_advocate`, `ambiguity_threshold`,
-`max_new_per_round`, `max_active`, `escalation.{enabled,model}`,
+`max_new_per_round`, `max_active`, `max_elicit_turns`,
+`escalation.{enabled,model}`,
 `budget_per_question_usd`, `max_concurrency`, `prices`, `cache_path`,
 `transcripts_dir`.

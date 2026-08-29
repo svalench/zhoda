@@ -7,28 +7,34 @@ inter-model agreement, not self-report. Round-6 §4: the loop is closed via
 the on_questions callback; without it, questions degrade to open_ambiguities.
 Round-7 §4: apply_answers keeps EVERYTHING — answered questions become
 constraints, unanswered ones become open_ambiguities (nothing is dropped).
-Round-12: leftover after top-3 also stays in open_ambiguities.
+Each turn asks at most ASK_BATCH questions; after answers the council is
+asked again until it reports no remaining high-impact ambiguity, the user
+skips, or max_turns. Unasked leftover at stop lands in open_ambiguities.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Callable
 
 from pydantic import BaseModel, Field
 
 from .models import ValueMap
 from .providers.openrouter import OpenRouterProvider, make_cache_key
 
+ASK_BATCH = 3
+DEFAULT_MAX_ELICIT_TURNS = 4
+
 ELICIT_PROMPT = """You are a council member. Do NOT answer the question.
 List what is ambiguous or underspecified — things whose clarification would
-change the answer.
+change the answer. If known facts already suffice, return {{"ambiguities": []}}.
 
 Question: {question}
 
 Context:
 {context}
-
+{known_block}
 Respond with ONLY valid JSON:
 {{"ambiguities": [{{"ambiguity": "...", "why_it_matters": "...",
   "candidate_question": "...", "options": ["one-tap answer", "..."]}}]}}
@@ -77,8 +83,19 @@ class ClarifyingQuestion(BaseModel):
 class ElicitationResult(BaseModel):
     ambiguity_score: float
     questions: list[ClarifyingQuestion] = Field(default_factory=list)  # UI: ask these
+    pending: list[ClarifyingQuestion] = Field(default_factory=list)  # next turn
     all_questions: list[ClarifyingQuestion] = Field(default_factory=list)  # grounding
     value_map: ValueMap = Field(default_factory=ValueMap)
+
+
+class ElicitationSession(BaseModel):
+    """Итог interview(): заданные вопросы, ответы, финальная value map."""
+
+    value_map: ValueMap = Field(default_factory=ValueMap)
+    questions: list[ClarifyingQuestion] = Field(default_factory=list)
+    answers: list[str] = Field(default_factory=list)
+    all_questions: list[ClarifyingQuestion] = Field(default_factory=list)
+    turns: int = 0
 
 
 class Elicitor:
@@ -94,17 +111,29 @@ class Elicitor:
         *,
         context: str = "",
         dedup_model: str | None = None,
+        known: ValueMap | None = None,
+        already_asked: list[str] | None = None,
+        ask_batch: int = ASK_BATCH,
     ) -> ElicitationResult:
         if mode == "no-clarify":
             return ElicitationResult(ambiguity_score=0.0)
 
+        asked = list(already_asked or [])
+        known_map = known or ValueMap()
         context_block = context.strip() or "(none)"
+        known_block = _known_block(known_map, asked)
         results = await asyncio.gather(
             *(
                 self.provider.ask_json(
                     m,
-                    ELICIT_PROMPT.format(question=question, context=context_block),
-                    cache_key=make_cache_key("elic", m, question, context_block),
+                    ELICIT_PROMPT.format(
+                        question=question,
+                        context=context_block,
+                        known_block=known_block,
+                    ),
+                    cache_key=make_cache_key(
+                        "elic", m, question, context_block, known_block, tuple(asked)
+                    ),
                 )
                 for m in council
             ),
@@ -120,6 +149,9 @@ class Elicitor:
         ambiguities = [a for p in flagged for a in p["ambiguities"]]
         questions = [q for a in ambiguities if (q := _as_question(a)) is not None]
         questions = await self._dedup_questions(questions, dedup_model=dedup_model)
+        questions = _prefer_grounding(questions)
+        asked_keys = {_qkey(text) for text in asked}
+        questions = [q for q in questions if _qkey(q.question) not in asked_keys]
         # auto-clarify / ниже порога: не спрашиваем и не выдаём вопросы за факты
         if mode == "auto-clarify" or score < self.ambiguity_threshold:
             return ElicitationResult(
@@ -128,12 +160,88 @@ class Elicitor:
                 all_questions=questions,
                 value_map=ValueMap(open_ambiguities=[q.question for q in questions]),
             )
-        leftover = questions[3:]
+        batch = max(1, ask_batch)
         return ElicitationResult(
             ambiguity_score=score,
-            questions=questions[:3],
+            questions=questions[:batch],
+            pending=questions[batch:],
             all_questions=questions,
-            value_map=ValueMap(open_ambiguities=[q.question for q in leftover]),
+        )
+
+    async def interview(
+        self,
+        question: str,
+        council: list[str],
+        mode: str = "smart",
+        *,
+        context: str = "",
+        dedup_model: str | None = None,
+        on_questions: Callable[[list[ClarifyingQuestion]], list[str]] | None = None,
+        max_turns: int = DEFAULT_MAX_ELICIT_TURNS,
+        stop_after_batch: Callable[[list[ClarifyingQuestion], list[str], ValueMap], bool]
+        | None = None,
+        on_turn: Callable[[int, ElicitationResult], None] | None = None,
+    ) -> ElicitationSession:
+        """Спрашивать пачками, пока совет не скажет «хватит», юзер не скипнет, или cap."""
+        if mode == "no-clarify":
+            return ElicitationSession()
+
+        value_map = ValueMap()
+        asked: list[ClarifyingQuestion] = []
+        answers: list[str] = []
+        discovered: list[ClarifyingQuestion] = []
+        turns = 0
+        for turn in range(1, max(1, max_turns) + 1):
+            turns = turn
+            result = await self.elicit(
+                question,
+                council,
+                mode,
+                context=context,
+                dedup_model=dedup_model,
+                known=value_map,
+                already_asked=[q.question for q in asked],
+            )
+            if on_turn is not None:
+                on_turn(turn, result)
+            discovered = _extend_unique(discovered, result.all_questions)
+
+            if mode == "auto-clarify" or not result.questions:
+                value_map = merge_value_maps(value_map, result.value_map)
+                break
+
+            if on_questions is None:
+                value_map = dump_unasked(value_map, result.questions + result.pending)
+                discovered = _extend_unique(discovered, result.questions + result.pending)
+                break
+
+            padded = list(on_questions(result.questions))
+            padded.extend([""] * max(0, len(result.questions) - len(padded)))
+            padded = padded[: len(result.questions)]
+            applied = self.apply_answers(result.questions, padded)
+            value_map = merge_value_maps(value_map, applied)
+            asked.extend(result.questions)
+            answers.extend(padded)
+
+            if stop_after_batch is not None and stop_after_batch(asked, answers, value_map):
+                value_map = dump_unasked(value_map, result.pending)
+                discovered = _extend_unique(discovered, result.pending)
+                break
+            if not applied.constraints:
+                value_map = dump_unasked(value_map, result.pending)
+                discovered = _extend_unique(discovered, result.pending)
+                break
+            if turn == max_turns:
+                value_map = dump_unasked(value_map, result.pending)
+                discovered = _extend_unique(discovered, result.pending)
+                break
+
+        return ElicitationSession(
+            value_map=value_map,
+            questions=asked,
+            answers=answers,
+            all_questions=discovered or asked,
+            turns=turns,
         )
 
     async def _dedup_questions(
@@ -191,6 +299,41 @@ class Elicitor:
         for q in questions[len(answers) :]:
             open_ambiguities.append(q.question)
         return ValueMap(constraints=constraints, open_ambiguities=open_ambiguities)
+
+
+def merge_value_maps(base: ValueMap, extra: ValueMap) -> ValueMap:
+    """Склеить constraints/open_ambiguities; отвеченное не остаётся открытым."""
+    constraints = list(base.constraints)
+    for item in extra.constraints:
+        if item not in constraints:
+            constraints.append(item)
+    open_ambiguities: list[str] = []
+    for item in (*base.open_ambiguities, *extra.open_ambiguities):
+        if item in open_ambiguities:
+            continue
+        if any(c.startswith(f"Q: {item} A:") for c in constraints):
+            continue
+        open_ambiguities.append(item)
+    assumptions = list(base.assumptions)
+    for item in extra.assumptions:
+        if item not in assumptions:
+            assumptions.append(item)
+    return ValueMap(
+        goal=base.goal or extra.goal,
+        success_criteria=list(base.success_criteria or extra.success_criteria),
+        constraints=constraints,
+        anti_goals=list(base.anti_goals or extra.anti_goals),
+        assumptions=assumptions,
+        open_ambiguities=open_ambiguities,
+    )
+
+
+def dump_unasked(value_map: ValueMap, questions: list[ClarifyingQuestion]) -> ValueMap:
+    """Незаданные вопросы — в open_ambiguities, не в assumptions."""
+    return merge_value_maps(
+        value_map,
+        ValueMap(open_ambiguities=[q.question for q in questions]),
+    )
 
 
 def normalize_answer(question: ClarifyingQuestion, raw: str) -> str | None:
@@ -270,6 +413,50 @@ def grounding_need(
     return None
 
 
+def _known_block(known: ValueMap, already_asked: list[str]) -> str:
+    parts: list[str] = []
+    if (
+        known.constraints
+        or known.goal
+        or known.success_criteria
+        or known.anti_goals
+        or known.open_ambiguities
+    ):
+        parts.append(known.as_prompt_block())
+    if already_asked:
+        listed = "\n".join(f"- {q}" for q in already_asked)
+        parts.append(f"Already asked (do not repeat):\n{listed}")
+    if not parts:
+        return ""
+    return "\n".join(parts) + "\n"
+
+
+def _qkey(text: str) -> str:
+    return " ".join(text.casefold().split())
+
+
+def _prefer_grounding(questions: list[ClarifyingQuestion]) -> list[ClarifyingQuestion]:
+    """Grounding-вопрос первым в пачке — иначе IC может промахнуться."""
+    head = [q for q in questions if is_grounding_question(q.question)]
+    tail = [q for q in questions if not is_grounding_question(q.question)]
+    return head + tail
+
+
+def _extend_unique(
+    existing: list[ClarifyingQuestion],
+    incoming: list[ClarifyingQuestion],
+) -> list[ClarifyingQuestion]:
+    seen = {_qkey(q.question) for q in existing}
+    out = list(existing)
+    for q in incoming:
+        key = _qkey(q.question)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(q)
+    return out
+
+
 def _as_question(payload: dict) -> ClarifyingQuestion | None:
     """candidate_question, иначе текст ambiguity — пустое отбрасываем."""
     text = str(payload.get("candidate_question") or payload.get("ambiguity") or "").strip()
@@ -289,7 +476,7 @@ def _unique_by_text(questions: list[ClarifyingQuestion]) -> list[ClarifyingQuest
     seen: set[str] = set()
     out: list[ClarifyingQuestion] = []
     for q in questions:
-        key = " ".join(q.question.casefold().split())
+        key = _qkey(q.question)
         if key in seen:
             continue
         seen.add(key)

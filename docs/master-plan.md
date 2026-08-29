@@ -119,8 +119,9 @@ Zhoda — open-source система, в которой несколько LLM �
   абляции; blind-судейство, human-подвыборка; метрика dead_ends/$
 
 ### Этап 2 — MCP-сервер (после зелёного live)
-- [ ] Инструменты clarify/deliberate/verdict/transcript/plan/reputation
-- [ ] Инструкции подключения к dsh, Claude Code, Codex
+- [x] Инструменты clarify/deliberate/verdict/transcript/reputation
+      (`confirm` до запуска; plan-контракт внутри Verdict)
+- [x] Инструкции подключения к dsh, Cursor, Claude Code, Codex
 - [ ] Публикация в MCP-реестрах
 
 ### Этап 3 — dsh-плагин

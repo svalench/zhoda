@@ -9,16 +9,14 @@ import asyncio
 from pathlib import Path
 
 import typer
-import yaml
 from rich.console import Console
 from rich.status import Status
 
+from .config import load_council_config, make_engine, make_provider
 from .elicitor import ClarifyingQuestion
-from .engine import ZhodaEngine
 from .env import load_zhoda_env
 from .models import CostReport, Protocol
 from .progress import ProgressEvent
-from .providers.openrouter import OpenRouterProvider
 
 app = typer.Typer(help="Zhoda — models argue until they reach zhoda.")
 console = Console()
@@ -137,14 +135,17 @@ def deliberate(
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    cfg = yaml.safe_load(Path(config).read_text())
-    judges = cfg.get("judges")
-    if not judges:
-        console.print(
-            "[red]no judges configured — judges must sit outside "
-            "the council; refusing to start[/red]"
-        )
-        raise typer.Exit(code=2)
+    try:
+        cfg = load_council_config(config)
+        judges = cfg.get("judges")
+        if not judges:
+            raise ValueError(
+                "no judges configured — judges must sit outside "
+                "the council; refusing to start"
+            )
+    except (OSError, ValueError, TypeError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=2) from exc
     in_council = [j for j in judges if j in cfg["council"]]
     if in_council:
         console.print(f"[yellow]judges sit in the council: {in_council}[/yellow]")
@@ -153,29 +154,9 @@ def deliberate(
     )
 
     async def run() -> None:
-        provider = OpenRouterProvider(
-            budget_usd=cfg.get("budget_per_question_usd", 0.0),
-            max_concurrency=cfg.get("max_concurrency", 4),
-            prices=cfg.get("prices"),
-            cache_path=cfg.get("cache_path"),
-        )
+        provider = make_provider(cfg)
         try:
-            escalation = cfg.get("escalation", {}) or {}
-            engine = ZhodaEngine(
-                provider,
-                cfg["council"],
-                chairman=cfg.get("chairman", cfg["council"][0]),
-                judges=tuple(judges),
-                router_classifiers=tuple(cfg["router_classifiers"]),
-                rounds_cap=cfg.get("rounds_cap", 4),
-                stability_rounds=cfg.get("stability_rounds", 2),
-                devils_advocate=cfg.get("devils_advocate", True),
-                ambiguity_threshold=cfg.get("ambiguity_threshold", 0.6),
-                max_new_per_round=cfg.get("max_new_per_round", 3),
-                max_active=cfg.get("max_active", 6),
-                escalation_model=(escalation.get("model") if escalation.get("enabled") else None),
-                transcripts_dir=cfg.get("transcripts_dir", "transcripts"),
-            )
+            engine = make_engine(cfg, provider)
 
             with console.status("[cyan]starting…[/cyan]", spinner="dots") as status:
 

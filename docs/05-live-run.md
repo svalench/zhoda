@@ -60,6 +60,7 @@ devils_advocate: true
 ambiguity_threshold: 0.6
 max_new_per_round: 3
 max_active: 6
+max_elicit_turns: 4
 budget_per_question_usd: 10.0   # hard cap per question; 0 = :free only
 max_concurrency: 8
 cache_path: .zhoda-cache.json   # re-runs of a stage are free

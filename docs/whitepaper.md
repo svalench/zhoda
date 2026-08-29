@@ -70,7 +70,9 @@ into the same dead ends. The value of deliberation evaporates between
 The council receives the raw question and returns not answers but ambiguities:
 `{ambiguity, why_it_matters, candidate_question}`. An aggregator selects the
 2–4 questions with the highest decision impact — those whose answers most
-diverge the positions. The user's answers produce a **value map**:
+diverge the positions. After the user answers, the council is asked again;
+the loop continues until remaining ambiguities no longer change the answer
+(or a turn cap is hit). The user's answers produce a **value map**:
 
 ```
 ValueMap { goal, success_criteria[], constraints[], anti_goals[], open_ambiguities[] }
@@ -129,9 +131,12 @@ signal — and its most compelling artifact in the transcript.
 ### Stage 4 — Consensus (zhoda)
 
 Convergence is computed on structured theses after each round, never on prose
-similarity. Adaptive stopping: consensus ends the loop early; hard cap at 4
-rounds (empirically most debates converge in 2–3; multi-agent debate literature
-reports convergence within 4–8 rounds). Consensus strength:
+similarity. Adaptive stopping: **unanimous** thesis agreement that persists
+`stability_rounds` ends the loop early. Headcount majority does not — the
+debate continues to the hard cap (default 4; empirically most debates
+converge in 2–3; multi-agent debate literature reports convergence within
+4–8 rounds). Majority that held through the cap is still zhoda, with the
+minority report preserved. Consensus strength:
 `unanimous | majority | split | deadlock`. On `split` or `deadlock` with
 escalation enabled, the case moves up the model ladder (free → mid → frontier);
 the chairman decides from the full transcript.

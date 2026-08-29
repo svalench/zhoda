@@ -156,8 +156,8 @@ async def test_auto_clarify_puts_questions_in_open_ambiguities_not_assumptions()
 
 
 @pytest.mark.asyncio
-async def test_questions_beyond_top3_land_in_open_ambiguities() -> None:
-    """Хвост после top-3 не теряется и не становится assumption."""
+async def test_questions_beyond_batch_are_pending_not_assumptions() -> None:
+    """Хвост после пачки — pending (следующий ход), не assumption."""
 
     class QueueProvider:
         async def ask_json(self, model: str, prompt: str, **kwargs: object) -> dict:
@@ -182,12 +182,13 @@ async def test_questions_beyond_top3_land_in_open_ambiguities() -> None:
         dedup_model="cheap",
     )
     assert len(result.questions) == 3
+    assert {q.question for q in result.pending} == {"Question 4?"}
     assert result.value_map.assumptions == []
-    leftover = set(result.value_map.open_ambiguities)
+    assert result.value_map.open_ambiguities == []
     asked = {q.question for q in result.questions}
-    assert leftover
-    assert leftover.isdisjoint(asked)
-    assert leftover | asked == {f"Question {i}?" for i in range(1, 5)}
+    pending = {q.question for q in result.pending}
+    assert asked.isdisjoint(pending)
+    assert asked | pending == {f"Question {i}?" for i in range(1, 5)}
 
 
 @pytest.mark.asyncio
@@ -222,3 +223,96 @@ async def test_below_threshold_smart_lands_in_open_ambiguities() -> None:
     assert result.questions == []
     assert result.value_map.assumptions == []
     assert "What is the budget?" in result.value_map.open_ambiguities
+
+
+def _ambiguities(*texts: str) -> dict:
+    return {
+        "ambiguities": [
+            {
+                "ambiguity": text,
+                "why_it_matters": "changes the pick",
+                "candidate_question": text,
+                "options": [],
+            }
+            for text in texts
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_grounding_question_is_asked_first() -> None:
+    class QueueProvider:
+        async def ask_json(self, model: str, prompt: str, **kwargs: object) -> dict:
+            if "Group equivalent clarifying questions" in prompt:
+                return {"groups": [[0], [1]]}
+            return _ambiguities("What is the budget?", "Which project are we evaluating?")
+
+    result = await Elicitor(QueueProvider()).elicit(  # type: ignore[arg-type]
+        "Evaluate project X",
+        ["m1", "m2"],
+        mode="smart",
+        dedup_model="cheap",
+    )
+    assert result.questions[0].question == "Which project are we evaluating?"
+
+
+@pytest.mark.asyncio
+async def test_interview_asks_followup_until_models_report_enough() -> None:
+    """Пачка из 3, затем хвост, затем пусто — не останавливаемся на top-3."""
+
+    class QueueProvider:
+        def __init__(self) -> None:
+            self.elicit_calls = 0
+
+        async def ask_json(self, model: str, prompt: str, **kwargs: object) -> dict:
+            if "Group equivalent clarifying questions" in prompt:
+                numbered = [ln for ln in prompt.splitlines() if ln[:1].isdigit()]
+                return {"groups": [[i] for i in range(len(numbered))]}
+            self.elicit_calls += 1
+            turn = (self.elicit_calls - 1) // 2 + 1
+            if turn == 1:
+                return _ambiguities(*[f"Question {i}?" for i in range(1, 5)])
+            if turn == 2:
+                return _ambiguities("Question 4?")
+            return {"ambiguities": []}
+
+    batches: list[list[str]] = []
+
+    def on_questions(questions: list) -> list[str]:
+        batches.append([q.question for q in questions])
+        return ["ok"] * len(questions)
+
+    session = await Elicitor(QueueProvider()).interview(  # type: ignore[arg-type]
+        "Which store?",
+        ["m1", "m2"],
+        mode="smart",
+        dedup_model="cheap",
+        on_questions=on_questions,
+    )
+    assert batches[0] == ["Question 1?", "Question 2?", "Question 3?"]
+    assert batches[1] == ["Question 4?"]
+    assert len(session.questions) == 4
+    assert session.value_map.open_ambiguities == []
+    assert len(session.value_map.constraints) == 4
+    assert session.turns == 3
+
+
+@pytest.mark.asyncio
+async def test_interview_dumps_pending_at_turn_cap() -> None:
+    class QueueProvider:
+        async def ask_json(self, model: str, prompt: str, **kwargs: object) -> dict:
+            if "Group equivalent clarifying questions" in prompt:
+                return {"groups": [[0], [1], [2], [3]]}
+            return _ambiguities(*[f"Question {i}?" for i in range(1, 5)])
+
+    session = await Elicitor(QueueProvider()).interview(  # type: ignore[arg-type]
+        "Which store?",
+        ["m1", "m2"],
+        mode="smart",
+        dedup_model="cheap",
+        max_turns=1,
+        on_questions=lambda qs: ["ok"] * len(qs),
+    )
+    assert len(session.questions) == 3
+    assert "Question 4?" in session.value_map.open_ambiguities
+    assert session.value_map.assumptions == []

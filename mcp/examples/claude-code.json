@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "zhoda": {
+      "command": "uv",
+      "args": ["--directory", "/ABS/PATH/zhoda/mcp", "run", "zhoda-mcp"],
+      "env": {
+        "OPENROUTER_API_KEY": "sk-or-...",
+        "ZHODA_COUNCIL": "/ABS/PATH/zhoda/core/zhoda.yaml",
+        "ZHODA_BUDGET_USD": "10"
+      }
+    }
+  }
+}

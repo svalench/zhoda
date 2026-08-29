@@ -16,8 +16,8 @@
 
 | Инструмент | Вход | Выход | Назначение |
 |---|---|---|---|
-| `zhoda_clarify` | `question: str` | `questions: list[str]` | Стадия 0 отдельно: агент-хост сам задаёт вопросы пользователю |
-| `zhoda_deliberate` | `question: str`, `value_map?: dict`, `rounds_cap?: int` | `Verdict` (JSON) | Полный цикл дельберации |
+| `zhoda_clarify` | `question: str` | `questions` + `estimate` | Стадия 0 отдельно: агент-хост сам задаёт вопросы пользователю |
+| `zhoda_deliberate` | `question`, `confirm`, `value_map?`, `rounds_cap?`, `protocol?` | estimate **или** `Verdict` | `confirm=false` — оценка; `confirm=true` — полный цикл |
 | `zhoda_verdict` | `transcript_id: str` | `Verdict` | Повторное чтение итога без пересчёта |
 | `zhoda_transcript` | `transcript_id: str`, `format: "md" \| "json"` | хроніка | Полный ход дебатов для аудита |
 | `zhoda_reputation` | `domain?: str` | рейтинг моделей | Какой модели доверять в домене |
@@ -29,8 +29,9 @@
 
 **Сценарий А — «второе мнение совета» (основной):**
 Агент в dsh/Claude Code дошёл до архитектурного решения → вызывает
-`zhoda_deliberate` → получает вердикт + minority report → показывает
-пользователю развилку, если `zhoda_reached: false`.
+`zhoda_deliberate` с `confirm=false` (оценка) → после согласия пользователя
+`confirm=true` → получает вердикт + minority report → показывает
+развилку, если `zhoda_reached: false`.
 
 **Сценарий Б — «сначала спроси»:**
 Пользователь дал расплывчатую задачу → агент вызывает `zhoda_clarify` →
@@ -46,22 +47,81 @@
 - Дистрибуция: `pip install zhoda-mcp` + `uvx zhoda-mcp` для zero-install
 - Конфиг через env: `OPENROUTER_API_KEY` (BYOK), `ZHODA_COUNCIL` (путь к YAML),
   `ZHODA_BUDGET_USD`
+- Перед подключением: `cd mcp && uv sync`; `core/zhoda.yaml` (судьи вне совета);
+  ключ в корневом `.env`, не в git
+- `zhoda_deliberate` сначала с `confirm=false`. Дебаты — минуты, не 60 с;
+  таймаут хоста поднимать (в dsh: `toolCallTimeoutMs: 600000`)
 
-```jsonc
-// DeepSeek Harness / Claude Code / Codex — фрагмент конфига MCP
+`uvx zhoda-mcp` — после публикации на PyPI.
+
+### 4.1 Cursor
+
+Файл проекта: `.cursor/mcp.json` (уже в репозитории). Глобально:
+`~/.cursor/mcp.json`. Совпадение имени — побеждает проект.
+
+```json
 {
   "mcpServers": {
     "zhoda": {
-      "command": "uvx",
-      "args": ["zhoda-mcp"],
+      "type": "stdio",
+      "command": "uv",
+      "args": ["--directory", "${workspaceFolder}/mcp", "run", "zhoda-mcp"],
+      "envFile": "${workspaceFolder}/.env",
       "env": {
-        "OPENROUTER_API_KEY": "sk-or-...",
-        "ZHODA_BUDGET_USD": "0"
+        "ZHODA_COUNCIL": "${workspaceFolder}/core/zhoda.yaml",
+        "ZHODA_BUDGET_USD": "10"
       }
     }
   }
 }
 ```
+
+GUI Cursor часто не видит PATH из zsh — тогда `command` = абсолютный путь
+к `uv` (`/opt/homebrew/bin/uv`). Перезапуск или тумблер в Customize → MCP.
+Логи: Output → MCP Logs. Имена тулов без префикса: `zhoda_deliberate`.
+
+Документация Cursor: https://cursor.com/docs/mcp
+
+### 4.2 DeepSeek Harness
+
+Нативный dsh — **не** JSON `mcpServers`. Один инстанс плагина
+`@deepseek-ai/dsh-mcp-client` = один MCP-сервер, монтируется патчем
+`$DSH_HOME/profiles/web/cordis.patch.yml` (обычно `~/.dsh/...`).
+Если файл — `[]`, заменить целиком. Ключ — `!!js process.env.OPENROUTER_API_KEY`,
+не plaintext. Пример: `mcp/examples/dsh.cordis.patch.yml`.
+
+```yaml
+- insert:
+    - id: mcp-zhoda
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: zhoda
+        transport: stdio
+        command: uv
+        args:
+          - --directory
+          - /ABS/PATH/zhoda/mcp
+          - run
+          - zhoda-mcp
+        env:
+          OPENROUTER_API_KEY: !!js process.env.OPENROUTER_API_KEY
+          ZHODA_COUNCIL: /ABS/PATH/zhoda/core/zhoda.yaml
+          ZHODA_BUDGET_USD: "10"
+        toolCallTimeoutMs: 600000
+        failOnStartupError: true
+```
+
+Тулы: `mcp__zhoda__zhoda_clarify`, `mcp__zhoda__zhoda_deliberate`, …
+Проверка: `dsh web --dump-config | grep -A4 mcp-zhoda`.
+`mcp/examples/dsh.json` — только для чужих хостов с формой `mcpServers`.
+
+Плагин: https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/mcp/mcp-client/README.md
+Патч `insert`: https://github.com/deepseek-ai/deepseek-harness/blob/master/examples/mcp-memory/README.md
+
+### 4.3 Claude Code / Codex
+
+Общий фрагмент `mcpServers` — `mcp/examples/claude-code.json`,
+`mcp/examples/codex.json`.
 
 ## 5. Архитектура слоя
 
@@ -82,7 +142,9 @@ zhoda-mcp
 ## 6. Ограничения и честность
 
 - Дельберация — это 15–40 запросов к моделям: инструмент обязан сообщать
-  хосту оценку стоимости/времени ДО запуска (поле `estimate` в ответе clarify)
+  хосту оценку стоимости/времени ДО запуска (поле `estimate` в `zhoda_clarify`
+  и в `zhoda_deliberate` при `confirm=false`). Хост подтверждает явным
+  `confirm=true`, иначе совет не стартует.
 - Таймауты хостов: стримим прогресс через MCP notifications, чтобы хост
   не убивал долгий вызов
 - Бесплатные модели OpenRouter имеют дневные квоты — при исчерпании возвращаем
@@ -97,9 +159,10 @@ zhoda-mcp
 
 ## 8. Задачи этапа
 
-- [ ] Скелет на `mcp` Python SDK (FastMCP), stdio-транспорт
-- [ ] Инструменты clarify/deliberate/verdict/transcript/reputation поверх ядра
-- [ ] Оценка стоимости и MCP-нотификации прогресса
-- [ ] SSE-транспорт + `ZHODA_CORE_URL`
-- [ ] Конфиги-примеры для dsh, Claude Code, Codex + тест подключения к каждому
+- [x] Скелет на `mcp` Python SDK (FastMCP), stdio-транспорт
+- [x] Инструменты clarify/deliberate/verdict/transcript/reputation поверх ядра
+- [x] Оценка стоимости и MCP-нотификации прогресса
+- [ ] SSE-транспорт + `ZHODA_CORE_URL` (SSE: `ZHODA_MCP_TRANSPORT=sse`;
+      удалённое ядро честно отвечает `remote_core_unwired`)
+- [x] Конфиги-примеры для Cursor, dsh (cordis patch), Claude Code, Codex
 - [ ] Публикация в PyPI и реестрах

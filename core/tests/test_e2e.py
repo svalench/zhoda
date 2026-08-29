@@ -189,7 +189,7 @@ async def test_debate_loop_with_platform_revision(tmp_path) -> None:
         (None, ("SYNTHESIZE THE COUNCIL DECISION",), DECISION),
         (None, ("PLAN CONTRACT",), PLAN),
     ]
-    engine = make_engine(ScriptedProvider(script), tmp_path, stability_rounds=1)
+    engine = make_engine(ScriptedProvider(script), tmp_path, stability_rounds=1, rounds_cap=1)
     verdict = await engine.deliberate(
         "PostgreSQL or Kafka for a 50k RPS ledger?",
         force_protocol=Protocol.DEBATE,
@@ -281,6 +281,86 @@ async def test_stability_rule_blocks_a_flip(tmp_path) -> None:
     assert verdict.rounds_taken == 2
     assert verdict.plan_contract is None  # no zhoda -> no plan (round-10 §2)
     assert verdict.paths_rejected == []  # nothing was rejected
+
+
+def _closed_majority_round() -> list:
+    """2 фракции + DA, все возражения закрыты, тезисы не сходятся."""
+    return [
+        (
+            None,
+            ('You represent faction "Pragmatists"', "Produce ONE"),
+            {
+                "target_faction": "Throughputists",
+                "flaw_type": "factual",
+                "claim": "Kafka adds operational complexity the team cannot staff",
+                "specifics": "",
+                "evidence_url": None,
+            },
+        ),
+        (
+            None,
+            ('You represent faction "Throughputists"', "Produce ONE"),
+            {
+                "target_faction": "Pragmatists",
+                "flaw_type": "scope",
+                "claim": "PostgreSQL at 50k RPS writes needs a partitioning plan",
+                "specifics": "",
+                "evidence_url": None,
+            },
+        ),
+        (
+            None,
+            ("devil's advocate",),
+            {
+                "target_faction": "Pragmatists",
+                "flaw_type": "logical",
+                "claim": "the platform ignores read replicas as a simpler scaling path",
+                "specifics": "",
+                "evidence_url": None,
+            },
+        ),
+        (None, ("Rebut it concisely",), "ok"),
+        (None, ("Rebut it concisely",), "ok"),
+        (None, ("Rebut it concisely",), "ok"),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("theses of all factions",), {"all_agree": False}),
+        (None, ("theses of all factions",), {"all_agree": False}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_majority_does_not_early_stop_before_cap(tmp_path) -> None:
+    """2/3 голов — не згода на 2-м раунде; дебаты идут до cap."""
+    aliases = make_aliases(COUNCIL, seed=42)
+    script = (
+        opening_script(aliases)
+        + _closed_majority_round()
+        + _closed_majority_round()
+        + _closed_majority_round()
+        + [
+            (None, ("SYNTHESIZE THE COUNCIL DECISION",), DECISION),
+            (None, ("PLAN CONTRACT",), PLAN),
+        ]
+    )
+    engine = make_engine(
+        ScriptedProvider(script),
+        tmp_path,
+        stability_rounds=2,
+        rounds_cap=3,
+    )
+    verdict = await engine.deliberate(
+        "PostgreSQL or Kafka for a 50k RPS ledger?",
+        force_protocol=Protocol.DEBATE,
+        clarify_mode="no-clarify",
+    )
+    assert verdict.rounds_taken == 3
+    assert verdict.zhoda_reached is True
+    assert verdict.consensus_strength == ConsensusStrength.MAJORITY
 
 
 @pytest.mark.asyncio
@@ -663,6 +743,7 @@ async def test_state_does_not_leak_between_questions(tmp_path) -> None:
         ScriptedProvider(q1_script + q2_script),
         tmp_path,
         stability_rounds=1,
+        rounds_cap=1,
     )
     first = await engine.deliberate(
         "PostgreSQL or Kafka?",
@@ -820,6 +901,9 @@ async def test_mixed_elicitation_answers_stay_honest(tmp_path) -> None:
         ("m2", ("Do NOT answer",), three),
         ("m3", ("Do NOT answer",), three),
         ("j1", ("Group equivalent clarifying questions",), {"groups": [[0], [1], [2]]}),
+        ("m1", ("Do NOT answer",), {"ambiguities": []}),
+        ("m2", ("Do NOT answer",), {"ambiguities": []}),
+        ("m3", ("Do NOT answer",), {"ambiguities": []}),
         ("m1", ("independent structured stance",), position(PG)),
         ("m2", ("independent structured stance",), position(PG)),
         ("m3", ("independent structured stance",), position(PG)),
@@ -973,6 +1057,9 @@ async def test_elicitation_answers_reach_positions_and_verdict(tmp_path) -> None
             ("m1", ("Do NOT answer",), payload),
             ("m2", ("Do NOT answer",), payload),
             ("m3", ("Do NOT answer",), payload),
+            ("m1", ("Do NOT answer",), {"ambiguities": []}),
+            ("m2", ("Do NOT answer",), {"ambiguities": []}),
+            ("m3", ("Do NOT answer",), {"ambiguities": []}),
             ("m1", ("independent structured stance", answer), position(thesis)),
             ("m2", ("independent structured stance", answer), position(thesis)),
             ("m3", ("independent structured stance", answer), position(thesis)),
@@ -1013,3 +1100,35 @@ async def test_elicitation_answers_reach_positions_and_verdict(tmp_path) -> None
     assert v1.decision != v2.decision
     assert "cheap" in v1.decision.lower()
     assert "costly" in v2.decision.lower()
+
+
+@pytest.mark.asyncio
+async def test_supplied_value_map_skips_elicitation(tmp_path) -> None:
+    """Готовый value_map (MCP) не зовёт Stage 0, но попадает в промпты позиций."""
+    from zhoda_core.models import ValueMap
+
+    token = "TEAM_OF_FOUR_CONSTRAINT"
+    script = [
+        ("m1", ("independent structured stance", token), position(PG)),
+        ("m2", ("independent structured stance", token), position(PG)),
+        ("m3", ("independent structured stance", token), position(PG)),
+        (None, ("Synthesize the shared platform", token), position(PG)),
+        (None, ("Name each faction",), {}),
+        (None, ("SYNTHESIZE THE COUNCIL DECISION",), DECISION),
+        (None, ("PLAN CONTRACT",), PLAN),
+    ]
+    provider = ScriptedProvider(script)
+    engine = make_engine(provider, tmp_path, devils_advocate=False)
+    verdict = await engine.deliberate(
+        "Which database for the ledger?",
+        force_protocol=Protocol.VOTE,
+        clarify_mode="smart",
+        value_map=ValueMap(constraints=[token]),
+    )
+    assert verdict.value_map.constraints == [token]
+    assert verdict.cost.breakdown.get("elicit", 0) == 0
+    events = engine.transcripts.read(verdict.transcript_id)
+    assert not any(e.get("stage") == "elicit" for e in events)
+    assert provider.script == []
+    assert verdict.zhoda_reached is True
+

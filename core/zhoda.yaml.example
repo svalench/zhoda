@@ -34,6 +34,7 @@ prices:
 # Objection caps (round-9 §2): bound the per-round cost of a stubborn debate
 max_new_per_round: 3                 # new critiques registered per round
 max_active: 6                        # open objections processed per round
+max_elicit_turns: 4                  # Stage 0 follow-up batches until enough
 
 # Escalation (round-9 §4): on DEADLOCK the appellate model reads the outcome
 # and decides. Paid model -> needs budget_per_question_usd > 0.
