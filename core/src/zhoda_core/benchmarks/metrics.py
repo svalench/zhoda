@@ -63,6 +63,7 @@ def summarize(results: Iterable[CaseResult]) -> Dict[str, Dict[str, Optional[flo
 
     summary: Dict[str, Dict[str, Optional[float]]] = {}
     for mode, subset in sorted(by_mode.items()):
+        json_rates = [r.json_parse_rate for r in subset if r.json_parse_rate is not None]
         summary[mode] = {
             "n_cases": float(len(subset)),
             "accuracy": accuracy(subset),
@@ -94,6 +95,9 @@ def summarize(results: Iterable[CaseResult]) -> Dict[str, Dict[str, Optional[flo
             ),
             "avg_cache_hits": (
                 sum(r.cache_hits for r in subset) / len(subset) if subset else None
+            ),
+            "avg_json_parse_rate": (
+                sum(json_rates) / len(json_rates) if json_rates else None
             ),
         }
     return summary

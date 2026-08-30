@@ -68,6 +68,7 @@ class EngineOutcome:
     usd: float = 0.0
     latency_s: float = 0.0
     cache_hits: int = 0
+    json_parse_rate: Optional[float] = None
 
 
 class DeliberationEngine(Protocol):
@@ -107,6 +108,7 @@ class CaseResult:
     latency_s: float = 0.0
     cache_hits: int = 0
     match: str = MATCH_COMPUTE
+    json_parse_rate: Optional[float] = None
 
 
 def cost_kwargs(report: CostReport) -> dict[str, int | float]:
@@ -122,12 +124,29 @@ def cost_kwargs(report: CostReport) -> dict[str, int | float]:
     }
 
 
+def next_call_exceeds(
+    report: CostReport,
+    usd_budget: float | None,
+    token_budget: int | None,
+    extra_usd: float,
+    extra_tokens: int,
+) -> bool:
+    """Следующий вызов с оценкой extra_* достигнет или превысит кап (≥ как у провайдера)."""
+    if extra_usd <= 0 and extra_tokens <= 0:
+        return False
+    if usd_budget is not None and usd_budget > 0:
+        return report.usd + extra_usd >= usd_budget
+    if token_budget is not None and token_budget > 0:
+        return (report.tokens_in + report.tokens_out) + extra_tokens >= token_budget
+    return False
+
+
 def cost_met(
     report: CostReport,
     usd_budget: float | None,
     token_budget: int | None,
 ) -> bool:
-    """Достигнут ли cost-matched бюджет (USD важнее токенов)."""
+    """Уже достигли cost-matched бюджета (пост-проверка после вызова)."""
     if usd_budget is not None and usd_budget > 0:
         return report.usd >= usd_budget
     if token_budget is not None and token_budget > 0:
@@ -274,6 +293,7 @@ class HeuristicJudge:
             latency_s=outcome.latency_s,
             cache_hits=outcome.cache_hits,
             match=match,
+            json_parse_rate=outcome.json_parse_rate,
         )
 
 
@@ -282,7 +302,7 @@ class ComparativeRunner:
 
     Compare: zhoda first, then two independent tables —
     compute-matched (n_samples=C) and cost-matched (USD or tokens).
-    best_of_n в compute тратит C как max(C-1, 1) генераций + 1 judge.
+    best_of_n / open-ended SC в compute тратят C как max(C-1, 1) генераций + 1 judge.
     """
 
     def __init__(

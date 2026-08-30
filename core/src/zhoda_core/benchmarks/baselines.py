@@ -20,6 +20,7 @@ from .runner import (
     EngineOutcome,
     cost_kwargs,
     cost_met,
+    next_call_exceeds,
 )
 
 ANSWER_PROMPT = """Answer the question independently. Be concise.
@@ -69,9 +70,20 @@ Pick the single best candidate. ONLY valid JSON: {{"index": 1}}
 Index is 1-based."""
 
 
+# Если уникальных меток больше — кластеризация шумная, голос по метке, слот судьи не тратим.
+CLUSTER_MAX_UNIQUE = 24
+
+
 def best_of_n_candidates(budget: int) -> int:
     """Число генераций при бюджете C: max(C-1, 1) + 1 judge = C (при C≥2)."""
     return max(budget - 1, 1)
+
+
+def sc_sample_count(budget: int, *, discrete: bool) -> int:
+    """Дискретный SC: C семплов. Open-ended: max(C-1, 1) семплов + слот судьи."""
+    if discrete:
+        return max(budget, 1)
+    return best_of_n_candidates(budget)
 
 
 @dataclass(frozen=True)
@@ -82,6 +94,7 @@ class SampleVote:
     confidence: float | None
     reason: str
     raw: str
+    structured: bool = True
 
 
 def _normalize_answer(text: str) -> str:
@@ -97,21 +110,22 @@ def parse_sample_vote(text: str) -> SampleVote:
         obj = OpenRouterProvider._extract_json(text)
     except (ValueError, TypeError):
         body = text.strip()
-        return SampleVote(answer=body, confidence=None, reason="", raw=text)
+        return SampleVote(answer=body, confidence=None, reason="", raw=text, structured=False)
     raw_answer = obj.get("answer")
     if raw_answer is None:
         body = text.strip()
-        return SampleVote(answer=body, confidence=None, reason="", raw=text)
+        return SampleVote(answer=body, confidence=None, reason="", raw=text, structured=False)
     answer = str(raw_answer).strip()
     if not answer:
         body = text.strip()
-        return SampleVote(answer=body, confidence=None, reason="", raw=text)
+        return SampleVote(answer=body, confidence=None, reason="", raw=text, structured=False)
     reason = obj.get("reason")
     return SampleVote(
         answer=answer,
         confidence=_parse_confidence(obj.get("confidence")),
         reason="" if reason is None else str(reason).strip(),
         raw=text,
+        structured=True,
     )
 
 
@@ -223,8 +237,9 @@ async def _sample_until(
     n_samples: int | None,
     usd_budget: float | None,
     token_budget: int | None,
+    reserve_calls: int = 0,
 ) -> list[str]:
-    """Compute: ровно n вызовов. Cost: пока не набрали USD/токены, кап MAX_COST_CALLS."""
+    """Compute: ровно n вызовов. Cost: pre-check как у провайдера — не стартовать вызов ≥ капа."""
     cost_mode = (usd_budget is not None and usd_budget > 0) or (
         token_budget is not None and token_budget > 0
     )
@@ -235,12 +250,23 @@ async def _sample_until(
         )
     answers: list[str] = []
     prev_tokens, prev_usd = 0, 0.0
+    last_usd, last_tokens = 0.0, 0
     while len(answers) < MAX_COST_CALLS:
-        if answers and cost_met(provider.question_report(), usd_budget, token_budget):
-            break
+        report = provider.question_report()
+        if answers:
+            if cost_met(report, usd_budget, token_budget):
+                break
+            extra_usd = last_usd * (1 + reserve_calls)
+            extra_tokens = last_tokens * (1 + reserve_calls)
+            if next_call_exceeds(
+                report, usd_budget, token_budget, extra_usd, extra_tokens,
+            ):
+                break
         answers.append(await provider.complete(model, prompt))
         report = provider.question_report()
         total = report.tokens_in + report.tokens_out
+        last_tokens = total - prev_tokens
+        last_usd = report.usd - prev_usd
         if total == prev_tokens and report.usd == prev_usd:
             break
         prev_tokens, prev_usd = total, report.usd
@@ -316,9 +342,8 @@ def _winning_confidence(
 class SelfConsistencyArm:
     """N JSON-сэмплов одной модели, majority только по `answer`.
 
-    Дискретные задачи: `answer_options` — голос по метке опции.
-    Открытые: если меток > 1 и задан judge_model — blind-кластеризация
-    смысловой эквивалентности (один ask_json сверх семплов).
+    Дискретные задачи: `answer_options` — C семплов, голос по метке, без судьи.
+    Open-ended: max(C-1, 1) семплов + 1 кластеризация, если 1 < unique ≤ CLUSTER_MAX_UNIQUE.
     """
 
     def __init__(
@@ -344,14 +369,24 @@ class SelfConsistencyArm:
         model = models[0]
         ctx = seed_agents_context(seed_agents)
         prompt = _sc_prompt(question, ctx, answer_options)
+        discrete = bool(answer_options)
+        cost_mode = (usd_budget is not None and usd_budget > 0) or (
+            token_budget is not None and token_budget > 0
+        )
+        may_cluster = (not discrete) and bool(self.judge_model)
+        n_gen = sc_sample_count(
+            max(n_samples or rounds, 1),
+            discrete=discrete or not may_cluster,
+        )
         self.provider.begin_question()
         answers = await _sample_until(
             self.provider,
             model,
             prompt,
-            n_samples=n_samples or rounds,
+            n_samples=None if cost_mode else n_gen,
             usd_budget=usd_budget,
             token_budget=token_budget,
+            reserve_calls=1 if may_cluster else 0,
         )
         votes = [parse_sample_vote(a) for a in answers]
         mapped = [
@@ -360,28 +395,46 @@ class SelfConsistencyArm:
                 confidence=v.confidence,
                 reason=v.reason,
                 raw=v.raw,
+                structured=v.structured,
             )
             for v in votes
         ]
         winner = majority_vote(mapped)
         display_unique = _unique_display(v.answer for v in mapped)
         cluster_ids: list[int] | None = None
-        if not answer_options and self.judge_model and len(display_unique) > 1:
+        report = self.provider.question_report()
+        n_unique = len(display_unique)
+        cluster_ok = (
+            may_cluster
+            and 1 < n_unique <= CLUSTER_MAX_UNIQUE
+        )
+        if cluster_ok and cost_mode:
+            avg_usd = report.usd / max(len(answers), 1)
+            avg_tokens = (report.tokens_in + report.tokens_out) // max(len(answers), 1)
+            if cost_met(report, usd_budget, token_budget) or next_call_exceeds(
+                report, usd_budget, token_budget, avg_usd, avg_tokens,
+            ):
+                cluster_ok = False
+        if cluster_ok and self.judge_model is not None:
             cluster_ids = await _cluster_keys(
                 self.provider, self.judge_model, question, display_unique,
             )
             if cluster_ids is not None:
                 winner = _winner_from_clusters(mapped, display_unique, cluster_ids)
+            report = self.provider.question_report()
         conf = _winning_confidence(
             mapped, winner, display_unique if cluster_ids else None, cluster_ids,
         )
-        report = self.provider.question_report()
+        json_parse_rate = (
+            sum(1.0 for v in votes if v.structured) / len(votes) if votes else None
+        )
         return _outcome(
             format_vote_decision(winner),
             report,
             rounds_taken=1,
             transcript=list(answers),
             confidence=conf,
+            json_parse_rate=json_parse_rate,
         )
 
 
@@ -422,6 +475,7 @@ class BestOfNArm:
                 n_samples=None,
                 usd_budget=usd_budget,
                 token_budget=token_budget,
+                reserve_calls=1,
             )
         else:
             answers = list(
@@ -480,14 +534,31 @@ class SinglePassCouncilArm:
             answers = list(answers) + list(extras)
         if cost_mode:
             more: list[str] = []
-            prev_tokens, prev_usd = 0, 0.0
+            start = self.provider.question_report()
+            prev_tokens = start.tokens_in + start.tokens_out
+            prev_usd = start.usd
+            last_usd, last_tokens = 0.0, 0
             while len(more) < MAX_COST_CALLS:
                 report = self.provider.question_report()
                 if cost_met(report, usd_budget, token_budget):
                     break
+                n_done = len(answers) + len(more)
+                extra_usd = last_usd if last_usd > 0 else (
+                    report.usd / n_done if n_done else 0.0
+                )
+                extra_tokens = last_tokens if last_tokens > 0 else (
+                    (report.tokens_in + report.tokens_out) // n_done if n_done else 0
+                )
+                # запас на chairman
+                if next_call_exceeds(
+                    report, usd_budget, token_budget, extra_usd * 2, extra_tokens * 2,
+                ):
+                    break
                 more.append(await self.provider.complete(models[0], prompt))
                 report = self.provider.question_report()
                 total = report.tokens_in + report.tokens_out
+                last_tokens = total - prev_tokens
+                last_usd = report.usd - prev_usd
                 if total == prev_tokens and report.usd == prev_usd:
                     break
                 prev_tokens, prev_usd = total, report.usd

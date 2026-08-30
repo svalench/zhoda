@@ -259,7 +259,9 @@ the plan already accounted for every dead end."
 
 1. **Benchmarks:** Zhoda debate vs majority-without-debate (vote protocol),
    single-pass council, and self-consistency / best-of-N. Self-consistency
-   votes on a structured `answer` field, not full-text equality. Two tables:
+   votes on a structured `answer` field, not full-text equality. Open-ended
+   self-consistency spends `max(C-1, 1)` samples + 1 cluster judge (same
+   budget as best-of-N). Two tables:
    compute-matched (same API-call count) and cost-matched (same USD, or
    total tokens when USD is 0). Request count is not cost. Infrastructure is in
    `zhoda_core.benchmarks`; numbers land here only after a measured run.

@@ -84,6 +84,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     for label, summary in tables.items():
         print(f"=== {label} ===")
+        if label == "cost_matched":
+            print("(compare usd/tokens; latency_s is sequential wall-clock, not parallel)")
         for mode, metrics in summary.items():
             rendered = {
                 k: (round(v, 3) if isinstance(v, float) else v)

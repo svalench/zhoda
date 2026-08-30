@@ -258,7 +258,7 @@ def test_best_of_n_is_strict_same_budget() -> None:
 
 
 def test_cost_matched_stops_at_usd_budget() -> None:
-    """Cost-matched: сэмплы пока usd >= цели, не по числу запросов."""
+    """Cost-matched: pre-check, следующий вызов не достигает капа (не overshoot)."""
     from zhoda_core.benchmarks.baselines import SelfConsistencyArm
     from zhoda_core.models import CostReport
 
@@ -287,10 +287,11 @@ def test_cost_matched_stops_at_usd_budget() -> None:
     outcome = asyncio.run(
         arm.deliberate("q", MODELS, 3, n_samples=99, usd_budget=0.12)
     )
-    assert provider.n == 3
-    assert abs(outcome.usd - 0.15) < 1e-9
-    assert outcome.total_tokens == 45
-    assert outcome.requests == 3
+    assert provider.n == 2
+    assert abs(outcome.usd - 0.10) < 1e-9
+    assert outcome.total_tokens == 30
+    assert outcome.requests == 2
+    assert outcome.usd <= 0.12
 
 
 def test_cli_dry_run_still_works(capsys) -> None:
@@ -300,6 +301,7 @@ def test_cli_dry_run_still_works(capsys) -> None:
     out = capsys.readouterr().out
     assert "=== compute_matched ===" in out
     assert "=== cost_matched ===" in out
+    assert "latency_s is sequential" in out
 
 
 def test_seed_agents_land_in_context() -> None:
@@ -353,6 +355,7 @@ def test_self_consistency_votes_on_answer_not_full_text() -> None:
     assert provider.jsons == 0
     assert provider.n == 3
     assert abs((outcome.confidence or 0) - 0.45) < 1e-9
+    assert outcome.json_parse_rate == 1.0
 
 
 def test_self_consistency_maps_to_answer_options() -> None:
@@ -426,7 +429,88 @@ def test_self_consistency_open_ended_clusters_equivalent_answers() -> None:
 
     provider = QueueProvider()
     arm = SelfConsistencyArm(provider, judge_model="judge")  # type: ignore[arg-type]
-    outcome = asyncio.run(arm.deliberate("q", MODELS, 3, n_samples=3))
+    outcome = asyncio.run(arm.deliberate("q", MODELS, 3, n_samples=4))
+    assert provider.n == 3
     assert provider.jsons == 1
+    assert outcome.requests == 4
     assert outcome.decision.startswith("drop the test suite")
     assert abs((outcome.confidence or 0) - 0.55) < 1e-9
+
+
+def test_open_ended_sc_fits_compute_budget() -> None:
+    """Open-ended SC: max(C-1, 1) complete + 1 cluster, не C+1."""
+    from zhoda_core.benchmarks.baselines import SelfConsistencyArm, sc_sample_count
+    from zhoda_core.models import CostReport
+
+    assert sc_sample_count(7, discrete=True) == 7
+    assert sc_sample_count(7, discrete=False) == 6
+    assert sc_sample_count(1, discrete=False) == 1
+
+    class CountingProvider:
+        def __init__(self) -> None:
+            self.completes = 0
+            self.jsons = 0
+
+        def begin_question(self) -> None:
+            self.completes = 0
+            self.jsons = 0
+
+        async def complete(self, model: str, prompt: str, cache_key: str | None = None) -> str:
+            del model, prompt, cache_key
+            self.completes += 1
+            return (
+                f'{{"answer": "opt-{self.completes}", "confidence": 0.5, "reason": "x"}}'
+            )
+
+        async def ask_json(self, model: str, prompt: str, cache_key: str | None = None) -> dict:
+            del model, prompt, cache_key
+            self.jsons += 1
+            return {"groups": [[i] for i in range(1, self.completes + 1)]}
+
+        def question_report(self) -> CostReport:
+            return CostReport(requests=self.completes + self.jsons)
+
+    provider = CountingProvider()
+    arm = SelfConsistencyArm(provider, judge_model="judge")  # type: ignore[arg-type]
+    outcome = asyncio.run(arm.deliberate("q", MODELS, 3, n_samples=7))
+    assert provider.completes == 6
+    assert provider.jsons == 1
+    assert outcome.requests == 7
+
+
+def test_non_json_samples_are_reported() -> None:
+    """Доля сэмплов без JSON {answer} попадает в json_parse_rate."""
+    from zhoda_core.benchmarks.baselines import SelfConsistencyArm, parse_sample_vote
+    from zhoda_core.models import CostReport
+
+    prose = parse_sample_vote("I will not emit JSON, here is an essay.")
+    assert prose.structured is False
+
+    class QueueProvider:
+        def __init__(self) -> None:
+            self.n = 0
+            self.texts = [
+                '{"answer": "A", "confidence": 0.5, "reason": "ok"}',
+                "I refuse to output JSON and write a long essay instead.",
+                '{"answer": "A", "confidence": 0.4, "reason": "also"}',
+            ]
+
+        def begin_question(self) -> None:
+            self.n = 0
+
+        async def complete(self, model: str, prompt: str, cache_key: str | None = None) -> str:
+            del model, prompt, cache_key
+            text = self.texts[self.n]
+            self.n += 1
+            return text
+
+        def question_report(self) -> CostReport:
+            return CostReport(requests=self.n)
+
+    provider = QueueProvider()
+    arm = SelfConsistencyArm(provider)  # type: ignore[arg-type]
+    outcome = asyncio.run(
+        arm.deliberate("q", MODELS, 3, n_samples=3, answer_options=("A", "B"))
+    )
+    assert abs((outcome.json_parse_rate or 0) - (2 / 3)) < 1e-9
+    assert outcome.decision.startswith("A.")

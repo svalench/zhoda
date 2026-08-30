@@ -21,6 +21,8 @@ Current mapping (keep updated):
 | Concurrent complete cannot overspend the cap (reserve before HTTP) | tests/test_openrouter.py::test_concurrent_completes_cannot_exceed_budget |
 | Compute-matched baselines: n_samples == zhoda.requests | tests/test_benchmarks.py::test_compare_uses_distinct_arms |
 | Cost-matched baselines stop at USD/token budget | tests/test_benchmarks.py::test_cost_matched_stops_at_usd_budget |
+| Open-ended SC is C calls: max(C-1, 1) gens + 1 cluster | tests/test_benchmarks.py::test_open_ended_sc_fits_compute_budget |
+| SC json_parse_rate counts unstructured fallback | tests/test_benchmarks.py::test_non_json_samples_are_reported |
 | CaseResult records tokens/usd/latency/cache_hits | tests/test_benchmarks.py::test_zhoda_arm_maps_verdict |
 | SC majority on `answer` field, not full text | tests/test_benchmarks.py::test_self_consistency_votes_on_answer_not_full_text |
 | SC maps to `answer_options` | tests/test_benchmarks.py::test_self_consistency_maps_to_answer_options |

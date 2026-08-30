@@ -47,8 +47,8 @@ prompt can dwarf a short sample even at the same C.
 
 | Table | Budget | How baselines spend it |
 |---|---|---|
-| `compute_matched` | `C = max(zhoda.requests, 1)` API calls | `self_consistency` / `council` use C samples; open-ended SC may add 1 cluster judge. `best_of_n` uses `max(C-1, 1)` gens + 1 pick judge |
-| `cost_matched` | `zhoda.usd` if > 0, else `zhoda.total_tokens` | padable arms sample until the spend is met (may overshoot by one call / the judge). `majority` is a protocol run, not padded |
+| `compute_matched` | `C = max(zhoda.requests, 1)` API calls | discrete SC / council: C samples. Open-ended SC and `best_of_n`: `max(C-1, 1)` gens + 1 judge |
+| `cost_matched` | `zhoda.usd` if > 0, else `zhoda.total_tokens` | padable arms sample with a pre-check (next estimated call must not reach the cap; may undershoot). `majority` is a protocol run, not padded |
 
 `majority` and `zhoda` appear in both tables with the same spend (not padded).
 
@@ -57,7 +57,7 @@ prompt can dwarf a short sample even at the same C.
 | `zhoda` | `ZhodaEngine` with `force_protocol=debate`, `clarify_mode=no-clarify` |
 | `majority` | `ZhodaEngine` with `force_protocol=vote` (positions + classify, no debate rounds) |
 | `council` | each model answers once; chairman synthesizes (Karpathy-style, no factions). Extra budget → more samples of the first model |
-| `self_consistency` | JSON `{answer, confidence, reason}`; majority on `answer` (options if set). Open-ended: one blind cluster judge when labels diverge |
+| `self_consistency` | JSON `{answer, confidence, reason}`; majority on `answer` (options if set). Open-ended: `max(C-1, 1)` samples + 1 cluster judge when 1 < unique ≤ 24 |
 | `best_of_n` | generations + 1 judge (`max(C-1, 1)+1` in the compute table) |
 
 `--dry-run` uses deterministic mock profiles (no API). Live runs need
@@ -73,8 +73,13 @@ never a silent mock.
 - **Brier score** — calibration of reported confidence vs correctness.
 - **avg_requests** — mean provider calls (compute proxy).
 - **avg_input_tokens / avg_output_tokens / avg_total_tokens / avg_usd /
-  avg_latency_s / avg_cache_hits** — actual spend; compare these in the
-  cost-matched table, not request count.
+  avg_cache_hits** — actual spend; compare these in the cost-matched table,
+  not request count. Do **not** compare `avg_latency_s` across matching
+  tables: cost-mode sampling is sequential (stop on budget), compute-mode
+  is `asyncio.gather`.
+- **avg_json_parse_rate** — share of SC samples that parsed as
+  `{answer, ...}` JSON (1.0 = all structured). Free models that ignore JSON
+  degrade toward full-text voting; this rate flags that.
 
 ## CLI
 
