@@ -17,6 +17,7 @@ from .metrics import (
     minority_preservation_rate,
     resistance_rate,
     summarize,
+    summarize_tables,
     sycophancy_flip_rate,
 )
 from .runner import (
@@ -53,6 +54,7 @@ __all__ = [
     "convincing_power",
     "brier_score",
     "summarize",
+    "summarize_tables",
     "CaseResult",
     "ComparativeRunner",
     "DeliberationEngine",

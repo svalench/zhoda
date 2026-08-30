@@ -37,16 +37,28 @@ Storage: atomic JSON at `$ZHODA_REPUTATION_PATH` or `~/.zhoda/reputation.json`.
 
 ### Arms (compare)
 
-`--mode compare` runs Zhoda first, then baselines with `n_samples = max(zhoda.cost.requests, 1)`
-so extra samples do not get a cheaper compute budget than deliberation.
+### Matching tables
+
+`--mode compare` runs Zhoda first, then publishes **two independent tables**.
+`CaseResult` records `requests`, `input_tokens`, `output_tokens`,
+`total_tokens`, `usd`, `latency_s`, `cache_hits` from the provider delta
+(`CostReport`). Request count is a proxy, not cost: a long chairman
+prompt can dwarf a short sample even at the same C.
+
+| Table | Budget | How baselines spend it |
+|---|---|---|
+| `compute_matched` | `C = max(zhoda.requests, 1)` API calls | `self_consistency` / `council` use C samples; open-ended SC may add 1 cluster judge. `best_of_n` uses `max(C-1, 1)` gens + 1 pick judge |
+| `cost_matched` | `zhoda.usd` if > 0, else `zhoda.total_tokens` | padable arms sample until the spend is met (may overshoot by one call / the judge). `majority` is a protocol run, not padded |
+
+`majority` and `zhoda` appear in both tables with the same spend (not padded).
 
 | Mode | What it does |
 |---|---|
 | `zhoda` | `ZhodaEngine` with `force_protocol=debate`, `clarify_mode=no-clarify` |
 | `majority` | `ZhodaEngine` with `force_protocol=vote` (positions + classify, no debate rounds) |
 | `council` | each model answers once; chairman synthesizes (Karpathy-style, no factions). Extra budget → more samples of the first model |
-| `self_consistency` | N samples of one model, majority vote on the text |
-| `best_of_n` | N samples of one model; a judge model picks the best (N+1 calls) |
+| `self_consistency` | JSON `{answer, confidence, reason}`; majority on `answer` (options if set). Open-ended: one blind cluster judge when labels diverge |
+| `best_of_n` | generations + 1 judge (`max(C-1, 1)+1` in the compute table) |
 
 `--dry-run` uses deterministic mock profiles (no API). Live runs need
 `zhoda.yaml` and `OPENROUTER_API_KEY`; a missing key or YAML is exit 2,
@@ -59,7 +71,10 @@ never a silent mock.
 - **Minority preservation rate** — share of true-minority cases where the truth survived in `minority_report`.
 - **Convincing power** — share of true-minority cases with >= 1 faction switch toward the minority.
 - **Brier score** — calibration of reported confidence vs correctness.
-- **avg_requests** — mean provider calls per case (compute budget).
+- **avg_requests** — mean provider calls (compute proxy).
+- **avg_input_tokens / avg_output_tokens / avg_total_tokens / avg_usd /
+  avg_latency_s / avg_cache_hits** — actual spend; compare these in the
+  cost-matched table, not request count.
 
 ## CLI
 

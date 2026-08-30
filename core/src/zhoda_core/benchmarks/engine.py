@@ -18,6 +18,7 @@ from .runner import (
     MODE_ZHODA,
     DeliberationEngine,
     EngineOutcome,
+    cost_kwargs,
 )
 
 
@@ -29,7 +30,7 @@ def outcome_from_verdict(verdict: Verdict) -> EngineOutcome:
         switches=len(verdict.switches),
         rounds_taken=verdict.rounds_taken,
         confidence=verdict.router_confidence,
-        requests=verdict.cost.requests,
+        **cost_kwargs(verdict.cost),  # type: ignore[arg-type]
     )
 
 
@@ -55,8 +56,11 @@ class ZhodaArm:
         seed_agents: Sequence[SeedAgent] = (),
         *,
         n_samples: int | None = None,
+        usd_budget: float | None = None,
+        token_budget: int | None = None,
+        answer_options: Sequence[str] = (),
     ) -> EngineOutcome:
-        del models, rounds, n_samples
+        del models, rounds, n_samples, usd_budget, token_budget, answer_options
         verdict = await self.engine.deliberate(
             question,
             force_protocol=self.protocol,
@@ -90,6 +94,6 @@ def build_live_arms(
             engine, protocol=Protocol.VOTE, clarify_mode=clarify_mode,
         ),
         MODE_COUNCIL: SinglePassCouncilArm(provider, chairman=chairman),
-        MODE_SELF_CONSISTENCY: SelfConsistencyArm(provider),
+        MODE_SELF_CONSISTENCY: SelfConsistencyArm(provider, judge_model=chairman),
         MODE_BEST_OF_N: BestOfNArm(provider, judge_model=str(judges[0])),
     }

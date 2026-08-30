@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from .datasets import builtin_cases, load_cases
-from .metrics import summarize
+from .metrics import summarize_tables
 from .runner import ALL_MODES, ComparativeRunner, DeliberationEngine, results_to_dicts
 
 DEFAULT_MODELS = (
@@ -69,7 +69,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             n_samples=args.n_samples,
         )
     )
-    summary = summarize(results)
+    tables = summarize_tables(results)
 
     report = {
         "suite": args.suite,
@@ -77,17 +77,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
         "rounds": args.rounds,
         "models": models,
         "dry_run": args.dry_run,
-        "summary": summary,
+        "tables": tables,
+        "summary": tables["compute_matched"],
         "results": results_to_dicts(results),
     }
 
-    for mode, metrics in summary.items():
-        rendered = {
-            k: (round(v, 3) if isinstance(v, float) else v)
-            for k, v in metrics.items()
-            if v is not None
-        }
-        print(f"[{mode}] {rendered}")
+    for label, summary in tables.items():
+        print(f"=== {label} ===")
+        for mode, metrics in summary.items():
+            rendered = {
+                k: (round(v, 3) if isinstance(v, float) else v)
+                for k, v in metrics.items()
+                if v is not None
+            }
+            print(f"[{mode}] {rendered}")
 
     if args.out:
         out = Path(args.out)
@@ -127,7 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         dest="n_samples",
-        help="compute budget for an isolated baseline (compare uses zhoda.requests)",
+        help="compute budget C for an isolated baseline; best_of_n uses max(C-1,1)+1 judge",
     )
     run.add_argument("--dataset", default=None, help="path to JSONL dataset override")
     run.add_argument("--dry-run", action="store_true", help="use deterministic mock engine")

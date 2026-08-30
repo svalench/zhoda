@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from .runner import CaseResult
+from .runner import CaseResult, MATCH_COMPUTE, MATCH_COST
 
 
 def _mean(flags: Iterable[Optional[bool]]) -> Optional[float]:
@@ -77,5 +77,36 @@ def summarize(results: Iterable[CaseResult]) -> Dict[str, Dict[str, Optional[flo
             "avg_requests": (
                 sum(r.requests for r in subset) / len(subset) if subset else None
             ),
+            "avg_input_tokens": (
+                sum(r.input_tokens for r in subset) / len(subset) if subset else None
+            ),
+            "avg_output_tokens": (
+                sum(r.output_tokens for r in subset) / len(subset) if subset else None
+            ),
+            "avg_total_tokens": (
+                sum(r.total_tokens for r in subset) / len(subset) if subset else None
+            ),
+            "avg_usd": (
+                sum(r.usd for r in subset) / len(subset) if subset else None
+            ),
+            "avg_latency_s": (
+                sum(r.latency_s for r in subset) / len(subset) if subset else None
+            ),
+            "avg_cache_hits": (
+                sum(r.cache_hits for r in subset) / len(subset) if subset else None
+            ),
         }
     return summary
+
+
+def summarize_tables(
+    results: Iterable[CaseResult],
+) -> Dict[str, Dict[str, Dict[str, Optional[float]]]]:
+    """Две независимые таблицы: compute-matched и cost-matched."""
+    by_match: Dict[str, List[CaseResult]] = {MATCH_COMPUTE: [], MATCH_COST: []}
+    for r in results:
+        by_match.setdefault(r.match, []).append(r)
+    return {
+        "compute_matched": summarize(by_match.get(MATCH_COMPUTE, [])),
+        "cost_matched": summarize(by_match.get(MATCH_COST, [])),
+    }

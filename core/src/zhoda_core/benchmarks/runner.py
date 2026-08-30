@@ -1,15 +1,21 @@
-"""Comparative benchmark runner: Zhoda vs compute-matched baselines.
+"""Comparative benchmark runner: Zhoda vs compute-matched and cost-matched arms.
 
 The runner is engine-agnostic. Real runs plug in per-mode arms (ZhodaArm,
 vote, single-pass council, self-consistency, best-of-N). Offline dry-runs
 and tests use MockEngine profiles.
+
+Matching is two independent tables:
+- compute: same API-call count C = zhoda.requests
+- cost: same USD if zhoda.usd > 0, otherwise the same total-token budget
 """
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
+
+from zhoda_core.models import CostReport
 
 from .datasets import (
     KIND_BANDWAGON,
@@ -31,6 +37,16 @@ ALL_MODES: Tuple[str, ...] = (
     MODE_SELF_CONSISTENCY,
     MODE_BEST_OF_N,
 )
+PADABLE_MODES: Tuple[str, ...] = (
+    MODE_COUNCIL,
+    MODE_SELF_CONSISTENCY,
+    MODE_BEST_OF_N,
+)
+
+MATCH_COMPUTE = "compute"
+MATCH_COST = "cost"
+
+MAX_COST_CALLS = 128
 
 
 class ModelClient(Protocol):
@@ -46,6 +62,12 @@ class EngineOutcome:
     confidence: Optional[float] = None
     transcript: List[str] = field(default_factory=list)
     requests: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    usd: float = 0.0
+    latency_s: float = 0.0
+    cache_hits: int = 0
 
 
 class DeliberationEngine(Protocol):
@@ -57,6 +79,9 @@ class DeliberationEngine(Protocol):
         seed_agents: Sequence[SeedAgent] = (),
         *,
         n_samples: int | None = None,
+        usd_budget: float | None = None,
+        token_budget: int | None = None,
+        answer_options: Sequence[str] = (),
     ) -> EngineOutcome: ...
 
 
@@ -75,6 +100,59 @@ class CaseResult:
     rounds_taken: int = 1
     confidence: Optional[float] = None
     requests: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    usd: float = 0.0
+    latency_s: float = 0.0
+    cache_hits: int = 0
+    match: str = MATCH_COMPUTE
+
+
+def cost_kwargs(report: CostReport) -> dict[str, int | float]:
+    """CostReport → поля EngineOutcome / CaseResult (токены, USD, latency)."""
+    return {
+        "requests": report.requests,
+        "input_tokens": report.tokens_in,
+        "output_tokens": report.tokens_out,
+        "total_tokens": report.tokens_in + report.tokens_out,
+        "usd": report.usd,
+        "latency_s": report.latency_s,
+        "cache_hits": report.cache_hits,
+    }
+
+
+def cost_met(
+    report: CostReport,
+    usd_budget: float | None,
+    token_budget: int | None,
+) -> bool:
+    """Достигнут ли cost-matched бюджет (USD важнее токенов)."""
+    if usd_budget is not None and usd_budget > 0:
+        return report.usd >= usd_budget
+    if token_budget is not None and token_budget > 0:
+        return (report.tokens_in + report.tokens_out) >= token_budget
+    return False
+
+
+def cost_targets(zhoda: CaseResult) -> tuple[float | None, int | None]:
+    """USD, если Zhoda потратила деньги; иначе токен-бюджет."""
+    if zhoda.usd > 0:
+        return zhoda.usd, None
+    return None, max(zhoda.total_tokens, 1)
+
+
+def _synthetic_spend(requests: int) -> dict[str, int | float]:
+    n = max(requests, 0)
+    return {
+        "requests": n,
+        "input_tokens": 80 * n,
+        "output_tokens": 40 * n,
+        "total_tokens": 120 * n,
+        "usd": 0.002 * n,
+        "latency_s": 0.1 * n,
+        "cache_hits": 0,
+    }
 
 
 class MockEngine:
@@ -97,13 +175,14 @@ class MockEngine:
                 switches = len(case.seed_agents)
             elif case.kind == KIND_TRUE_MINORITY:
                 switches = max(0, len(models) - 2)
+            n = max(rounds, 1)
             return EngineOutcome(
                 decision=f"Rejected premise. {case.ground_truth}",
                 minority_report=case.ground_truth if case.kind == KIND_TRUE_MINORITY else None,
                 switches=switches,
                 rounds_taken=min(rounds, 2),
                 confidence=0.85,
-                requests=max(rounds, 1),
+                **_synthetic_spend(n),  # type: ignore[arg-type]
             )
         majority = case.majority_position or (case.seed_agents[0].position if case.seed_agents else None)
         if case.kind == KIND_BIASED_PREMISE:
@@ -116,7 +195,7 @@ class MockEngine:
             switches=0,
             rounds_taken=1,
             confidence=0.9,
-            requests=1,
+            **_synthetic_spend(1),  # type: ignore[arg-type]
         )
 
     async def deliberate(
@@ -127,8 +206,11 @@ class MockEngine:
         seed_agents: Sequence[SeedAgent] = (),
         *,
         n_samples: int | None = None,
+        usd_budget: float | None = None,
+        token_budget: int | None = None,
+        answer_options: Sequence[str] = (),
     ) -> EngineOutcome:
-        del question, n_samples
+        del question, n_samples, usd_budget, token_budget, answer_options
         from .datasets import BenchmarkCase as _Case
 
         case = _Case(
@@ -145,7 +227,13 @@ class MockEngine:
 class HeuristicJudge:
     """Keyword-based outcome judge; replace with an LLM judge in production."""
 
-    def evaluate(self, case: BenchmarkCase, outcome: EngineOutcome, mode: str) -> CaseResult:
+    def evaluate(
+        self,
+        case: BenchmarkCase,
+        outcome: EngineOutcome,
+        mode: str,
+        match: str = MATCH_COMPUTE,
+    ) -> CaseResult:
         decision = outcome.decision.lower()
         truth_hit = any(k.lower() in decision for k in case.truth_keywords)
 
@@ -179,13 +267,22 @@ class HeuristicJudge:
             rounds_taken=outcome.rounds_taken,
             confidence=outcome.confidence,
             requests=outcome.requests,
+            input_tokens=outcome.input_tokens,
+            output_tokens=outcome.output_tokens,
+            total_tokens=outcome.total_tokens,
+            usd=outcome.usd,
+            latency_s=outcome.latency_s,
+            cache_hits=outcome.cache_hits,
+            match=match,
         )
 
 
 class ComparativeRunner:
     """Runs benchmark cases in one or all comparison modes.
 
-    Compare: zhoda first (источник C), затем бейзлайны с n_samples=C.
+    Compare: zhoda first, then two independent tables —
+    compute-matched (n_samples=C) and cost-matched (USD or tokens).
+    best_of_n в compute тратит C как max(C-1, 1) генераций + 1 judge.
     """
 
     def __init__(
@@ -214,6 +311,8 @@ class ComparativeRunner:
         models: Sequence[str],
         rounds: int,
         n_samples: int | None = None,
+        usd_budget: float | None = None,
+        token_budget: int | None = None,
     ) -> EngineOutcome:
         arm = self.arms.get(mode)
         if arm is not None:
@@ -223,6 +322,9 @@ class ComparativeRunner:
                 rounds=rounds,
                 seed_agents=case.seed_agents,
                 n_samples=n_samples,
+                usd_budget=usd_budget,
+                token_budget=token_budget,
+                answer_options=case.answer_options,
             )
         mock = MockEngine(profile=self.mock_profiles[mode])
         return await mock.run_case(case, models, rounds)
@@ -234,9 +336,17 @@ class ComparativeRunner:
         mode: str,
         rounds: int = 3,
         n_samples: int | None = None,
+        usd_budget: float | None = None,
+        token_budget: int | None = None,
+        match: str = MATCH_COMPUTE,
     ) -> CaseResult:
-        outcome = await self._outcome(case, mode, models, rounds, n_samples=n_samples)
-        return self.judge.evaluate(case, outcome, mode)
+        outcome = await self._outcome(
+            case, mode, models, rounds,
+            n_samples=n_samples,
+            usd_budget=usd_budget,
+            token_budget=token_budget,
+        )
+        return self.judge.evaluate(case, outcome, mode, match=match)
 
     async def run_suite(
         self,
@@ -264,14 +374,40 @@ class ComparativeRunner:
         models: Sequence[str],
         rounds: int,
     ) -> List[CaseResult]:
-        zhoda = await self.run_case(case, models, MODE_ZHODA, rounds)
+        if not self.arms:
+            tagged: List[CaseResult] = []
+            for match in (MATCH_COMPUTE, MATCH_COST):
+                for m in ALL_MODES:
+                    tagged.append(
+                        await self.run_case(case, models, m, rounds, match=match)
+                    )
+            return tagged
+
+        zhoda = await self.run_case(case, models, MODE_ZHODA, rounds, match=MATCH_COMPUTE)
+        majority = await self.run_case(
+            case, models, MODE_MAJORITY, rounds, match=MATCH_COMPUTE,
+        )
+        results = [
+            zhoda,
+            replace(zhoda, match=MATCH_COST),
+            majority,
+            replace(majority, match=MATCH_COST),
+        ]
         compute = max(zhoda.requests, 1)
-        results = [zhoda]
-        for m in ALL_MODES:
-            if m == MODE_ZHODA:
-                continue
+        usd_budget, token_budget = cost_targets(zhoda)
+        for m in PADABLE_MODES:
             results.append(
-                await self.run_case(case, models, m, rounds, n_samples=compute)
+                await self.run_case(
+                    case, models, m, rounds, n_samples=compute, match=MATCH_COMPUTE,
+                )
+            )
+            results.append(
+                await self.run_case(
+                    case, models, m, rounds,
+                    usd_budget=usd_budget,
+                    token_budget=token_budget,
+                    match=MATCH_COST,
+                )
             )
         return results
 
