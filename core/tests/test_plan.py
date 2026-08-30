@@ -86,11 +86,20 @@ def test_decision_tree_three_labels() -> None:
             claim="PostgreSQL handles 50k RPS writes on one node",
             status=ObjectionStatus.SUPERSEDED,
         ),
+        Critique(
+            id="2", author_faction="Throughputists", target_faction="Pragmatists",
+            flaw_type=FlawType.FACTUAL,
+            claim="see the write amplification paper",
+            evidence_url="https://example.com/paper",
+            status=ObjectionStatus.OPEN,
+        ),
     ]
     tree = build_decision_tree([faction], objections, [], "Use PostgreSQL")
-    objection_node = tree.children[0].children[0]
-    assert objection_node.detail["resolution"] == "addressed by platform revision"
-    assert objection_node.detail["evidence"] == "unverified_claim"
+    assumption_node = tree.children[0].children[0]
+    url_node = tree.children[0].children[1]
+    assert assumption_node.detail["resolution"] == "addressed by platform revision"
+    assert assumption_node.detail["evidence"] == "assumption"
+    assert url_node.detail["evidence"] == "unverified_claim"
     assert tree.children[0].detail["claims"][0]["label"] == "unverified_claim"
     assert tree.children[0].detail["synthetic"] is False
     assert "note" not in tree.children[0].detail

@@ -260,3 +260,11 @@ def dump_cases(cases: Sequence[BenchmarkCase], path: Union[str, Path]) -> Path:
         for case in cases:
             fh.write(json.dumps(asdict(case), ensure_ascii=False) + "\n")
     return path
+
+
+def seed_agents_context(seed_agents: Sequence[SeedAgent]) -> str:
+    """Bandwagon seed_agents → context-блок, без смены сигнатуры ZhodaEngine."""
+    if not seed_agents:
+        return ""
+    lines = "\n".join(f"- {a.name}: {a.position}" for a in seed_agents)
+    return "Injected majority positions (bandwagon probe):\n" + lines

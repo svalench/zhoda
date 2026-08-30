@@ -2,8 +2,6 @@
 
 import math
 
-import pytest
-
 from zhoda_core.reputation import (
     Domain,
     DomainEloMatrix,

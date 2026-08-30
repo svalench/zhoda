@@ -3,6 +3,8 @@ Round-3: 429 handling, budget cap, retry policy.
 Round-4: per-question budget delta, pre-call estimate.
 """
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -120,6 +122,29 @@ async def test_precall_estimate_blocks_before_call() -> None:
     with pytest.raises(BudgetExceededError):  # estimate 0.01 * 2 = $0.02 > cap
         await provider.complete("paid/model", "hi")
     assert calls["n"] == 0  # no request was made
+
+
+@pytest.mark.asyncio
+async def test_concurrent_completes_cannot_exceed_budget() -> None:
+    """Параллельные complete резервируют estimate до HTTP: два вызова уже сверх капа."""
+    provider = make_provider(
+        httpx.MockTransport(lambda r: httpx.Response(200, json=PAID_RESPONSE)),
+        budget_usd=0.015,
+        prices={"paid/model": 0.005},  # estimate = 0.005 * 2 = $0.01
+        max_concurrency=4,
+    )
+    provider.begin_question()
+    results = await asyncio.gather(
+        provider.complete("paid/model", "a"),
+        provider.complete("paid/model", "b"),
+        provider.complete("paid/model", "c"),
+        return_exceptions=True,
+    )
+    successes = [r for r in results if r == "ok"]
+    exceeded = [r for r in results if isinstance(r, BudgetExceededError)]
+    assert len(successes) == 1
+    assert len(exceeded) == 2
+    assert provider.question_usd <= 0.015
 
 
 @pytest.mark.asyncio

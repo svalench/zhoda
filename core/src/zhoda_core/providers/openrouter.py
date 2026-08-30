@@ -80,6 +80,8 @@ class OpenRouterProvider:
         if cache_path:
             self._db = sqlite3.connect(cache_path)
             self._db.execute("CREATE TABLE IF NOT EXISTS cache (k TEXT PRIMARY KEY, v TEXT)")
+        self._reserved_usd = 0.0
+        self._budget_lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._client = httpx.AsyncClient(timeout=120.0)
 
@@ -87,6 +89,7 @@ class OpenRouterProvider:
         """Snapshot ALL counters at the start of a deliberation."""
         self._question_start = self.cost.model_copy()
         self._question_t0 = time.monotonic()
+        self._reserved_usd = 0.0
 
     def question_report(self) -> CostReport:
         """Per-question delta: what THIS deliberation spent."""
@@ -105,16 +108,23 @@ class OpenRouterProvider:
     def question_usd(self) -> float:
         return self.cost.usd - self._question_start.usd
 
-    def _check_budget(self, model: str, max_tokens: int) -> None:
+    def _estimate(self, model: str, max_tokens: int) -> float:
+        return self.prices.get(model, 0.0) * (max_tokens / 1000)
+
+    def _check_budget(self, model: str, max_tokens: int) -> float:
+        """Проверить кап. Возвращает estimate к резервированию до HTTP."""
         if self.budget_usd == 0 and not model.endswith(":free"):
             raise BudgetExceededError(f"budget is $0 — only :free models allowed, got {model!r}")
+        estimate = self._estimate(model, max_tokens)
         if self.budget_usd > 0:
-            estimate = self.prices.get(model, 0.0) * (max_tokens / 1000)
-            if self.question_usd + estimate > self.budget_usd:
+            committed = self.question_usd + self._reserved_usd
+            if committed + estimate >= self.budget_usd:
                 raise BudgetExceededError(
                     f"estimate ${estimate:.4f} for {model} would exceed cap "
-                    f"${self.budget_usd} (question already at ${self.question_usd:.4f})"
+                    f"${self.budget_usd} (question already at ${self.question_usd:.4f}, "
+                    f"reserved ${self._reserved_usd:.4f})"
                 )
+        return estimate
 
     def _cache_get(self, key: str) -> str | None:
         if key in self._cache:
@@ -144,9 +154,15 @@ class OpenRouterProvider:
             if cached is not None:
                 self.cost.cache_hits += 1
                 return cached
-        self._check_budget(model, max_tokens)
-        async with self._semaphore:
-            return await self._with_retries(model, prompt, cache_key, max_tokens)
+        async with self._budget_lock:
+            estimate = self._check_budget(model, max_tokens)
+            self._reserved_usd += estimate
+        try:
+            async with self._semaphore:
+                return await self._with_retries(model, prompt, cache_key, max_tokens)
+        finally:
+            async with self._budget_lock:
+                self._reserved_usd -= estimate
 
     async def ask_json(self, model: str, prompt: str, *, cache_key: str | None = None) -> dict:
         """Strict JSON OBJECT with one repair retry (round-7: arrays rejected)."""

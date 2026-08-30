@@ -10,7 +10,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
       - run: uv sync
+        working-directory: core
+      - run: uv run ruff check .
+        working-directory: core
+      - run: uv run mypy src/zhoda_core/benchmarks
         working-directory: core
       - run: uv run pytest -m "not live"
         working-directory: core
@@ -20,7 +26,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
       - run: uv sync
+        working-directory: mcp
+      - run: uv run ruff check .
+        working-directory: mcp
+      - run: uv run mypy src
         working-directory: mcp
       - run: uv run pytest
         working-directory: mcp

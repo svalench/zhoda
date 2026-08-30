@@ -72,11 +72,119 @@ def test_compare_run_dry_pipeline():
     results = asyncio.run(
         runner.run_suite(builtin_cases(), MODELS, mode="compare", rounds=3)
     )
-    assert len(results) == len(builtin_cases()) * 3
+    assert len(results) == len(builtin_cases()) * 5
     summary = summarize(results)
     assert summary["zhoda"]["resistance_rate"] == 1.0
-    assert summary["single"]["resistance_rate"] == 0.0
-    assert summary["single"]["sycophancy_flip_rate"] == 1.0
+    assert summary["majority"]["resistance_rate"] == 0.0
+    assert summary["council"]["sycophancy_flip_rate"] == 1.0
     assert summary["zhoda"]["sycophancy_flip_rate"] == 0.0
     assert summary["zhoda"]["minority_preservation_rate"] == 1.0
     assert summary["zhoda"]["convincing_power"] == 1.0
+    assert "single" not in summary
+
+
+def test_zhoda_arm_maps_verdict() -> None:
+    from zhoda_core.benchmarks.engine import ZhodaArm, outcome_from_verdict
+    from zhoda_core.models import (
+        ConsensusStrength,
+        CostReport,
+        FactionSwitch,
+        Protocol,
+        Verdict,
+    )
+
+    class FakeEngine:
+        async def deliberate(self, question: str, **kwargs: object) -> Verdict:
+            del question, kwargs
+            return Verdict(
+                decision="use postgres",
+                zhoda_reached=True,
+                consensus_strength=ConsensusStrength.MAJORITY,
+                protocol=Protocol.DEBATE,
+                minority_report="kafka",
+                switches=[
+                    FactionSwitch(
+                        model="m1",
+                        from_faction="A",
+                        to_faction="B",
+                        convinced_by="closed write-scaling",
+                        objection_id="1",
+                    )
+                ],
+                rounds_taken=2,
+                cost=CostReport(requests=11),
+                router_confidence=0.8,
+            )
+
+    arm = ZhodaArm(FakeEngine(), protocol=Protocol.DEBATE)
+    outcome = asyncio.run(
+        arm.deliberate("postgres or kafka?", MODELS, 3)
+    )
+    assert outcome.decision == "use postgres"
+    assert outcome.minority_report == "kafka"
+    assert outcome.switches == 1
+    assert outcome.rounds_taken == 2
+    assert outcome.requests == 11
+    assert outcome.confidence == 0.8
+    mapped = outcome_from_verdict(
+        asyncio.run(FakeEngine().deliberate("q"))
+    )
+    assert mapped.requests == 11
+
+
+def test_compare_uses_distinct_arms() -> None:
+    """Один engine не обслуживает все modes — у каждого arm свой вызов."""
+    from zhoda_core.benchmarks.runner import (
+        ALL_MODES,
+        MODE_ZHODA,
+        EngineOutcome,
+    )
+
+    class RecordingArm:
+        def __init__(self, name: str, requests: int = 7) -> None:
+            self.name = name
+            self.calls: list[dict] = []
+            self.requests = requests
+
+        async def deliberate(
+            self,
+            question: str,
+            models: list[str],
+            rounds: int,
+            seed_agents: tuple = (),
+            *,
+            n_samples: int | None = None,
+        ) -> EngineOutcome:
+            self.calls.append({"n_samples": n_samples, "question": question})
+            req = self.requests if self.name == MODE_ZHODA else (n_samples or 0)
+            return EngineOutcome(decision=f"{self.name}-ok", requests=req)
+
+    arms = {mode: RecordingArm(mode) for mode in ALL_MODES}
+    runner = ComparativeRunner(arms=arms)
+    case = builtin_cases("sycophancy")[0]
+    asyncio.run(runner.run_suite([case], MODELS, mode="compare"))
+    assert len(arms[MODE_ZHODA].calls) == 1
+    assert arms[MODE_ZHODA].calls[0]["n_samples"] is None
+    for mode in ALL_MODES:
+        if mode == MODE_ZHODA:
+            continue
+        assert len(arms[mode].calls) == 1
+        assert arms[mode].calls[0]["n_samples"] == 7
+
+
+def test_compute_matched_n_equals_zhoda_requests() -> None:
+    test_compare_uses_distinct_arms()
+
+
+def test_cli_dry_run_still_works() -> None:
+    from zhoda_core.benchmarks.cli import main
+
+    assert main(["run", "--dry-run", "--suite", "all", "--mode", "compare"]) == 0
+
+
+def test_seed_agents_land_in_context() -> None:
+    from zhoda_core.benchmarks.datasets import SeedAgent, seed_agents_context
+
+    assert seed_agents_context(()) == ""
+    text = seed_agents_context((SeedAgent("echo-1", "drop CI"),))
+    assert "echo-1" in text and "drop CI" in text

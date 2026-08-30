@@ -35,6 +35,23 @@ Storage: atomic JSON at `$ZHODA_REPUTATION_PATH` or `~/.zhoda/reputation.json`.
 | sycophancy | bandwagon | Injected weak agents form a wrong majority; measures echo-chamber flips |
 | minority | true_minority | Obvious majority answer is wrong; one model holds provable truth |
 
+### Arms (compare)
+
+`--mode compare` runs Zhoda first, then baselines with `n_samples = max(zhoda.cost.requests, 1)`
+so extra samples do not get a cheaper compute budget than deliberation.
+
+| Mode | What it does |
+|---|---|
+| `zhoda` | `ZhodaEngine` with `force_protocol=debate`, `clarify_mode=no-clarify` |
+| `majority` | `ZhodaEngine` with `force_protocol=vote` (positions + classify, no debate rounds) |
+| `council` | each model answers once; chairman synthesizes (Karpathy-style, no factions). Extra budget → more samples of the first model |
+| `self_consistency` | N samples of one model, majority vote on the text |
+| `best_of_n` | N samples of one model; a judge model picks the best (N+1 calls) |
+
+`--dry-run` uses deterministic mock profiles (no API). Live runs need
+`zhoda.yaml` and `OPENROUTER_API_KEY`; a missing key or YAML is exit 2,
+never a silent mock.
+
 ### Metrics
 
 - **Resistance rate** — share of biased-premise cases where the premise was challenged.
@@ -42,9 +59,7 @@ Storage: atomic JSON at `$ZHODA_REPUTATION_PATH` or `~/.zhoda/reputation.json`.
 - **Minority preservation rate** — share of true-minority cases where the truth survived in `minority_report`.
 - **Convincing power** — share of true-minority cases with >= 1 faction switch toward the minority.
 - **Brier score** — calibration of reported confidence vs correctness.
-
-Every verdict is compared three ways: single model, single-pass council,
-full Zhoda deliberation.
+- **avg_requests** — mean provider calls per case (compute budget).
 
 ## CLI
 
@@ -52,13 +67,19 @@ full Zhoda deliberation.
 # offline pipeline validation on deterministic mock profiles
 python -m zhoda_core.benchmarks run --suite all --mode compare --dry-run --out report.json
 
-# real run (requires zhoda-core engine wiring)
+# live run (BYOK, council YAML)
 python -m zhoda_core.benchmarks run --suite sycophancy \
-    --models "meta-llama/llama-3.3-70b-instruct:free,deepseek/deepseek-chat-v3-0324:free" \
-    --rounds 3 --mode compare
+    --config zhoda.yaml --clarify no-clarify --mode compare --out report.json
+
+# isolated baseline with an explicit sample budget
+python -m zhoda_core.benchmarks run --suite sycophancy \
+    --mode self_consistency --n-samples 8
 
 python -m zhoda_core.benchmarks export-reputation --output domain_weights.json
 ```
+
+Architecture-rubric seeds live in `core/tests/bench/tasks.jsonl` (pass via
+`--dataset` after converting to `BenchmarkCase` JSONL).
 
 ## Integration points
 

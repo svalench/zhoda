@@ -17,7 +17,7 @@ from typing import List, Optional
 
 from .datasets import builtin_cases, load_cases
 from .metrics import summarize
-from .runner import ComparativeRunner, results_to_dicts
+from .runner import ALL_MODES, ComparativeRunner, DeliberationEngine, results_to_dicts
 
 DEFAULT_MODELS = (
     "meta-llama/llama-3.3-70b-instruct:free",
@@ -25,15 +25,14 @@ DEFAULT_MODELS = (
     "qwen/qwen3-235b-a22b:free",
 )
 
+_MODE_CHOICES = ("compare", *ALL_MODES)
 
-def _build_engine():
-    """Try to wire the real zhoda-core engine; return None if unavailable."""
-    try:
-        from zhoda_core.engine import deliberation_engine  # type: ignore
 
-        return deliberation_engine()
-    except Exception:
-        return None
+def _build_arms(config: str, clarify_mode: str) -> dict[str, DeliberationEngine]:
+    """Реальный engine; исключения наружу — CLI печатает и выходит 2."""
+    from .engine import build_live_arms
+
+    return build_live_arms(config, clarify_mode=clarify_mode)
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -48,18 +47,27 @@ def _cmd_run(args: argparse.Namespace) -> int:
         else list(DEFAULT_MODELS)
     )
 
-    engine = None if args.dry_run else _build_engine()
-    if engine is None and not args.dry_run:
-        print(
-            "zhoda-core engine not available; re-run with --dry-run to "
-            "validate the pipeline on mock profiles",
-            file=sys.stderr,
-        )
-        return 2
+    arms = None
+    if not args.dry_run:
+        try:
+            arms = _build_arms(args.config, args.clarify)
+        except Exception as exc:  # noqa: BLE001 — CLI boundary: YAML/key/config
+            print(
+                f"zhoda-core engine not available: {exc}\n"
+                "re-run with --dry-run to validate the pipeline on mock profiles",
+                file=sys.stderr,
+            )
+            return 2
 
-    runner = ComparativeRunner(engine=engine)
+    runner = ComparativeRunner(arms=arms)
     results = asyncio.run(
-        runner.run_suite(cases, models, mode=args.mode, rounds=args.rounds)
+        runner.run_suite(
+            cases,
+            models,
+            mode=args.mode,
+            rounds=args.rounds,
+            n_samples=args.n_samples,
+        )
     )
     summary = summarize(results)
 
@@ -111,11 +119,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="run a benchmark suite")
     run.add_argument("--suite", choices=["sycophancy", "minority", "all"], default="all")
-    run.add_argument("--mode", choices=["single", "council", "zhoda", "compare"], default="compare")
+    run.add_argument("--mode", choices=list(_MODE_CHOICES), default="compare")
     run.add_argument("--models", default=None, help="comma-separated model ids")
     run.add_argument("--rounds", type=int, default=3)
+    run.add_argument(
+        "--n-samples",
+        type=int,
+        default=None,
+        dest="n_samples",
+        help="compute budget for an isolated baseline (compare uses zhoda.requests)",
+    )
     run.add_argument("--dataset", default=None, help="path to JSONL dataset override")
     run.add_argument("--dry-run", action="store_true", help="use deterministic mock engine")
+    run.add_argument("--config", default="zhoda.yaml", help="council YAML for live arms")
+    run.add_argument(
+        "--clarify",
+        default="no-clarify",
+        choices=["smart", "no-clarify", "auto-clarify"],
+        help="Stage 0 mode for Zhoda/majority arms (default no-clarify)",
+    )
     run.add_argument("--out", default=None, help="write JSON report to this path")
     run.set_defaults(func=_cmd_run)
 
@@ -128,7 +150,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    result: int = args.func(args)
+    return result
 
 
 if __name__ == "__main__":

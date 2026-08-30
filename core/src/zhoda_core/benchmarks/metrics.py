@@ -74,5 +74,8 @@ def summarize(results: Iterable[CaseResult]) -> Dict[str, Dict[str, Optional[flo
             "avg_rounds": (
                 sum(r.rounds_taken for r in subset) / len(subset) if subset else None
             ),
+            "avg_requests": (
+                sum(r.requests for r in subset) / len(subset) if subset else None
+            ),
         }
     return summary

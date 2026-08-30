@@ -1,17 +1,15 @@
-"""Comparative benchmark runner: single model vs council vs Zhoda.
+"""Comparative benchmark runner: Zhoda vs compute-matched baselines.
 
-The runner is engine-agnostic. Real runs plug in a DeliberationEngine
-backed by zhoda-core; offline dry-runs and tests use MockEngine profiles
-that deterministically emulate conformist and truth-seeking behavior.
-Judgement of outcomes is heuristic by default and can be upgraded to an
-LLM judge later.
+The runner is engine-agnostic. Real runs plug in per-mode arms (ZhodaArm,
+vote, single-pass council, self-consistency, best-of-N). Offline dry-runs
+and tests use MockEngine profiles.
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, dataclass, field
-from typing import List, Optional, Protocol, Sequence, Tuple
+from typing import Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 from .datasets import (
     KIND_BANDWAGON,
@@ -21,10 +19,18 @@ from .datasets import (
     SeedAgent,
 )
 
-MODE_SINGLE = "single"
-MODE_COUNCIL = "council"
 MODE_ZHODA = "zhoda"
-ALL_MODES: Tuple[str, ...] = (MODE_SINGLE, MODE_COUNCIL, MODE_ZHODA)
+MODE_MAJORITY = "majority"
+MODE_COUNCIL = "council"
+MODE_SELF_CONSISTENCY = "self_consistency"
+MODE_BEST_OF_N = "best_of_n"
+ALL_MODES: Tuple[str, ...] = (
+    MODE_ZHODA,
+    MODE_MAJORITY,
+    MODE_COUNCIL,
+    MODE_SELF_CONSISTENCY,
+    MODE_BEST_OF_N,
+)
 
 
 class ModelClient(Protocol):
@@ -39,6 +45,7 @@ class EngineOutcome:
     rounds_taken: int = 1
     confidence: Optional[float] = None
     transcript: List[str] = field(default_factory=list)
+    requests: int = 0
 
 
 class DeliberationEngine(Protocol):
@@ -48,6 +55,8 @@ class DeliberationEngine(Protocol):
         models: Sequence[str],
         rounds: int,
         seed_agents: Sequence[SeedAgent] = (),
+        *,
+        n_samples: int | None = None,
     ) -> EngineOutcome: ...
 
 
@@ -65,6 +74,7 @@ class CaseResult:
     convinced_switches: int = 0
     rounds_taken: int = 1
     confidence: Optional[float] = None
+    requests: int = 0
 
 
 class MockEngine:
@@ -93,6 +103,7 @@ class MockEngine:
                 switches=switches,
                 rounds_taken=min(rounds, 2),
                 confidence=0.85,
+                requests=max(rounds, 1),
             )
         majority = case.majority_position or (case.seed_agents[0].position if case.seed_agents else None)
         if case.kind == KIND_BIASED_PREMISE:
@@ -105,7 +116,30 @@ class MockEngine:
             switches=0,
             rounds_taken=1,
             confidence=0.9,
+            requests=1,
         )
+
+    async def deliberate(
+        self,
+        question: str,
+        models: Sequence[str],
+        rounds: int,
+        seed_agents: Sequence[SeedAgent] = (),
+        *,
+        n_samples: int | None = None,
+    ) -> EngineOutcome:
+        del question, n_samples
+        from .datasets import BenchmarkCase as _Case
+
+        case = _Case(
+            id="mock",
+            suite="sycophancy",
+            kind=KIND_BIASED_PREMISE,
+            question="",
+            ground_truth="",
+            seed_agents=tuple(seed_agents),
+        )
+        return await self.run_case(case, models, rounds)
 
 
 class HeuristicJudge:
@@ -144,39 +178,52 @@ class HeuristicJudge:
             convinced_switches=outcome.switches,
             rounds_taken=outcome.rounds_taken,
             confidence=outcome.confidence,
+            requests=outcome.requests,
         )
 
 
 class ComparativeRunner:
-    """Runs benchmark cases in one or all comparison modes."""
+    """Runs benchmark cases in one or all comparison modes.
+
+    Compare: zhoda first (источник C), затем бейзлайны с n_samples=C.
+    """
 
     def __init__(
         self,
         engine: Optional[DeliberationEngine] = None,
         judge: Optional[HeuristicJudge] = None,
-        mock_profiles: Optional[dict] = None,
+        mock_profiles: Optional[dict[str, str]] = None,
+        arms: Optional[Mapping[str, DeliberationEngine]] = None,
     ) -> None:
-        self.engine = engine
+        self.arms: Dict[str, DeliberationEngine] = dict(arms or {})
+        if engine is not None and MODE_ZHODA not in self.arms:
+            self.arms[MODE_ZHODA] = engine
         self.judge = judge or HeuristicJudge()
         self.mock_profiles = mock_profiles or {
-            MODE_SINGLE: "conformist",
-            MODE_COUNCIL: "conformist",
             MODE_ZHODA: "honest",
+            MODE_MAJORITY: "conformist",
+            MODE_COUNCIL: "conformist",
+            MODE_SELF_CONSISTENCY: "conformist",
+            MODE_BEST_OF_N: "conformist",
         }
 
-    async def _outcome(self, case: BenchmarkCase, mode: str, models: Sequence[str], rounds: int) -> EngineOutcome:
-        if self.engine is not None:
-            raw = await self.engine.deliberate(
+    async def _outcome(
+        self,
+        case: BenchmarkCase,
+        mode: str,
+        models: Sequence[str],
+        rounds: int,
+        n_samples: int | None = None,
+    ) -> EngineOutcome:
+        arm = self.arms.get(mode)
+        if arm is not None:
+            return await arm.deliberate(
                 question=case.question,
                 models=models,
                 rounds=rounds,
                 seed_agents=case.seed_agents,
+                n_samples=n_samples,
             )
-            if isinstance(raw, EngineOutcome):
-                return raw
-            if isinstance(raw, dict):
-                return EngineOutcome(**raw)
-            return EngineOutcome(decision=str(raw))
         mock = MockEngine(profile=self.mock_profiles[mode])
         return await mock.run_case(case, models, rounds)
 
@@ -186,8 +233,9 @@ class ComparativeRunner:
         models: Sequence[str],
         mode: str,
         rounds: int = 3,
+        n_samples: int | None = None,
     ) -> CaseResult:
-        outcome = await self._outcome(case, mode, models, rounds)
+        outcome = await self._outcome(case, mode, models, rounds, n_samples=n_samples)
         return self.judge.evaluate(case, outcome, mode)
 
     async def run_suite(
@@ -196,12 +244,35 @@ class ComparativeRunner:
         models: Sequence[str],
         mode: str = "compare",
         rounds: int = 3,
+        n_samples: int | None = None,
     ) -> List[CaseResult]:
-        modes = ALL_MODES if mode == "compare" else (mode,)
-        results: List[CaseResult] = []
+        if mode == "compare":
+            results: List[CaseResult] = []
+            for case in cases:
+                results.extend(await self._run_compare_case(case, models, rounds))
+            return results
+        results = []
         for case in cases:
-            for m in modes:
-                results.append(await self.run_case(case, models, m, rounds))
+            results.append(
+                await self.run_case(case, models, mode, rounds, n_samples=n_samples)
+            )
+        return results
+
+    async def _run_compare_case(
+        self,
+        case: BenchmarkCase,
+        models: Sequence[str],
+        rounds: int,
+    ) -> List[CaseResult]:
+        zhoda = await self.run_case(case, models, MODE_ZHODA, rounds)
+        compute = max(zhoda.requests, 1)
+        results = [zhoda]
+        for m in ALL_MODES:
+            if m == MODE_ZHODA:
+                continue
+            results.append(
+                await self.run_case(case, models, m, rounds, n_samples=compute)
+            )
         return results
 
 
@@ -211,10 +282,11 @@ def run_suite_sync(
     mode: str = "compare",
     rounds: int = 3,
     engine: Optional[DeliberationEngine] = None,
+    arms: Optional[Mapping[str, DeliberationEngine]] = None,
 ) -> List[CaseResult]:
-    runner = ComparativeRunner(engine=engine)
+    runner = ComparativeRunner(engine=engine, arms=arms)
     return asyncio.run(runner.run_suite(cases, models, mode=mode, rounds=rounds))
 
 
-def results_to_dicts(results: Sequence[CaseResult]) -> List[dict]:
+def results_to_dicts(results: Sequence[CaseResult]) -> List[dict[str, object]]:
     return [asdict(r) for r in results]

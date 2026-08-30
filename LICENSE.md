@@ -10,6 +10,5 @@ Zhoda uses a split license (decision record: docs/04-critique-response.md §6):
 
 The moat is reputation data, brand, and community — not the code.
 
-Canonical license texts: add via GitHub "Add license" (Apache-2.0 and AGPL-3.0)
-as `LICENSE-APACHE` and `LICENSE-AGPL` — generated from the official templates,
-not handwritten.
+Canonical license texts: [LICENSE-APACHE](LICENSE-APACHE) (Apache-2.0) and
+[LICENSE-AGPL](LICENSE-AGPL) (AGPL-3.0).

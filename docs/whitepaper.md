@@ -240,8 +240,10 @@ after a one-time $10 credit): that is 1–2 full deliberations per day at
 
 ## 7. Economics
 
-Zhoda is open source under AGPL-3.0 with donation-based funding (GitHub
-Sponsors, OpenCollective, crypto). There is deliberately **no token**: DePIN
+Zhoda is open source under a split license with donation-based funding
+(GitHub Sponsors, OpenCollective, crypto): Apache-2.0 for the engine,
+MCP server, and plugins; AGPL-3.0 for a hosted API server (when it exists).
+See [LICENSE.md](../LICENSE.md). There is deliberately **no token**: DePIN
 precedents show that compute tokens without pre-existing demand collapse
 (−70–85% from ATH across the sector). If a distributed inference network ever
 emerges around Zhoda, it will start with credit-style accounting
@@ -255,8 +257,10 @@ the plan already accounted for every dead end."
 
 ## 8. Evaluation plan
 
-1. **Benchmarks:** single model vs single-pass council vs Zhoda on reasoning
-   and decision-quality tasks; factuality suites.
+1. **Benchmarks:** Zhoda debate vs majority-without-debate (vote protocol),
+   single-pass council, and compute-matched self-consistency / best-of-N
+   (`n_samples` equals Zhoda's `cost.requests`). Infrastructure is in
+   `zhoda_core.benchmarks`; numbers land here only after a measured run.
 2. **Metrics:** accuracy, calibration (stated confidence vs correctness),
    dissent usefulness (human-rated), cost per correct answer, dead ends
    prevented per dollar.

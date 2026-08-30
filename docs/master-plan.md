@@ -114,9 +114,12 @@ Zhoda — open-source система, в которой несколько LLM �
 - [x] Полный цикл: роутер → элиситация → позиции → фракции → дебаты с
   ревизией → консенсус → вердикт → план-контракт + дерево
 - [x] 19 тестов (провайдер, гейты, ценности, e2e), CI
+- [x] Бенчмарк-раннер: живой `ZhodaEngine` + compute-matched бейзлайны
+      (self-consistency, best-of-N, majority/vote, single-pass council).
+      Цифры — после измеренного прогона, не из dry-run.
 - [ ] **Первый живой прогон** на бесплатных моделях + починка вскрывшегося
-- [ ] Бенчмарк: 50–100 decision-задач, руки single / council / Zhoda /
-  абляции; blind-судейство, human-подвыборка; метрика dead_ends/$
+- [ ] Бенчмарк: 50–100 decision-задач; blind-судейство, human-подвыборка;
+      метрика dead_ends/$
 
 ### Этап 2 — MCP-сервер (после зелёного live)
 - [x] Инструменты clarify/deliberate/verdict/transcript/reputation
