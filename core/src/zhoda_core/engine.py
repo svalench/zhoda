@@ -113,6 +113,7 @@ class ZhodaEngine:
         self.escalation_model = escalation_model
         self.alias_seed = alias_seed
         self.transcripts = TranscriptStore(transcripts_dir)
+        self.last_transcript_id: str | None = None
         self.router = ProtocolRouter(provider, classifiers=router_classifiers)
         self.elicitor = Elicitor(provider, ambiguity_threshold=ambiguity_threshold)
         self.verdicts = VerdictBuilder()
@@ -138,7 +139,51 @@ class ZhodaEngine:
         clusterer = FactionClusterer(self.provider)
         consensus = ConsensusChecker(self.provider, stability_rounds=self.stability_rounds)
 
-        tid = self.transcripts.create()
+        tid = self.transcripts.create(
+            {"question": question, "clarify_mode": clarify_mode}
+        )
+        self.last_transcript_id = tid
+        try:
+            return await self._deliberate_body(
+                tid,
+                question,
+                debate,
+                clusterer,
+                consensus,
+                force_protocol=force_protocol,
+                clarify_mode=clarify_mode,
+                on_questions=on_questions,
+                on_progress=on_progress,
+                context=context,
+                value_map=value_map,
+            )
+        except Exception as exc:
+            # Падение до verdict не оставляет пустой jsonl.
+            self.transcripts.append(
+                tid,
+                {
+                    "stage": "error",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:800],
+                },
+            )
+            raise
+
+    async def _deliberate_body(
+        self,
+        tid: str,
+        question: str,
+        debate: DebateEngine,
+        clusterer: FactionClusterer,
+        consensus: ConsensusChecker,
+        *,
+        force_protocol: Protocol | None,
+        clarify_mode: str,
+        on_questions: Callable[[list[ClarifyingQuestion]], list[str]] | None,
+        on_progress: Callable[[ProgressEvent], None] | None,
+        context: str,
+        value_map: ValueMap | None,
+    ) -> Verdict:
         self.provider.begin_question()
         aliases = make_aliases(self.council, seed=self.alias_seed)
         speakers = {alias: real for real, alias in aliases.items()}

@@ -28,6 +28,7 @@ transcripts/
 **/.zhoda-cache.*
 *.db
 /core/zhoda.yaml
+/core/eval/runs/
 
 # Editors / OS
 .idea/

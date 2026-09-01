@@ -55,6 +55,7 @@ Current mapping (keep updated):
 | Cost after all LLM; sum(breakdown)==requests; latency_s | tests/test_openrouter.py::test_latency_s_is_measured + tests/test_e2e.py::test_mixed_elicitation_answers_stay_honest |
 | Elicitation answers reach positions/verdict; cache is answer-aware | tests/test_e2e.py::test_elicitation_answers_reach_positions_and_verdict |
 | Supplied value_map skips Stage 0 LLM | tests/test_e2e.py::test_supplied_value_map_skips_elicitation |
+| Failed route still writes start+error; file never empty | tests/test_transcripts.py |
 | MCP confirm=false never spends; quota_exceeded is structured | mcp/tests/test_runtime.py |
 
 When you add a mechanic to a docstring or docs/, add its test first or in the

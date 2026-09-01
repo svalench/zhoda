@@ -109,6 +109,18 @@ memory is `unverified_claim`, never `sourced`.
 - The same question twice → the second run is served from cache (watch
   `cache_hits`)
 
+Batch for the evaluation dataset (questions + launch):
+
+```bash
+cd core
+./eval/run.sh                         # all cases, --no-clarify
+./eval/run.sh debate-pg-kafka         # one id
+DRY=1 ./eval/run.sh                   # print commands only
+```
+
+Cases live in `core/eval/questions.jsonl`. Logs and `summary.tsv` go to
+`core/eval/runs/<stamp>/`. Keep every transcript.
+
 ## Troubleshooting
 
 - `no judges configured` / `judges must sit OUTSIDE the council` — fix

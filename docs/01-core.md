@@ -9,6 +9,8 @@ models.py and this file in the same commit (Cursor rule 10-python-core).
 2. **Argue in factions** — deliberation between groups, not isolated reviewers.
 3. **Zhoda or honest dissent** — consensus or a structured disagreement map.
 4. **Auditability** — every verdict is reproducible from its transcript.
+   The хроніка opens with a `start` event at create (never an empty file).
+   A provider crash appends `error` and re-raises; the id is still printed.
 5. **Cost honesty** — free models first, explicit budget caps, no hidden spend.
 
 ## Protocols

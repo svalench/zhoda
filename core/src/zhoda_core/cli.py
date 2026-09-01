@@ -17,6 +17,7 @@ from .elicitor import ClarifyingQuestion
 from .env import load_zhoda_env
 from .models import CostReport, Protocol
 from .progress import ProgressEvent
+from .providers.openrouter import ZhodaProviderError
 
 app = typer.Typer(help="Zhoda — models argue until they reach zhoda.")
 console = Console()
@@ -167,14 +168,22 @@ def deliberate(
                     finally:
                         status.start()
 
-                verdict = await engine.deliberate(
-                    question,
-                    force_protocol=Protocol(protocol) if protocol else None,
-                    clarify_mode=clarify_mode,
-                    on_questions=ask_pausing if clarify_mode == "smart" else None,
-                    on_progress=lambda event: apply_progress(event, status),
-                    context=_load_context_files(context or []),
-                )
+                try:
+                    verdict = await engine.deliberate(
+                        question,
+                        force_protocol=Protocol(protocol) if protocol else None,
+                        clarify_mode=clarify_mode,
+                        on_questions=ask_pausing if clarify_mode == "smart" else None,
+                        on_progress=lambda event: apply_progress(event, status),
+                        context=_load_context_files(context or []),
+                    )
+                except Exception as exc:
+                    console.print(f"[red]{type(exc).__name__}: {exc}[/red]")
+                    tid = engine.last_transcript_id
+                    if tid:
+                        console.print(f"transcript: {tid}")
+                    code = 3 if isinstance(exc, ZhodaProviderError) else 1
+                    raise typer.Exit(code=code) from exc
             console.print(
                 f"\n[bold]zhoda_reached:[/bold] {verdict.zhoda_reached} "
                 f"({verdict.consensus_strength}, rounds: {verdict.rounds_taken})"
