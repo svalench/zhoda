@@ -10,7 +10,11 @@ models.py and this file in the same commit (Cursor rule 10-python-core).
 3. **Zhoda or honest dissent** — consensus or a structured disagreement map.
 4. **Auditability** — every verdict is reproducible from its transcript.
    The хроніка opens with a `start` event at create (never an empty file).
-   A provider crash appends `error` and re-raises; the id is still printed.
+   A successful run then records `route`, any intermediate stages
+   (`positions`, `round`, …), and `verdict`. Extra events are allowed;
+   the contract is order (`start` before `route` before `verdict`), not a
+   three-event list. A provider crash appends `error` (no `verdict`) and
+   re-raises; the id is still printed.
 5. **Cost honesty** — free models first, explicit budget caps, no hidden spend.
 
 ## Protocols

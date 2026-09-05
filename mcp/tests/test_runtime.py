@@ -10,6 +10,7 @@ from zhoda_core.providers.openrouter import QuotaExceededError
 from zhoda_core.reputation import Domain, DomainEloMatrix, ReputationStorage
 from zhoda_core.transcripts import TranscriptStore
 
+from zhoda_mcp.render import last_verdict
 from zhoda_mcp.runtime import Runtime
 
 CFG = {
@@ -138,18 +139,78 @@ async def test_clarify_returns_questions_and_estimate(tmp_path) -> None:
     assert out["estimate"]["confirm_required"] is True
 
 
+def _stages(events: list[dict[str, Any]]) -> list[str]:
+    return [str(event.get("stage")) for event in events]
+
+
+def _first(stages: list[str], name: str) -> int:
+    try:
+        return stages.index(name)
+    except ValueError as exc:
+        raise AssertionError(f"stage {name!r} missing in {stages}") from exc
+
+
+def test_last_verdict_ignores_start_and_error() -> None:
+    assert last_verdict([{"stage": "start"}, {"stage": "error", "error": "401"}]) is None
+    payload = {"decision": "use postgres", "transcript_id": "abc"}
+    found = last_verdict(
+        [
+            {"stage": "start"},
+            {"stage": "route", "protocol": "vote"},
+            {"stage": "positions"},
+            {"stage": "verdict", "verdict": payload},
+        ]
+    )
+    assert found == payload
+
+
 def test_verdict_and_transcript_roundtrip(tmp_path) -> None:
+    """create() пишет start; route не обязан быть events[0]; id сохраняется."""
     rt, _ = _runtime(tmp_path)
-    tid = rt.transcripts.create()
+    tid = rt.transcripts.create({"question": "which db?"})
     rt.transcripts.append(tid, {"stage": "route", "protocol": "vote"})
-    rt.transcripts.append(tid, {"stage": "verdict", "verdict": _verdict(tid).model_dump()})
+    rt.transcripts.append(tid, {"stage": "positions", "n": 3})
+    dumped = _verdict(tid).model_dump()
+    rt.transcripts.append(tid, {"stage": "verdict", "verdict": dumped})
     found = rt.verdict(tid)
+    assert found["status"] == "verdict"
     assert found["verdict"]["decision"] == "use postgres"
+    assert found["verdict"]["transcript_id"] == tid
     raw = rt.transcript(tid, fmt="json")
-    assert raw["events"][0]["stage"] == "route"
+    assert raw["transcript_id"] == tid
+    events = raw["events"]
+    stages = _stages(events)
+    assert stages[0] == "start"
+    assert events[0]["question"] == "which db?"
+    assert _first(stages, "start") < _first(stages, "route") < _first(stages, "verdict")
+    assert "positions" in stages
+    route = next(event for event in events if event["stage"] == "route")
+    assert route["protocol"] == "vote"
     md = rt.transcript(tid, fmt="md")
     assert "хроніка" in md["markdown"]
+    assert tid in md["markdown"]
     assert rt.verdict("missing")["error"] == "not_found"
+
+
+def test_error_transcript_is_not_a_successful_verdict(tmp_path) -> None:
+    """Провайдер упал: start + error. zhoda_verdict не маскирует это под успех."""
+    rt, _ = _runtime(tmp_path)
+    tid = rt.transcripts.create({"question": "which db?"})
+    rt.transcripts.append(
+        tid,
+        {"stage": "error", "error_type": "ZhodaProviderError", "error": "401: expired"},
+    )
+    found = rt.verdict(tid)
+    assert found.get("status") != "verdict"
+    assert "verdict" not in found
+    assert found["error"] == "not_found"
+    raw = rt.transcript(tid, fmt="json")
+    assert raw["transcript_id"] == tid
+    stages = _stages(raw["events"])
+    assert stages[0] == "start"
+    assert stages[-1] == "error"
+    assert "verdict" not in stages
+    assert raw["events"][-1]["error_type"] == "ZhodaProviderError"
 
 
 def test_reputation_filters_domain(tmp_path) -> None:

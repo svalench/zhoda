@@ -44,7 +44,8 @@ Current mapping (keep updated):
 | Vote/red_team auto-clarify skip Stage 0 LLM | tests/test_e2e.py::test_vote_auto_clarify_skips_elicit + test_red_team_with_context_skips_elicit |
 | Closure only by target faction; supersede leaves ledger | tests/test_debate.py |
 | CLI imports without factions↔judges cycle | tests/test_imports.py |
-| CLI --auto-clarify / --no-clarify flags | tests/test_cli.py |
+| CLI --auto-clarify / --no-clarify flags (ANSI/width-safe help) | tests/test_cli.py |
+| Successful хроніка: start before route before verdict; extra stages OK | tests/test_transcripts.py::test_successful_run_orders_start_route_verdict |
 | Nearest .env up to git root, no override | tests/test_env.py |
 | Progress callback optional; stages emitted | tests/test_e2e.py::test_progress_emits_protocol_stages |
 | Near-duplicate primary rec merges; negation never auto-merges | tests/test_factions.py |
@@ -81,6 +82,7 @@ Current mapping (keep updated):
 | Supplied value_map skips Stage 0 LLM | tests/test_e2e.py::test_supplied_value_map_skips_elicitation |
 | Failed route still writes start+error; file never empty | tests/test_transcripts.py |
 | MCP confirm=false never spends; quota_exceeded is structured | mcp/tests/test_runtime.py |
+| MCP roundtrip: start before route before verdict; error ≠ success | mcp/tests/test_runtime.py::test_verdict_and_transcript_roundtrip + test_error_transcript_is_not_a_successful_verdict |
 
 When you add a mechanic to a docstring or docs/, add its test first or in the
 same commit. When you change a schema, update docs/01-core.md in the same

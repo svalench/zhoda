@@ -18,8 +18,8 @@
 |---|---|---|---|
 | `zhoda_clarify` | `question: str` | `questions` + `estimate` | Стадия 0 отдельно: агент-хост сам задаёт вопросы пользователю |
 | `zhoda_deliberate` | `question`, `confirm`, `value_map?`, `rounds_cap?`, `protocol?` | estimate **или** `Verdict` | `confirm=false` — оценка; `confirm=true` — полный цикл |
-| `zhoda_verdict` | `transcript_id: str` | `Verdict` | Повторное чтение итога без пересчёта |
-| `zhoda_transcript` | `transcript_id: str`, `format: "md" \| "json"` | хроніка | Полный ход дебатов для аудита |
+| `zhoda_verdict` | `transcript_id: str` | `Verdict` или `error` | Последний event `stage=verdict`. Нет такого event (в т.ч. start+error) — не успешный вердикт (`error`, не `status: verdict`) |
+| `zhoda_transcript` | `transcript_id: str`, `format: "md" \| "json"` | хроніка | JSON: `events[0].stage` = `start`; дальше `route` … `verdict`; промежуточные стадии допустимы |
 | `zhoda_reputation` | `domain?: str` | рейтинг моделей | Какой модели доверять в домене |
 
 Принцип: инструменты возвращают структурированный JSON, а не простыню текста —
