@@ -96,3 +96,52 @@ async def test_unanimous_streak_is_zhoda() -> None:
     zhoda, strength = await checker.check(factions, judges=judges)
     assert zhoda is True
     assert strength is ConsensusStrength.UNANIMOUS
+
+
+@pytest.mark.asyncio
+async def test_b5_unanimous_action_flip_resets_streak() -> None:
+    from zhoda_core.actions import option_catalog
+
+    provider = StubProvider({"all_agree": True})
+    checker = ConsensusChecker(provider, stability_rounds=2)  # type: ignore[arg-type]
+    checker.catalog = option_catalog("PostgreSQL or Kafka for a 50k RPS ledger?")
+    judges = Judges(("j1", "j2"), {})
+    pg = [
+        _faction("A", "Use PostgreSQL", "PG"),
+        _faction("B", "Use PostgreSQL", "PG"),
+    ]
+    zhoda, strength = await checker.check(pg, judges=judges)
+    assert strength is ConsensusStrength.UNANIMOUS
+    assert zhoda is False
+    kf = [
+        _faction("A", "Use Kafka", "KF"),
+        _faction("B", "Use Kafka", "KF"),
+    ]
+    zhoda, strength = await checker.check(kf, judges=judges)
+    assert strength is ConsensusStrength.UNANIMOUS
+    assert zhoda is False
+    zhoda, strength = await checker.check(kf, judges=judges)
+    assert zhoda is True
+
+
+@pytest.mark.asyncio
+async def test_paraphrase_does_not_reset_xor_stability() -> None:
+    from zhoda_core.actions import option_catalog
+
+    provider = StubProvider({"all_agree": True})
+    checker = ConsensusChecker(provider, stability_rounds=2)  # type: ignore[arg-type]
+    checker.catalog = option_catalog("PostgreSQL or Kafka for a ledger?")
+    judges = Judges(("j1", "j2"), {})
+    first = [
+        _faction("A", "Use PostgreSQL, not Kafka.", "PG"),
+        _faction("B", "Use PostgreSQL, not Kafka.", "PG"),
+    ]
+    zhoda, _ = await checker.check(first, judges=judges)
+    assert zhoda is False
+    paraphrased = [
+        _faction("A", "Instead of Kafka, use PostgreSQL.", "PG"),
+        _faction("B", "Reject Kafka. PostgreSQL remains the recommendation.", "PG"),
+    ]
+    zhoda, strength = await checker.check(paraphrased, judges=judges)
+    assert strength is ConsensusStrength.UNANIMOUS
+    assert zhoda is True

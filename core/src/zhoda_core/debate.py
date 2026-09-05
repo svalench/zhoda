@@ -17,6 +17,7 @@ from .guards import (
     claims_reflected_in_decision,
     should_apply_revision,
 )
+from .actions import OptionCatalog, attach_action
 from .judges import Judges
 from .models import (
     Critique,
@@ -179,6 +180,7 @@ class DebateEngine:
         self.max_active = max_active
         self.user_context: str = ""
         self.question: str = ""
+        self.catalog: OptionCatalog | None = None
         self.objections: list[Critique] = []
         self.switches: list[FactionSwitch] = []
 
@@ -413,14 +415,18 @@ class DebateEngine:
             if faction.platform is None:
                 continue
             new_thesis = str(data.get("thesis") or "")
+            change_note = str(data.get("change_note") or "")
             if not should_apply_revision(
                 faction.platform.thesis,
                 new_thesis,
                 changed=bool(data.get("changed")),
                 question=self.question,
+                correction=bool(self._open_against(faction)),
+                change_note=change_note,
             ):
                 continue
             raw_conf = data.get("confidence")
+            prior = faction.platform.action
             faction.platform = Position(
                 model=alias_of.get(speaker, faction.platform.model),
                 thesis=new_thesis,
@@ -433,6 +439,13 @@ class DebateEngine:
                     float(raw_conf)
                     if isinstance(raw_conf, (int, float, str))
                     else faction.platform.confidence
+                ),
+                action=attach_action(
+                    new_thesis,
+                    str(data.get("answer") or faction.platform.answer),
+                    self.catalog,
+                    prior=prior,
+                    provenance=change_note or "revision",
                 ),
             )
             round_.revisions.append({
@@ -510,6 +523,11 @@ class DebateEngine:
                     model=member, from_faction=faction.name, to_faction=target.name,
                     convinced_by=str(data.get("convinced_by") or ""),
                     objection_id=objection.id,
+                    action_id=(
+                        target.platform.action.action_id
+                        if target.platform is not None and target.platform.action is not None
+                        else ""
+                    ),
                 )
                 if self.validate_switch(switch):
                     faction.members.remove(member)

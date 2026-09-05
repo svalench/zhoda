@@ -78,6 +78,68 @@ def bind_user_context(prompt: str, user_context: str) -> str:
     return f"{block}\n\n{prompt}"
 
 
+class StatementKind(StrEnum):
+    """Kind of a statement — orthogonal to whether it is verified."""
+
+    USER_CONSTRAINT = "user_constraint"
+    EMPIRICAL_CLAIM = "empirical_claim"
+    PREFERENCE = "preference"
+    ASSUMPTION = "assumption"
+
+
+class VerificationStatus(StrEnum):
+    UNKNOWN = "unknown"
+    SUPPORTED = "supported"
+    REFUTED = "refuted"
+
+
+class PremiseRole(StrEnum):
+    """How a trigger word sits in the question — not its truth value."""
+
+    NONE = "none"
+    BACKGROUND = "background"  # given that / since …, the asked action is elsewhere
+    ASKED_PROPOSITION = "asked_proposition"  # why is / always-claim *is* the question
+
+
+class ActionRelation(StrEnum):
+    SAME = "same"
+    REFINED = "refined"
+    CHANGED = "changed"
+    UNKNOWN = "unknown"
+
+
+class Condition(BaseModel):
+    """Run-scoped condition attached to an action. Minority keeps attribution."""
+
+    condition_id: str
+    text: str
+    kind: StatementKind = StatementKind.ASSUMPTION
+    verification: VerificationStatus = VerificationStatus.UNKNOWN
+    attributed_to: str = ""
+    material: bool = True
+
+
+class ActionContract(BaseModel):
+    """Engine-validatable recommended action. IDs come from the option list,
+    never from word order or a hash of the whole prose."""
+
+    action_id: str = "unresolved"
+    label: str = ""
+    conditions: list[Condition] = Field(default_factory=list)
+    relation: ActionRelation = ActionRelation.UNKNOWN
+    provenance: str = "unresolved"
+
+
+class PremiseProbe(BaseModel):
+    """Trigger words request a check; they do not mint truth."""
+
+    role: PremiseRole = PremiseRole.NONE
+    kind: StatementKind = StatementKind.ASSUMPTION
+    verification: VerificationStatus = VerificationStatus.UNKNOWN
+    trigger: str = ""
+    text: str = ""
+
+
 class Claim(BaseModel):
     """An argument with evidence discipline (values №1, fixed in round-10 §1):
     THREE labels, not two. A URL a model names from its head is an
@@ -113,6 +175,7 @@ class Position(BaseModel):
     claims: list[Claim] = Field(default_factory=list)
     falsifiability: str = ""
     confidence: float = 0.5
+    action: ActionContract | None = None
 
 
 class FlawType(StrEnum):
@@ -158,6 +221,8 @@ class FactionSwitch(BaseModel):
     to_faction: str
     convinced_by: str
     objection_id: str
+    action_id: str = ""
+    relation: ActionRelation = ActionRelation.CHANGED
 
 
 class Disagreement(BaseModel):
@@ -242,3 +307,4 @@ class Verdict(BaseModel):
     decision_tree: dict = Field(default_factory=dict)
     escalated_to: str | None = None
     insufficient_context: bool = False  # объект оценки не задан — дебат не стартовал
+    attributed_conditions: list[Condition] = Field(default_factory=list)

@@ -16,7 +16,9 @@ from .guards import (
     looks_like_loaded_premise,
     looks_like_xor_question,
 )
+from .actions import bind_action, option_catalog
 from .models import (
+    Condition,
     ConsensusStrength,
     CostReport,
     Critique,
@@ -84,6 +86,7 @@ class VerdictBuilder:
             rounds_taken=rounds_taken,
             cost=cost,
             transcript_id=transcript_id,
+            attributed_conditions=_attributed_conditions(factions, question),
         )
 
 
@@ -93,6 +96,22 @@ def _minority_line(faction: Faction) -> str:
     if faction.synthetic:
         return f"{faction.name} {SYNTHETIC_LABEL}: {thesis}"
     return f"{faction.name}: {thesis}"
+
+
+def _attributed_conditions(factions: list[Faction], question: str) -> list[Condition]:
+    """Условия меньшинства с attribution. Не veto всех и не стираются."""
+    if not factions:
+        return []
+    leading = max(factions, key=lambda f: len(f.members))
+    catalog = option_catalog(question) if question else None
+    found: list[Condition] = []
+    for faction in factions:
+        if faction is leading or faction.platform is None:
+            continue
+        action = faction.platform.action or bind_action(faction.platform.thesis, catalog)
+        for condition in action.conditions:
+            found.append(condition.model_copy(update={"attributed_to": faction.name}))
+    return found
 
 
 def _dissent_decision(
@@ -135,9 +154,10 @@ options as the action. Caveats and overturn conditions come AFTER the pick.
 Do not blend the minority into the action.
 EXCEPTION: assertions in the user question are not confirmed constraints.
 If the question embeds a loaded premise (always/never/since/given that/why is),
-evaluate whether that premise is true. Do not adopt a false premise or answer
-a loaded "why" as if the assertion were a fact — even if Winner thesis
-explained it. Reject the premise; that rejection is the primary rec.
+that is a signal to check — not a fact and not automatically false.
+Do not adopt an unverified asked proposition as the recommendation.
+Do not invent that the premise is false without evidence.
+A background "given that" does not replace the user's asked action.
 Then: why, which objections were closed, conditions that would overturn this.
 Do NOT write in first person as a faction (no "we", "our platform").
 Do NOT treat unresolved ambiguities as confirmed facts — list them as unresolved.

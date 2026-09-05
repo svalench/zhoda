@@ -48,15 +48,18 @@ Current mapping (keep updated):
 | Successful хроніка: start before route before verdict; extra stages OK | tests/test_transcripts.py::test_successful_run_orders_start_route_verdict |
 | Nearest .env up to git root, no override | tests/test_env.py |
 | Progress callback optional; stages emitted | tests/test_e2e.py::test_progress_emits_protocol_stages |
-| Near-duplicate primary rec merges; negation never auto-merges | tests/test_factions.py |
+| Near-duplicate primary rec merges; negation never auto-merges; XOR swap does not prefilter | tests/test_factions.py |
+| Stability fingerprint: paraphrase holds, action/condition change resets | tests/test_consensus.py::test_b5_unanimous_action_flip_resets_streak + test_paraphrase_does_not_reset_xor_stability |
+| Conditional minority support is attributed, not a discarded pick | tests/test_plan.py::test_b7_conditional_same_action_is_not_rejected + tests/test_verdict.py::test_b7_attributed_conditions_stay_on_verdict |
 | UNANIMOUS ⇒ no minority; deadlock decision lists all theses | tests/test_verdict.py |
 | Garbage/index/empty elicitation answers never become constraints | tests/test_elicitor.py |
 | Zhoda decision synthesized, not raw platform.answer | tests/test_verdict.py + tests/test_e2e.py |
 | SUPERSEDED ≠ CLOSED in decision prompt; winner claims kept | tests/test_verdict.py::test_superseded_is_revision_not_refutation + test_synthesize_keeps_winner_claims_out_of_closed_bucket |
 | Hedge synthesis falls back to winner thesis | tests/test_verdict.py::test_hedge_synthesis_falls_back_to_winner_thesis |
 | Hedge revision of a named pick is refused | tests/test_debate.py::test_hedge_revision_is_refused |
-| XOR revision cannot flip the named pick | tests/test_debate.py::test_xor_pick_flip_revision_is_refused |
-| Loaded premise is not a constraint; rec cannot adopt it | tests/test_verdict.py::test_majority_at_cap_does_not_adopt_loaded_premise + tests/test_e2e.py::test_loaded_premise_unanimity_is_not_zhoda |
+| XOR revision cannot flip the named pick without explicit correction | tests/test_debate.py::test_xor_pick_flip_revision_is_refused + test_xor_paraphrase_is_not_a_pick_flip |
+| Loaded premise is not a constraint; unknown ≠ false; asked-proposition adoption is unverified | tests/test_verdict.py::test_majority_at_cap_does_not_adopt_loaded_premise + tests/test_e2e.py::test_loaded_premise_unanimity_is_not_zhoda + tests/test_actions.py::test_premise_status_follows_evidence_not_trigger |
+| Background given-that keeps the asked action | tests/test_e2e.py::test_b1_given_that_keeps_monolith_action + tests/test_debate.py::test_b1_given_that_does_not_fabricate_false_premise |
 | Switch toward adopting a loaded premise is refused | tests/test_debate.py::test_loaded_premise_switch_is_blocked |
 | Agreement is primary rec for the user question, not shared complements | tests/test_consensus.py::test_agreement_prompt_asks_about_the_user_question |
 | Birth unanimity fast-pass / DA spawn opposition | tests/test_e2e.py |

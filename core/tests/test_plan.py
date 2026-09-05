@@ -46,6 +46,55 @@ def test_paths_rejected_only_by_a_reached_consensus() -> None:
     assert paths[0].why  # every rejected path has a WHY
 
 
+def test_b7_conditional_same_action_is_not_rejected() -> None:
+    """«PostgreSQL only if audit» — условие меньшинства, не отвергнутый pick."""
+    from zhoda_core.actions import attach_action, option_catalog
+
+    question = "PostgreSQL or Kafka for a 50k RPS ledger?"
+    catalog = option_catalog(question)
+    leading = Faction(
+        name="Pragmatists",
+        members=["A", "C"],
+        platform=Position(
+            model="A",
+            thesis="Use PostgreSQL",
+            answer="PostgreSQL",
+            action=attach_action("Use PostgreSQL", "PostgreSQL", catalog),
+        ),
+    )
+    conditional = Faction(
+        name="Auditors",
+        members=["B"],
+        platform=Position(
+            model="B",
+            thesis="Use PostgreSQL only if audit passes",
+            answer="PG gated on audit",
+            action=attach_action(
+                "Use PostgreSQL only if audit passes",
+                "PG gated on audit",
+                catalog,
+            ),
+        ),
+    )
+    assert collect_rejected_paths(
+        [leading, conditional], [], zhoda_reached=True, question=question,
+    ) == []
+    kafka = Faction(
+        name="Throughputists",
+        members=["D"],
+        platform=Position(
+            model="D",
+            thesis="Use Kafka",
+            answer="Kafka",
+            action=attach_action("Use Kafka", "Kafka", catalog),
+        ),
+    )
+    paths = collect_rejected_paths(
+        [leading, kafka], [], zhoda_reached=True, question=question,
+    )
+    assert len(paths) == 1 and "Kafka" in paths[0].path
+
+
 def test_paths_rejected_include_accepted_weaknesses_of_the_winner() -> None:
     """Round-11 §1: an objection that stayed open against the WINNER is an
     accepted weakness — the unaddressed version of the chosen path was

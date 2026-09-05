@@ -29,6 +29,16 @@ def test_negation_never_auto_merges() -> None:
     assert near_identical("use Kafka for the log", "use Kafka for the log") is True
 
 
+def test_b6_swapped_xor_picks_do_not_prefilter_merge() -> None:
+    from zhoda_core.actions import option_catalog
+
+    catalog = option_catalog("PostgreSQL or Kafka for a ledger?")
+    left = "Use PostgreSQL not Kafka"
+    right = "Use Kafka not PostgreSQL"
+    assert near_identical(left, right) is True  # Jaccard без каталога врёт
+    assert near_identical(left, right, catalog=catalog) is False
+
+
 @pytest.mark.asyncio
 async def test_judge_same_merges_kafka_variants() -> None:
     provider = QueueProvider(

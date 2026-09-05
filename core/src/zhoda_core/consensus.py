@@ -20,6 +20,7 @@ from .factions import ADVOCATE_ALIAS, Faction
 from .judges import Judges
 from .models import ConsensusStrength, bind_user_context
 from .providers.openrouter import OpenRouterProvider, make_cache_key
+from .actions import OptionCatalog, decision_fingerprint, fingerprints_stable
 
 AGREEMENT_PROMPT = """User question: {question}
 
@@ -43,8 +44,10 @@ class ConsensusChecker:
         self.stability_rounds = stability_rounds
         self.user_context: str = ""
         self.question: str = ""
+        self.catalog: OptionCatalog | None = None
         self._unanimous_streak = 0
         self._majority_streak = 0
+        self._last_fingerprint: tuple[tuple[str, tuple[str, ...]], ...] | None = None
 
     @property
     def majority_is_stable(self) -> bool:
@@ -94,15 +97,33 @@ class ConsensusChecker:
         self, factions: list[Faction], *, judges: Judges
     ) -> tuple[bool, ConsensusStrength]:
         strength = await self.classify(factions, judges=judges)
+        theses = [f.platform.thesis for f in factions if f.platform is not None]
+        use_actions = self.catalog is not None and self.catalog.is_choice_list()
+        fingerprint = decision_fingerprint(theses, self.catalog) if use_actions else None
         if strength is ConsensusStrength.UNANIMOUS:
-            self._unanimous_streak += 1
+            if use_actions:
+                if fingerprints_stable(fingerprint or (), self._last_fingerprint):
+                    self._unanimous_streak += 1
+                else:
+                    self._unanimous_streak = 1
+                self._last_fingerprint = fingerprint
+            else:
+                self._unanimous_streak += 1
             self._majority_streak += 1
         elif strength is ConsensusStrength.MAJORITY:
             self._unanimous_streak = 0
-            self._majority_streak += 1
+            if use_actions:
+                if fingerprints_stable(fingerprint or (), self._last_fingerprint):
+                    self._majority_streak += 1
+                else:
+                    self._majority_streak = 1
+                self._last_fingerprint = fingerprint
+            else:
+                self._majority_streak += 1
         else:
             self._unanimous_streak = 0
             self._majority_streak = 0
+            self._last_fingerprint = None
         return self._unanimous_streak >= self.stability_rounds, strength
 
 

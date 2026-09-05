@@ -183,6 +183,44 @@ def test_loaded_premise_revision_is_refused() -> None:
     )
 
 
+def test_b1_given_that_does_not_fabricate_false_premise() -> None:
+    from zhoda_core.guards import (
+        LOADED_PREMISE_REJECT,
+        ensure_loaded_premise_not_adopted,
+        should_apply_revision,
+    )
+
+    question = "Given that our team has four engineers, should we use a monolith?"
+    candidate = "Use a monolith to minimize coordination overhead."
+    assert ensure_loaded_premise_not_adopted(question, candidate) == candidate
+    assert LOADED_PREMISE_REJECT not in ensure_loaded_premise_not_adopted(
+        question, candidate
+    )
+    caveated = candidate + " Keep module boundaries clean."
+    assert should_apply_revision(candidate, caveated, changed=True, question=question)
+
+
+def test_xor_paraphrase_is_not_a_pick_flip() -> None:
+    from zhoda_core.guards import should_apply_revision
+
+    question = "PostgreSQL or Kafka for a 50k RPS ledger?"
+    old = "Use PostgreSQL, not Kafka."
+    paraphrase = "Instead of Kafka, use PostgreSQL."
+    reject_kafka = "Reject Kafka. PostgreSQL remains the recommendation."
+    flipped = "PostgreSQL is unsuitable; use Kafka."
+    assert should_apply_revision(old, paraphrase, changed=True, question=question)
+    assert should_apply_revision(old, reject_kafka, changed=True, question=question)
+    assert not should_apply_revision(old, flipped, changed=True, question=question)
+    assert should_apply_revision(
+        old,
+        flipped,
+        changed=True,
+        question=question,
+        correction=True,
+        change_note="open objection showed PostgreSQL cannot hold 50k RPS writes",
+    )
+
+
 def test_loaded_premise_switch_is_blocked() -> None:
     from zhoda_core.guards import blocks_loaded_premise_switch
 

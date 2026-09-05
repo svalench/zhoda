@@ -9,6 +9,7 @@ rejected — an unresolved dispute is not a rejection.
 """
 
 from .factions import Faction
+from .actions import bind_action, option_catalog
 from .models import (
     Critique,
     ObjectionStatus,
@@ -42,23 +43,42 @@ def collect_rejected_paths(
     objections: list[Critique],
     *,
     zhoda_reached: bool,
+    question: str = "",
 ) -> list[RejectedPath]:
     """What a REACHED consensus rejected (round-11 §1 — both sources):
     minority positions that lost the vote, and objections that stayed open
     against the winning platform (an accepted weakness: the unaddressed
-    version of the chosen path is what got rejected)."""
+    version of the chosen path is what got rejected). Same action with a
+    minority condition is attributed, not a discarded alternative."""
     if not zhoda_reached:
         return []
     leading = max(factions, key=lambda f: len(f.members))
-    paths = [
-        RejectedPath(
-            path=f.platform.thesis,
-            rejected_by="majority",
-            why="minority position after a reached consensus",
+    catalog = option_catalog(question)
+    lead_action = None
+    if leading.platform is not None:
+        lead_action = leading.platform.action or bind_action(
+            leading.platform.thesis, catalog
         )
-        for f in factions
-        if f is not leading and f.platform is not None
-    ]
+    paths = []
+    for faction in factions:
+        if faction is leading or faction.platform is None:
+            continue
+        minority_action = faction.platform.action or bind_action(
+            faction.platform.thesis, catalog
+        )
+        if (
+            lead_action is not None
+            and lead_action.action_id != "unresolved"
+            and minority_action.action_id == lead_action.action_id
+        ):
+            continue
+        paths.append(
+            RejectedPath(
+                path=faction.platform.thesis,
+                rejected_by="majority",
+                why="minority position after a reached consensus",
+            )
+        )
     paths += [
         RejectedPath(
             path=c.claim,

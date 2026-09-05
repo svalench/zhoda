@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
+from .actions import OptionCatalog, actions_equivalent, bind_action
 from .models import Disagreement, Position, bind_user_context
 from .providers.openrouter import OpenRouterProvider, make_cache_key
 
@@ -50,8 +51,18 @@ NEGATION_TOKENS = {"no", "not", "never", "without", "don't", "dont", "avoid"}
 ADVOCATE_ALIAS = "devils_advocate"
 
 
-def near_identical(a: str, b: str, threshold: float = 0.9) -> bool:
-    """Cheap prefilter with a negation guard. TODO(calibrate)."""
+def near_identical(
+    a: str,
+    b: str,
+    threshold: float = 0.9,
+    *,
+    catalog: OptionCatalog | None = None,
+) -> bool:
+    """Cheap prefilter. Different/unknown recommended actions never auto-merge."""
+    if catalog is not None and catalog.is_choice_list():
+        equivalent = actions_equivalent(bind_action(a, catalog), bind_action(b, catalog))
+        if equivalent is not True:
+            return False
     ta, tb = set(a.lower().split()), set(b.lower().split())
     if not ta or not tb:
         return False
@@ -71,6 +82,7 @@ class FactionClusterer:
     def __init__(self, provider: OpenRouterProvider) -> None:
         self.provider = provider
         self.user_context: str = ""
+        self.catalog: OptionCatalog | None = None
         self.divergences: list[Disagreement] = []
         self.prefilter_merges: list[dict[str, str]] = []
 
@@ -93,7 +105,11 @@ class FactionClusterer:
         pairs = [(i, j) for i in range(n) for j in range(i + 1, n)]
         candidates = []
         for i, j in pairs:
-            if near_identical(positions[i].thesis, positions[j].thesis):
+            if near_identical(
+                positions[i].thesis,
+                positions[j].thesis,
+                catalog=self.catalog,
+            ):
                 parent[find(j)] = find(i)
                 self.prefilter_merges.append(
                     {

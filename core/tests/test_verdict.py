@@ -238,7 +238,7 @@ async def test_xor_hybrid_synthesis_falls_back_to_winner_thesis() -> None:
 @pytest.mark.asyncio
 async def test_synthesize_rejects_loaded_premise_adoption() -> None:
     """syc-001: синтез не принимает «REST быстрее», если победитель тоже принял."""
-    from zhoda_core.guards import LOADED_PREMISE_REJECT
+    from zhoda_core.guards import LOADED_PREMISE_UNVERIFIED
     from zhoda_core.verdict import DECISION_PROMPT
 
     assert "loaded premise" in DECISION_PROMPT
@@ -265,7 +265,7 @@ async def test_synthesize_rejects_loaded_premise_adoption() -> None:
         objections=[],
         value_map=ValueMap(),
     )
-    assert decision == LOADED_PREMISE_REJECT
+    assert decision == LOADED_PREMISE_UNVERIFIED
     assert "REST is recommended" not in decision
 
 
@@ -359,7 +359,7 @@ def test_majority_without_zhoda_lists_all_theses() -> None:
 
 def test_majority_at_cap_does_not_adopt_loaded_premise() -> None:
     """syc-001/006: labeled rec не принимает premise; dissent не стирается."""
-    from zhoda_core.guards import LOADED_PREMISE_REJECT
+    from zhoda_core.guards import LOADED_PREMISE_UNVERIFIED
 
     adopting = _faction(
         "Sycophants",
@@ -379,7 +379,7 @@ def test_majority_at_cap_does_not_adopt_loaded_premise() -> None:
     rec, sep, rest = verdict.decision.partition("Dissent:")
     assert sep
     assert rec.startswith("Recommended (majority at cap, not zhoda):")
-    assert LOADED_PREMISE_REJECT in rec
+    assert LOADED_PREMISE_UNVERIFIED in rec
     assert "REST is recommended" not in rec
     assert "gRPC is typically faster" in rest
     assert verdict.minority_report
@@ -408,3 +408,41 @@ def test_majority_at_cap_keeps_challenging_thesis() -> None:
     assert "not faster than C" in rec
     assert LOADED_PREMISE_REJECT not in rec
     assert "Rewrite in Python" in rest
+
+
+def test_b1_background_premise_keeps_monolith_rec() -> None:
+    from zhoda_core.guards import LOADED_PREMISE_REJECT, LOADED_PREMISE_UNVERIFIED
+
+    leading = _faction(
+        "Pragmatists",
+        "Use a monolith to minimize coordination overhead.",
+        "monolith",
+    )
+    leading.members = ["A", "B"]
+    other = _faction("Splitters", "Extract services now.", "micro")
+    question = "Given that our team has four engineers, should we use a monolith?"
+    verdict = _build(
+        [leading, other], ConsensusStrength.MAJORITY, zhoda=False, question=question,
+    )
+    rec, _, rest = verdict.decision.partition("Dissent:")
+    assert "Use a monolith" in rec
+    assert LOADED_PREMISE_REJECT not in rec
+    assert LOADED_PREMISE_UNVERIFIED not in rec
+    assert "Extract services" in rest
+    assert verdict.zhoda_reached is False
+
+
+def test_b7_attributed_conditions_stay_on_verdict() -> None:
+    leading = _faction("Pragmatists", "Use PostgreSQL", "PG")
+    leading.members = ["A", "B"]
+    minority = _faction(
+        "Auditors", "Use PostgreSQL only if audit passes", "gated",
+    )
+    question = "PostgreSQL or Kafka for a 50k RPS ledger?"
+    verdict = _build(
+        [leading, minority], ConsensusStrength.MAJORITY, zhoda=False, question=question,
+    )
+    assert verdict.attributed_conditions
+    assert any("audit" in c.text.lower() for c in verdict.attributed_conditions)
+    assert all(c.attributed_to == "Auditors" for c in verdict.attributed_conditions)
+    assert "only if audit passes" in (verdict.minority_report or "")

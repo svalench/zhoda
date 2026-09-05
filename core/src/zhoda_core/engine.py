@@ -12,6 +12,7 @@ rounds_cap is decision_origin="majority_at_cap": dissent, not zhoda.
 from collections.abc import Callable
 
 from .anonymize import content_alias_seed, make_aliases
+from .actions import attach_action, inspect_premise, option_catalog
 from .consensus import ConsensusChecker
 from .debate import DebateEngine
 from .elicitor import (
@@ -25,7 +26,6 @@ from .factions import ADVOCATE_ALIAS, Faction, FactionClusterer
 from .guards import (
     challenges_loaded_premise,
     loaded_premise_ambiguities,
-    looks_like_loaded_premise,
 )
 from .judges import Judges
 from .models import (
@@ -34,6 +34,7 @@ from .models import (
     Disagreement,
     ObjectionStatus,
     Position,
+    PremiseRole,
     Protocol,
     ValueMap,
     Verdict,
@@ -193,6 +194,10 @@ class ZhodaEngine:
         value_map: ValueMap | None,
     ) -> Verdict:
         self.provider.begin_question()
+        catalog = option_catalog(question)
+        debate.catalog = catalog
+        clusterer.catalog = catalog
+        consensus.catalog = catalog
         seed = (
             self.alias_seed
             if self.alias_seed is not None
@@ -327,6 +332,12 @@ class ZhodaEngine:
             aliases,
             context=context,
         )
+        positions = [
+            pos.model_copy(
+                update={"action": attach_action(pos.thesis, pos.answer, catalog)}
+            )
+            for pos in positions
+        ]
         self.transcripts.append(
             tid,
             {"stage": "positions", "positions": [p.model_dump() for p in positions]},
@@ -339,6 +350,19 @@ class ZhodaEngine:
 
         emit("factions", "clustering factions…")
         factions = await clusterer.cluster(positions, judges=judges, speakers=speakers)
+        for faction in factions:
+            if faction.platform is None:
+                continue
+            faction.platform = faction.platform.model_copy(
+                update={
+                    "action": attach_action(
+                        faction.platform.thesis,
+                        faction.platform.answer,
+                        catalog,
+                        prior=faction.platform.action,
+                    )
+                }
+            )
         if route.protocol == Protocol.DEBATE and len(factions) == 1 and self.devils_advocate:
             opposition = await self._spawn_opposition(
                 question, factions[0], speakers, user_context,
@@ -471,11 +495,13 @@ class ZhodaEngine:
         ]
 
         leading = max(factions, key=lambda f: len(f.members))
-        # Сикофанское «согласие» на loaded premise — не згода.
+        # Сикофанское принятие asked-proposition — не згода. Background given-that
+        # не отменяет действие (B1).
+        probe = inspect_premise(question)
         if (
             zhoda
             and leading.platform is not None
-            and looks_like_loaded_premise(question)
+            and probe.role is PremiseRole.ASKED_PROPOSITION
             and not challenges_loaded_premise(leading.platform.thesis)
         ):
             zhoda = False
@@ -520,6 +546,7 @@ class ZhodaEngine:
             factions,
             debate.objections,
             zhoda_reached=zhoda,
+            question=question,
         )
         # the plan contract renders ONLY on zhoda (round-10 §2)
         emit("verdict", "rendering verdict…")
@@ -593,6 +620,13 @@ class ZhodaEngine:
                 cache_key=make_cache_key("opp", actor, opp_prompt),
             )
             platform = Position(model=ADVOCATE_ALIAS, **data)
+            platform = platform.model_copy(
+                update={
+                    "action": attach_action(
+                        platform.thesis, platform.answer, option_catalog(question)
+                    )
+                }
+            )
         except Exception:  # noqa: BLE001
             return None
         if not platform.thesis.strip() or not platform.answer.strip():

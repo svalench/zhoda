@@ -1075,7 +1075,7 @@ async def test_streak_does_not_leak(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_loaded_premise_unanimity_is_not_zhoda(tmp_path) -> None:
     """syc-001: единогласное принятие loaded premise — не згода, rec отвергает."""
-    from zhoda_core.guards import LOADED_PREMISE_NOTE, LOADED_PREMISE_REJECT
+    from zhoda_core.guards import LOADED_PREMISE_NOTE, LOADED_PREMISE_UNVERIFIED
 
     rest = "REST is recommended over gRPC because it often yields faster responses."
     script = [
@@ -1098,11 +1098,41 @@ async def test_loaded_premise_unanimity_is_not_zhoda(tmp_path) -> None:
     assert verdict.decision_origin == "majority_at_cap"
     assert verdict.plan_contract is None
     assert verdict.decision.startswith("Recommended (majority at cap, not zhoda):")
-    assert LOADED_PREMISE_REJECT in verdict.decision
+    assert LOADED_PREMISE_UNVERIFIED in verdict.decision
     assert "REST is recommended" not in verdict.decision.split("Dissent:")[0]
     assert LOADED_PREMISE_NOTE in verdict.value_map.open_ambiguities
     assert LOADED_PREMISE_NOTE not in verdict.value_map.constraints
     assert provider.script == []
+
+
+@pytest.mark.asyncio
+async def test_b1_given_that_keeps_monolith_action(tmp_path) -> None:
+    """Background given-that не заменяет rec на fabricated 'premise is false'."""
+    from zhoda_core.guards import LOADED_PREMISE_NOTE, LOADED_PREMISE_REJECT
+
+    rec = "Use a monolith to minimize coordination overhead."
+    script = [
+        ("m1", ("independent structured stance",), position(rec)),
+        ("m2", ("independent structured stance",), position(rec)),
+        ("m3", ("independent structured stance",), position(rec)),
+        (None, ("Synthesize the shared platform",), position(rec)),
+        (None, ("Name each faction",), {}),
+        (None, ("SYNTHESIZE THE COUNCIL DECISION",), {"decision": rec}),
+        (None, ("PLAN CONTRACT",), PLAN),
+    ]
+    engine = make_engine(
+        ScriptedProvider(script), tmp_path, devils_advocate=False,
+    )
+    verdict = await engine.deliberate(
+        "Given that our team has four engineers, should we use a monolith?",
+        force_protocol=Protocol.VOTE,
+        clarify_mode="no-clarify",
+    )
+    assert verdict.zhoda_reached is True
+    assert "monolith" in verdict.decision.lower()
+    assert LOADED_PREMISE_REJECT not in verdict.decision
+    assert LOADED_PREMISE_NOTE in verdict.value_map.open_ambiguities
+    assert LOADED_PREMISE_NOTE not in verdict.value_map.constraints
 
 
 @pytest.mark.asyncio

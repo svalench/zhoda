@@ -19,8 +19,9 @@ Context:
 Open ambiguities in the user context are UNRESOLVED — never treat them as
 confirmed constraints or as facts the user affirmed.
 If the question embeds an unproven assertion (always/never/since/given that/
-why is), do NOT treat it as a fact. Reject a false premise; do not explain
-it as if it were true.
+why is), treat it as unverified: not a confirmed fact and not automatically
+false. Do not adopt it as a constraint. A background "given that" does not
+replace the asked action.
 
 Respond with ONLY valid JSON:
 {{"thesis": "core position in 1-2 sentences",

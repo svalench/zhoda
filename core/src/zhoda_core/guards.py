@@ -4,6 +4,15 @@ from __future__ import annotations
 
 import re
 
+from .actions import (
+    actions_equivalent,
+    bind_action,
+    inspect_premise,
+    looks_like_xor_question,
+    option_catalog,
+)
+from .models import PremiseRole, VerificationStatus
+
 _HEDGE_RE = re.compile(
     r"it depends|"
     r"contingent on|"
@@ -32,10 +41,6 @@ def is_hedge_text(text: str) -> bool:
     return False
 
 
-_XOR_QUESTION_RE = re.compile(
-    r"\s+or\s+|\s+vs\.?\s+|\s+versus\s+|\s+или\s+",
-    re.IGNORECASE,
-)
 _HYBRID_RE = re.compile(
     r"\bhybrid\b|"
     r"\bcombin(?:e|ing|ed|ation)\b|"
@@ -46,25 +51,11 @@ _HYBRID_RE = re.compile(
 )
 
 
-def looks_like_xor_question(question: str) -> bool:
-    """A или B / A vs B — пользователь просит один pick, не смесь."""
-    return bool(_XOR_QUESTION_RE.search(question or ""))
-
-
 def is_hybrid_decision(text: str) -> bool:
     """Смесь обоих вариантов как действие, не один primary rec."""
     return bool(_HYBRID_RE.search(text or ""))
 
 
-_LOADED_PREMISE_RE = re.compile(
-    r"\bwhy is\b|\bwhy are\b|\bsince\b|\bgiven that\b|"
-    r"\beveryone\b.{0,40}\bagrees\b",
-    re.IGNORECASE,
-)
-_XOR_SPLIT_RE = re.compile(
-    r"\s+(?:or|vs\.?|versus|или)\s+",
-    re.IGNORECASE,
-)
 _CHALLENGE_RE = re.compile(
     r"premise is false|"
     r"false premise|"
@@ -90,6 +81,11 @@ LOADED_PREMISE_NOTE = (
     "The question embeds an unproven premise (always/never/since/given that/why is). "
     "It is not a confirmed constraint; challenge it if it is false."
 )
+LOADED_PREMISE_UNVERIFIED = (
+    "The question's premise is unverified: assertions in the question "
+    "(always/never/since/given that/why is) are not confirmed constraints "
+    "and are not adopted as the recommendation."
+)
 LOADED_PREMISE_REJECT = (
     "The premise is false: assertions in the question "
     "(always/never/since/given that/why is) are not confirmed constraints "
@@ -98,13 +94,8 @@ LOADED_PREMISE_REJECT = (
 
 
 def looks_like_loaded_premise(question: str) -> bool:
-    """Why-always / since / given that / everyone agrees — не XOR-опция «always»."""
-    text = question or ""
-    if _LOADED_PREMISE_RE.search(text):
-        return True
-    if looks_like_xor_question(text):
-        return False
-    return bool(re.search(r"\balways\b|\bnever\b", text, re.IGNORECASE))
+    """Why-always / since / given that — сигнал проверить, не XOR-опция «always»."""
+    return inspect_premise(question).role is not PremiseRole.NONE
 
 
 def challenges_loaded_premise(text: str) -> bool:
@@ -112,62 +103,26 @@ def challenges_loaded_premise(text: str) -> bool:
     return bool(_CHALLENGE_RE.search(text or ""))
 
 
-def xor_option_pair(question: str) -> tuple[str, str] | None:
-    """Левая и правая метки XOR (до «for/to/?»)."""
-    if not looks_like_xor_question(question):
-        return None
-    head = re.split(r"[?]", question or "", maxsplit=1)[0]
-    head = re.split(r"\s+for\s+|\s+to\s+", head, maxsplit=1, flags=re.IGNORECASE)[0]
-    parts = _XOR_SPLIT_RE.split(head, maxsplit=1)
-    if len(parts) != 2:
-        return None
-    left = re.sub(
-        r"^(?:should we|is it|do we)\s+", "", parts[0].strip(), flags=re.IGNORECASE
-    ).strip()
-    right = parts[1].strip()
-    if not left or not right:
-        return None
-    return left, right
-
-
-def _option_stem(option: str) -> str:
-    token = re.split(r"\s+", option.casefold().strip())[0]
-    token = re.sub(r"[^a-z0-9]", "", token)
-    if len(token) >= 3:
-        return token
-    return re.sub(r"[^a-z0-9]", "", option.casefold())
-
-
-def named_xor_pick(text: str, left: str, right: str) -> str | None:
-    """Какой из двух XOR-вариантов thesis держит как primary (первое вхождение)."""
-    body = (text or "").casefold()
-    left_stem, right_stem = _option_stem(left), _option_stem(right)
-    left_at = body.find(left_stem) if left_stem else -1
-    right_at = body.find(right_stem) if right_stem else -1
-    if left_at < 0 and right_at < 0:
-        return None
-    if left_at < 0:
-        return right
-    if right_at < 0:
-        return left
-    return left if left_at <= right_at else right
-
-
 def xor_primary_flipped(question: str, old_thesis: str, new_thesis: str) -> bool:
-    """Ревизия сменила named XOR-pick — это switch, не правка платформы."""
-    pair = xor_option_pair(question)
-    if pair is None:
+    """Ревизия сменила named XOR-pick — без evidence это switch, не правка."""
+    if not looks_like_xor_question(question):
         return False
-    old_pick = named_xor_pick(old_thesis, pair[0], pair[1])
-    new_pick = named_xor_pick(new_thesis, pair[0], pair[1])
-    if old_pick is None or new_pick is None:
+    catalog = option_catalog(question)
+    if not catalog.is_choice_list():
         return False
-    return old_pick.casefold() != new_pick.casefold()
+    old_action = bind_action(old_thesis, catalog)
+    new_action = bind_action(new_thesis, catalog)
+    equivalent = actions_equivalent(old_action, new_action)
+    if equivalent is True:
+        return False
+    if equivalent is False:
+        return True
+    return False
 
 
 def blocks_loaded_premise_switch(question: str, from_thesis: str, to_thesis: str) -> bool:
-    """Нельзя переходить с опровержения premise на его принятие."""
-    if not looks_like_loaded_premise(question):
+    """Нельзя переходить с опровержения asked-proposition на её принятие."""
+    if inspect_premise(question).role is not PremiseRole.ASKED_PROPOSITION:
         return False
     return challenges_loaded_premise(from_thesis) and not challenges_loaded_premise(
         to_thesis
@@ -184,12 +139,23 @@ def loaded_premise_ambiguities(question: str, existing: list[str]) -> list[str]:
 
 
 def ensure_loaded_premise_not_adopted(question: str, text: str) -> str:
-    """Primary rec не может принять loaded premise. Не копирует minority thesis."""
-    if not looks_like_loaded_premise(question):
+    """Unknown premise не становится false и не сочиняет rebuttal.
+
+    Background (given that … should we Y) сохраняет действие Y.
+    Asked-proposition без evidence → unverified, не «premise is false».
+    """
+    probe = inspect_premise(question)
+    if probe.role is PremiseRole.NONE:
         return text
     if challenges_loaded_premise(text):
         return text
-    return LOADED_PREMISE_REJECT
+    if probe.role is PremiseRole.BACKGROUND:
+        return text
+    if probe.verification is VerificationStatus.REFUTED:
+        return LOADED_PREMISE_REJECT
+    if probe.verification is VerificationStatus.SUPPORTED:
+        return text
+    return LOADED_PREMISE_UNVERIFIED
 
 
 def should_apply_revision(
@@ -198,21 +164,28 @@ def should_apply_revision(
     *,
     changed: bool,
     question: str = "",
+    correction: bool = False,
+    change_note: str = "",
 ) -> bool:
-    """Hedge не заменяет pick; XOR-flip и принятие loaded premise — отказ."""
+    """Hedge не заменяет pick. XOR-flip без cause — отказ; с evidence — correction."""
     if not changed or not (new_thesis or "").strip():
         return False
     if is_hedge_text(new_thesis) and not is_hedge_text(old_thesis):
         return False
-    if xor_primary_flipped(question, old_thesis, new_thesis):
+    catalog = option_catalog(question) if question else None
+    old_action = bind_action(old_thesis, catalog)
+    new_action = bind_action(new_thesis, catalog)
+    equivalent = actions_equivalent(old_action, new_action)
+    if equivalent is True:
+        return True
+    if equivalent is None and catalog is not None and catalog.is_choice_list():
         return False
-    if looks_like_loaded_premise(question):
+    if xor_primary_flipped(question, old_thesis, new_thesis):
+        return bool(correction and change_note.strip())
+    probe = inspect_premise(question)
+    if probe.role is PremiseRole.ASKED_PROPOSITION:
         if challenges_loaded_premise(old_thesis) and not challenges_loaded_premise(
             new_thesis
-        ):
-            return False
-        if not challenges_loaded_premise(new_thesis) and not challenges_loaded_premise(
-            old_thesis
         ):
             return False
     return True

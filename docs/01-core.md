@@ -78,7 +78,15 @@ Claim { claim, evidence_url?, confidence, verified }
 # label: "sourced" (verified or user-provided) |
 #        "unverified_claim" (URL named from memory) | "assumption" (no URL)
 # round-10 §1: a hallucinated link never gets institutional weight
-Position { model, thesis, answer, claims[], falsifiability, confidence }
+Position {
+  model, thesis, answer, claims[], falsifiability, confidence,
+  action?  # ActionContract: action_id from the option list (opt:N) or
+           # "unresolved"; conditions[]; relation to prior; provenance
+}
+# Action IDs are run-scoped. Open questions may stay unresolved.
+# Equivalence compares action_id + material conditions (only if / unless).
+# Unknown equivalence does not merge factions and does not hold a
+# stability streak. First-occurrence of a token is not the pick.
 ```
 
 Positions are anonymized from the start (`model` holds the alias).
@@ -133,10 +141,14 @@ anyone is asked to defect).
 - **Superseded**: the author withdraws, or both judges agree the revision
   addressed the objection (round-7 §1).
 - **Revision**: hedge that replaces a named pick is refused. On an XOR
-  question (A or B / A vs B) a revision that **flips the named pick** is
-  refused — that is a switch, not a platform rewrite. A revision that
-  adopts a loaded premise the previous thesis already challenged is
-  refused.
+  question (A or B / A vs B) a revision that **flips the action_id** is
+  refused unless it is an explicit correction (`changed` + `change_note`
+  with an open objection). A paraphrase that keeps the same action
+  ("Reject Kafka. PostgreSQL remains") is not a flip. A revision that
+  adopts an asked-proposition premise the previous thesis already
+  challenged is refused. `given that` / `since` / `always` are a check
+  signal: unknown does not become false and does not replace the asked
+  action with a fabricated rebuttal.
 - **Switches**: open objection by ID + citation that **quotes the objection
   claim** (not a restatement of the destination thesis) + the target IS
   the objection's author faction. Critiques must quote the opponent thesis
@@ -156,17 +168,26 @@ criterion (thesis + answer), not prose similarity: **the main pick that
 answers the user question**. Complements and caveats are the same position
 only if that pick matches. PostgreSQL-as-ledger vs Kafka-as-ledger do **not**
 agree just because each mentions the other as optional. The agreement prompt
-includes the question. Stability rule: two
-consecutive **unanimous** checks (`all_agree`) must agree before zhoda is
-declared **early**. Headcount majority (2/3 of voting heads) does
+includes the question. Stability stores a **decision fingerprint**
+(`action_id` + material condition ids) when the question has an option
+list: a paraphrase of the same action does not reset the streak; a change
+of action or material condition does, even if `all_agree` stays true.
+Unresolved actions are not canonicalized into a fake id. Two
+consecutive **unanimous** checks (`all_agree`) on a **stable fingerprint**
+must agree before zhoda is declared **early**. Headcount majority (2/3 of voting heads) does
 **not** end the debate. At `rounds_cap` the current check is terminal:
 unanimous (even streak 1) is zhoda. Majority at the cap is **not** zhoda —
 `decision_origin = "majority_at_cap"`, no plan contract. `decision` leads
 with `Recommended (majority at cap, not zhoda):` + the leading faction
 **thesis** (not raw `answer`), then a `Dissent:` list of the other theses.
-If that thesis **adopts a loaded premise**, the labeled rec is a protocol
-premise-reject (`The premise is false: … are not confirmed constraints`);
-the minority theses stay in `Dissent`. That agreement is **not zhoda**.
+If that thesis **adopts an unverified asked proposition**, the labeled rec
+states the premise is unverified (not a fabricated “the premise is false”
+unless evidence refuted it); the minority theses stay in `Dissent`. That
+agreement is **not zhoda**. A background `given that` keeps the asked
+action and does not by itself block zhoda. Minority **material conditions**
+(`only if …`) stay as `attributed_conditions` with faction attribution:
+they are not a silent veto and not dropped as a rejected alternate pick
+when the action_id matches the majority.
 Split/deadlock stay a full thesis map under `No zhoda`. `split` at the
 rounds cap becomes `deadlock`. Escalation
 is opt-in and fires on deadlock only; the appellate decision overwrites
