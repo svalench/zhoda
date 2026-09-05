@@ -117,7 +117,9 @@ Zhoda — open-source система, в которой несколько LLM �
 - [x] Бенчмарк-раннер: живой `ZhodaEngine` + compute-matched бейзлайны
       (self-consistency, best-of-N, majority/vote, single-pass council).
       Цифры — после измеренного прогона, не из dry-run.
-- [ ] **Первый живой прогон** на бесплатных моделях + починка вскрывшегося
+- [x] **Первый живой прогон** на дешёвых платных моделях
+      (`core/eval/`, 2026-09-05) + починка вскрывшегося
+      (синтез SUPERSEDED, breakdown red_team, extract логов)
 - [ ] Бенчмарк: 50–100 decision-задач; blind-судейство, human-подвыборка;
       метрика dead_ends/$
 

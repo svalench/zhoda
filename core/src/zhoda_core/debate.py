@@ -12,6 +12,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from .factions import ADVOCATE_ALIAS, Faction
+from .guards import should_apply_revision
 from .judges import Judges
 from .models import (
     Critique,
@@ -52,7 +53,9 @@ null is more honest. Never invent URLs."""
 DEVILS_ADVOCATE_PROMPT = """You are the rotating devil's advocate. Attack the leading
 position regardless of your own stance. Position of faction \"{opponent}\": {opponent_thesis}
 
-Produce ONE concrete critique. ONLY valid JSON:
+Produce ONE concrete critique. If the thesis names a specific defect in
+attached code or context, you may not dismiss it as "no evidence" — quote
+the defect or concede. ONLY valid JSON:
 {{"target_faction": "{opponent}", "flaw_type": "factual|logical|scope|values_mismatch",
   "claim": "the specific statement you dispute",
   "specifics": "what exactly is missing (required for scope/values_mismatch)",
@@ -83,7 +86,10 @@ Open objections that survived this round:
 {objections}
 
 Revise your platform to account for valid criticism — or keep it and justify
-why the objections fail. ONLY valid JSON:
+why the objections fail. Keep the same primary recommended action unless an
+objection refutes that action. Do not replace a named pick with "it depends"
+or "choose based on team expertise". Caveats may be added; the main choice stays.
+ONLY valid JSON:
 {{"thesis": "...", "answer": "...",
   "claims": [{{"claim": "...", "evidence_url": null, "confidence": 0.0}}],
   "falsifiability": "...", "confidence": 0.0,
@@ -98,7 +104,12 @@ Do you withdraw your objection? ONLY valid JSON:
 SUPERSEDE_PROMPT = """Objection ({flaw_type}): {claim} {specifics}
 The faction revised its platform. New thesis: {thesis}
 
-Does the revised platform substantively address the objection? ONLY valid JSON:
+Does the revised platform substantively FIX the objection?
+Acknowledging a tradeoff, adding a caveat, or saying "it depends" while
+keeping the same primary recommendation is NOT addressed.
+addressed=true only if (a) the specific flaw is fixed in the new thesis, or
+(b) the primary recommended action changed.
+ONLY valid JSON:
 {{"addressed": true}} or {{"addressed": false}}"""
 
 _FLAW_PRIORITY = {
@@ -231,10 +242,17 @@ class DebateEngine:
             synthetic_opposition = any(
                 f.synthetic or f.members == [ADVOCATE_ALIAS] for f in factions
             )
+            real_factions = [
+                f for f in factions
+                if not f.synthetic and f.members != [ADVOCATE_ALIAS]
+            ]
+            # Вращающийся DA нужен при одной реальной фракции (red_team /
+            # ещё не заспавнена оппозиция). Две council-фракции уже спорят.
             if (
                 self.devils_advocate
                 and leading.platform is not None
                 and not synthetic_opposition
+                and len(real_factions) < 2
             ):
                 candidates = sorted(a for a in speakers if a not in leading.members)
                 candidates = candidates or sorted(speakers)
@@ -340,7 +358,13 @@ class DebateEngine:
             if not isinstance(item, tuple):
                 continue
             faction, data, speaker = item
-            if not (data.get("changed") and data.get("thesis")) or faction.platform is None:
+            if faction.platform is None:
+                continue
+            if not should_apply_revision(
+                faction.platform.thesis,
+                str(data.get("thesis") or ""),
+                changed=bool(data.get("changed")),
+            ):
                 continue
             faction.platform = Position(
                 model=alias_of.get(speaker, faction.platform.model),

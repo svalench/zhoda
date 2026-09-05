@@ -227,7 +227,8 @@ class Verdict(BaseModel):
     zhoda_reached: bool
     consensus_strength: ConsensusStrength
     protocol: Protocol
-    decision_origin: str = "council"  # "appeal_without_consensus" when escalated
+    # "council" | "appeal_without_consensus" | "majority_at_cap"
+    decision_origin: str = "council"
     router_confidence: float = 1.0
     value_map: ValueMap = Field(default_factory=ValueMap)
     minority_report: str | None = None

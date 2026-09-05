@@ -7,6 +7,12 @@ contract, decision tree and dead-ends metric are attached by the engine
 """
 
 from .factions import Faction
+from .guards import (
+    ensure_claims_in_decision,
+    is_hedge_text,
+    is_hybrid_decision,
+    looks_like_xor_question,
+)
 from .models import (
     ConsensusStrength,
     CostReport,
@@ -53,7 +59,10 @@ class VerdictBuilder:
                 )
                 or None
             )
-        if strength in (ConsensusStrength.SPLIT, ConsensusStrength.DEADLOCK):
+        if not zhoda_reached or strength in (
+            ConsensusStrength.SPLIT,
+            ConsensusStrength.DEADLOCK,
+        ):
             decision = _dissent_decision(strength, factions)
         else:
             # черновик: thesis, не сырой answer платформы (тот — текст для спора)
@@ -91,21 +100,50 @@ def _dissent_decision(strength: ConsensusStrength, factions: list[Faction]) -> s
 
 
 DECISION_PROMPT = """SYNTHESIZE THE COUNCIL DECISION for the user — not a debate rebuttal.
-First line: the recommended action.
+First sentence: restate the winner's primary recommended action (same pick as
+Winner thesis). Do NOT open with "it depends", "both are comparable", or
+"choose based on team expertise". If the question is A or B / A vs B, name
+ONE primary recommendation — do not synthesize a hybrid that adopts both
+options as the action. Caveats and overturn conditions come AFTER the pick.
+Do not blend the minority into the action.
 Then: why, which objections were closed, conditions that would overturn this.
 Do NOT write in first person as a faction (no "we", "our platform").
 Do NOT treat unresolved ambiguities as confirmed facts — list them as unresolved.
+Do NOT describe a superseded objection as a disproven finding: the winner
+revised the thesis; concrete Winner claims still stand unless they appear
+under Closed objections (refuted by rebuttal).
+Keep Winner claims in the decision when they are the reasons for the action.
+A concrete finding in Winner claims (SQL injection, interpolation, plaintext)
+MUST appear in the decision. Open ambiguities ("maybe the driver sanitizes")
+do not erase those claims — name the finding, then the uncertainty.
 
 Question: {question}
 Winner thesis: {thesis}
+Winner claims (keep unless refuted): {claims}
 Winner platform (debate text, context only): {answer}
-Closed objections: {closed}
+Closed objections (refuted by rebuttal): {closed}
+Platform revisions (objection addressed by changing the thesis; the finding may still stand): {revised}
 Open objections against the winner: {open_objections}
 Overturn if (falsifiability): {falsifiability}
 Confirmed constraints: {constraints}
 Unresolved (NOT facts): {open_ambiguities}
 
 ONLY valid JSON: {{"decision": "..."}}"""
+
+
+def partition_objections_for_decision(
+    objections: list[Critique],
+    winner_name: str,
+) -> tuple[list[str], list[str], list[str]]:
+    """CLOSED = опровергнуты; SUPERSEDED = ревизия тезиса, находка может остаться."""
+    closed = [c.claim for c in objections if c.status is ObjectionStatus.CLOSED]
+    revised = [c.claim for c in objections if c.status is ObjectionStatus.SUPERSEDED]
+    open_against = [
+        c.claim
+        for c in objections
+        if c.status is ObjectionStatus.OPEN and c.target_faction == winner_name
+    ]
+    return closed, revised, open_against
 
 
 async def synthesize_decision(
@@ -120,24 +158,20 @@ async def synthesize_decision(
     """Председатель пишет решение пользователю. Сбой парсинга — на стороне engine."""
     if leading.platform is None:
         return ""
-    closed = [
-        c.claim
-        for c in objections
-        if c.status in (ObjectionStatus.CLOSED, ObjectionStatus.SUPERSEDED)
-    ]
-    open_against = [
-        c.claim
-        for c in objections
-        if c.status == ObjectionStatus.OPEN and c.target_faction == leading.name
-    ]
+    closed, revised, open_against = partition_objections_for_decision(
+        objections, leading.name
+    )
+    claims = "; ".join(c.claim for c in leading.platform.claims) or "(none)"
     data = await provider.ask_json(
         chairman,
         bind_user_context(
             DECISION_PROMPT.format(
                 question=question,
                 thesis=leading.platform.thesis,
+                claims=claims,
                 answer=leading.platform.answer,
                 closed="; ".join(closed) or "(none)",
+                revised="; ".join(revised) or "(none)",
                 open_objections="; ".join(open_against) or "(none)",
                 falsifiability=leading.platform.falsifiability,
                 constraints="; ".join(value_map.constraints) or "(none)",
@@ -149,4 +183,14 @@ async def synthesize_decision(
     decision = str(data.get("decision") or "").strip()
     if not decision:
         raise ValueError("empty synthesized decision")
-    return decision
+    thesis = leading.platform.thesis
+    if is_hedge_text(decision) and not is_hedge_text(thesis):
+        decision = thesis
+    elif (
+        looks_like_xor_question(question)
+        and is_hybrid_decision(decision)
+        and not is_hybrid_decision(thesis)
+    ):
+        decision = thesis
+    claim_texts = [c.claim for c in leading.platform.claims]
+    return ensure_claims_in_decision(decision, claim_texts)

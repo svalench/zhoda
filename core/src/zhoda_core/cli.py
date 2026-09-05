@@ -193,10 +193,14 @@ def deliberate(
                     "[yellow]insufficient_context — council will not judge "
                     "an unseen object[/yellow]"
                 )
-            if verdict.decision_origin != "council":
+            if verdict.decision_origin == "appeal_without_consensus":
                 console.print(
                     f"[red]APPELLATE DECISION without consensus "
                     f"(judge: {verdict.escalated_to})[/red]"
+                )
+            elif verdict.decision_origin == "majority_at_cap":
+                console.print(
+                    "[yellow]majority at rounds cap — dissent, not zhoda[/yellow]"
                 )
             console.print(f"[bold]decision:[/bold]\n{verdict.decision}")
             if verdict.minority_report:
@@ -225,7 +229,8 @@ def deliberate(
                 console.print("[dim]no plan contract — no zhoda[/dim]")
             console.print(
                 f"cost: {verdict.cost.requests} requests, "
-                f"${verdict.cost.usd:.4f}, transcript: {verdict.transcript_id}"
+                f"${verdict.cost.usd:.4f}, cache_hits: {verdict.cost.cache_hits}, "
+                f"transcript: {verdict.transcript_id}"
             )
             if verdict.cost.breakdown:
                 console.print(f"[dim]breakdown: {format_cost_breakdown(verdict.cost)}[/dim]")

@@ -135,8 +135,9 @@ similarity. Adaptive stopping: **unanimous** thesis agreement that persists
 `stability_rounds` ends the loop early. Headcount majority does not — the
 debate continues to the hard cap (default 4; empirically most debates
 converge in 2–3; multi-agent debate literature reports convergence within
-4–8 rounds). Majority that held through the cap is still zhoda, with the
-minority report preserved. Consensus strength:
+4–8 rounds). Majority that held through the cap is honest dissent
+(`decision_origin = majority_at_cap`), not zhoda — no plan contract.
+Consensus strength:
 `unanimous | majority | split | deadlock`. On `split` or `deadlock` with
 escalation enabled, the case moves up the model ladder (free → mid → frontier);
 the chairman decides from the full transcript.

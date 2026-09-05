@@ -91,6 +91,8 @@ The CLI prints, in order:
 - `zhoda_reached` + strength + rounds — split/deadlock is an honest outcome,
   not a failure
 - `APPELLATE DECISION without consensus` in red — only if escalation fired
+- `majority at rounds cap — dissent, not zhoda` in yellow — majority without
+  `all_agree` at the cap; not a plan, not zhoda
 - the decision, the minority report (preserved dissent), switches
 - `paths rejected` — what a REACHED consensus rejected; on clean unanimity:
   "nothing was disputed, nothing to reject"
@@ -113,7 +115,7 @@ Batch for the evaluation dataset (questions + launch):
 
 ```bash
 cd core
-./eval/run.sh                         # all cases, --no-clarify
+./eval/run.sh                         # all cases, --auto-clarify
 ./eval/run.sh debate-pg-kafka         # one id
 DRY=1 ./eval/run.sh                   # print commands only
 ```
@@ -138,3 +140,11 @@ Cases live in `core/eval/questions.jsonl`. Logs and `summary.tsv` go to
 Keep every transcript. Zhoda rate, rounds distribution, switch rate,
 paths_rejected, and cost per question are the evaluation dataset —
 section 8 of the whitepaper starts here.
+
+Measured batches (2026-09-05, cheap paid council):
+
+- `--no-clarify`, cap 6: [eval-batch.md](live-runs/2026-09-05-eval-batch.md)
+- `--auto-clarify`, cap 4, majority-at-cap ≠ zhoda:
+  [eval-cap.md](live-runs/2026-09-05-eval-cap.md)
+
+Re-parse хронікі with `python eval/analyze.py eval/runs/<stamp>`.

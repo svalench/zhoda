@@ -41,7 +41,25 @@ async def test_classify_unanimous_on_same_primary_rec() -> None:
     assert strength is ConsensusStrength.UNANIMOUS
     assert "answer:" in provider.prompts[0]
     assert "Use MSK" in provider.prompts[0]
-    assert "recommended actions" in provider.prompts[0]
+    assert "primary recommendation" in provider.prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_agreement_prompt_asks_about_the_user_question() -> None:
+    """Live 2026-09-05: PG vs Kafka got false unanimous on shared complements."""
+    provider = StubProvider({"all_agree": False})
+    checker = ConsensusChecker(provider)  # type: ignore[arg-type]
+    checker.question = "PostgreSQL or Kafka for a 50k RPS ledger, team of four?"
+    await checker.classify(
+        [
+            _faction("A", "Use Kafka", "Kafka"),
+            _faction("B", "Use PostgreSQL", "PostgreSQL"),
+        ],
+        judges=Judges(("j1", "j2"), {}),
+    )
+    prompt = provider.prompts[0]
+    assert checker.question in prompt
+    assert "do NOT agree" in prompt
 
 
 @pytest.mark.asyncio

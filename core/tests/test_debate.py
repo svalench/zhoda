@@ -112,3 +112,56 @@ def test_source_line_becomes_rebuttal_evidence_url() -> None:
     )
     assert critique.rebuttal_evidence_url == "https://example.com/a"
     assert "SOURCE:" not in critique.rebuttal
+
+
+def test_hedge_revision_is_refused() -> None:
+    from zhoda_core.guards import is_hedge_text, should_apply_revision
+
+    pick = "Use PostgreSQL for the ledger."
+    hedge = (
+        "Select the data backbone based on team expertise; both Kafka and "
+        "PostgreSQL entail comparable operational complexity."
+    )
+    assert should_apply_revision(pick, "Use PostgreSQL with partitioning.", changed=True)
+    assert not should_apply_revision(pick, hedge, changed=True)
+    while_hedge = (
+        "While PostgreSQL offers native ACID compliance, Kafka, when augmented "
+        "with streams, can support a scalable ledger. However, achieving full "
+        "ACID-equivalent guarantees in Kafka is nontrivial."
+    )
+    assert is_hedge_text(while_hedge)
+    assert not should_apply_revision(pick, while_hedge, changed=True)
+    assert not should_apply_revision(pick, pick, changed=False)
+
+
+def test_xor_question_rejects_hybrid_action() -> None:
+    from zhoda_core.guards import is_hybrid_decision, looks_like_xor_question
+
+    assert looks_like_xor_question("PostgreSQL or Kafka for a 50k RPS ledger?")
+    assert looks_like_xor_question("Monolith vs microservices for a 4-person team?")
+    assert not looks_like_xor_question("Review this login helper for production use.")
+    hybrid = "Use Kafka as the event log alongside PostgreSQL — a hybrid of both."
+    assert is_hybrid_decision(hybrid)
+    assert not is_hybrid_decision("PostgreSQL is the preferred choice for the ledger.")
+
+
+def test_generic_insecure_decision_does_not_cover_sqli_claim() -> None:
+    from zhoda_core.guards import claims_reflected_in_decision, ensure_claims_in_decision
+
+    finding = "SQL injection from interpolating user input into the query"
+    generic = (
+        "The provided login helper is inherently insecure and unsuitable "
+        "for production use due to critical security vulnerabilities."
+    )
+    assert not claims_reflected_in_decision([finding], generic)
+    assert "SQL injection" in ensure_claims_in_decision(generic, [finding])
+    named = "Do not approve: SQL injection in the query string."
+    assert claims_reflected_in_decision([finding], named)
+    assert ensure_claims_in_decision(named, [finding]) == named
+
+
+def test_supersede_prompt_rejects_caveat_only() -> None:
+    from zhoda_core.debate import SUPERSEDE_PROMPT
+
+    assert "NOT addressed" in SUPERSEDE_PROMPT
+    assert "primary recommended action" in SUPERSEDE_PROMPT

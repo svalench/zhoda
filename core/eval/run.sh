@@ -7,7 +7,7 @@
 #   DRY=1 ./eval/run.sh                   # только команды
 #   SLEEP=45 ./eval/run.sh                # пауза между вопросами (сек)
 #
-# --no-clarify: без интервью, чтобы крутить пачку без рук.
+# --auto-clarify: Stage 0 без рук; неспрошенное → open_ambiguities.
 # Транскрипты: core/transcripts/<id>.jsonl  Логи: core/eval/runs/<stamp>/
 set -euo pipefail
 
@@ -61,28 +61,30 @@ import re, sys
 text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
 text = re.sub(r"\x1b\[[0-9;]*m", "", text)
 
-def grab(pat: str, default: str = "") -> str:
-    m = re.search(pat, text)
+def first(pat: str, default: str = "") -> str:
+    # якорь на итоговые строки CLI, не на ✓ progress («cached (3 models)»)
+    m = re.search(pat, text, re.M)
     return m.group(1).strip() if m else default
 
 ic = "1" if "insufficient_context" in text else "0"
 print("\t".join([
-    grab(r"protocol=(vote|debate|red_team)"),
-    grab(r"zhoda_reached:\s+(\S+)"),
-    grab(r"\(([^,]+), rounds:"),
-    grab(r"rounds:\s*(\d+)"),
-    grab(r"cost:\s*(\d+) requests"),
-    grab(r"\$([0-9.]+)"),
-    grab(r"switches:\s+(\d+)", "0"),
-    grab(r"paths rejected:\s+(\d+)", "0"),
-    grab(r"transcript:\s+([0-9a-f]{12})"),
+    first(r"^✓ protocol=(vote|debate|red_team)"),
+    first(r"^zhoda_reached:\s+(\S+)"),
+    first(r"^zhoda_reached:\s+\S+\s+\(([^,]+), rounds:"),
+    first(r"^zhoda_reached:.*rounds:\s*(\d+)"),
+    first(r"^cost:\s*(\d+) requests"),
+    first(r"^cost:\s*\d+ requests,\s*\$([0-9.]+)"),
+    first(r"^cost:.*cache_hits:\s*(\d+)", "0"),
+    first(r"^switches:\s+(\d+)", "0"),
+    first(r"^paths rejected:\s+(\d+)", "0"),
+    first(r"transcript:\s+([0-9a-f]{12})"),
     ic,
 ]))
 PY
 }
 
 SUMMARY="${OUT}/summary.tsv"
-printf 'id\tpass\texit\tprotocol\tzhoda\tstrength\trounds\trequests\tusd\tswitches\tpaths_rejected\ttranscript\tic\n' > "${SUMMARY}"
+printf 'id\tpass\texit\tprotocol\tzhoda\tstrength\trounds\trequests\tusd\tcache_hits\tswitches\tpaths_rejected\ttranscript\tic\n' > "${SUMMARY}"
 
 need_sleep=0
 while IFS= read -r rec; do
@@ -95,7 +97,7 @@ while IFS= read -r rec; do
 
   for pass in $(seq 1 "${nrepeat}"); do
     log="${OUT}/${id}.${pass}.log"
-    cmd=(uv run zhoda deliberate "${q}" --no-clarify --config "${CONFIG}")
+    cmd=(uv run zhoda deliberate "${q}" --auto-clarify --config "${CONFIG}")
     while IFS= read -r ctx; do
       [[ -z "${ctx}" ]] && continue
       cmd+=(--context "${CORE}/${ctx}")

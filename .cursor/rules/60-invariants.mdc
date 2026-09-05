@@ -40,16 +40,25 @@ Current mapping (keep updated):
 | UNANIMOUS ⇒ no minority; deadlock decision lists all theses | tests/test_verdict.py |
 | Garbage/index/empty elicitation answers never become constraints | tests/test_elicitor.py |
 | Zhoda decision synthesized, not raw platform.answer | tests/test_verdict.py + tests/test_e2e.py |
+| SUPERSEDED ≠ CLOSED in decision prompt; winner claims kept | tests/test_verdict.py::test_superseded_is_revision_not_refutation + test_synthesize_keeps_winner_claims_out_of_closed_bucket |
+| Hedge synthesis falls back to winner thesis | tests/test_verdict.py::test_hedge_synthesis_falls_back_to_winner_thesis |
+| Hedge revision of a named pick is refused | tests/test_debate.py::test_hedge_revision_is_refused |
+| Agreement is primary rec for the user question, not shared complements | tests/test_consensus.py::test_agreement_prompt_asks_about_the_user_question |
 | Birth unanimity fast-pass / DA spawn opposition | tests/test_e2e.py |
 | Grounding gate: URL/deixis/empty object → insufficient_context, no debate | tests/test_e2e.py::test_url_answer_is_insufficient_context_and_skips_debate |
+| Auto-clarify IC without Stage 0 LLM when the object is already missing | tests/test_e2e.py::test_auto_clarify_grounding_is_insufficient_without_context |
+| red_team + --context skips Stage 0 (source is the object) | tests/test_e2e.py::test_red_team_with_context_skips_elicit |
+| Named winner claims surface in decision if chairman drops them | tests/test_verdict.py::test_synthesize_appends_dropped_claims |
 | Paraphrased elicitation questions asked once | tests/test_elicitor.py::test_paraphrased_questions_are_asked_once |
 | One-option substring maps to that option | tests/test_elicitor.py::test_single_option_substring_counts_as_answer |
 | --context files appear in position prompts | tests/test_e2e.py::test_context_files_land_in_position_prompt |
 | Unasked elicitation → open_ambiguities, never assumptions | tests/test_elicitor.py + tests/test_e2e.py::test_auto_clarify_grounding_is_insufficient_without_context |
 | Elicitation loops until models report enough or turn cap; leftover → open_ambiguities | tests/test_elicitor.py::test_interview_asks_followup_until_models_report_enough |
-| Majority headcount does not early-stop; zhoda early-stop is unanimous streak | tests/test_e2e.py::test_majority_does_not_early_stop_before_cap + tests/test_consensus.py |
+| Majority headcount does not early-stop; majority at cap is not zhoda; zhoda early-stop is unanimous streak | tests/test_e2e.py::test_majority_does_not_early_stop_before_cap + tests/test_consensus.py + tests/test_verdict.py::test_majority_without_zhoda_lists_all_theses |
+| XOR question + hybrid synthesis falls back to winner thesis | tests/test_verdict.py::test_xor_hybrid_synthesis_falls_back_to_winner_thesis |
 | Synthetic opposition labeled in minority / tree | tests/test_verdict.py::test_synthetic_opposition_is_labeled_in_minority + tests/test_plan.py::test_synthetic_faction_is_labeled_on_the_tree |
 | Rotating DA skipped when synthetic opposition exists | tests/test_e2e.py::test_advocate_spawns_opposition_on_unanimous_debate |
+| Unanimous at rounds_cap is zhoda even without a full streak | tests/test_e2e.py::test_unanimous_at_cap_is_zhoda_without_full_streak |
 | SOURCE: parsed into rebuttal_evidence_url | tests/test_debate.py::test_source_line_becomes_rebuttal_evidence_url |
 | String "null" evidence_url → None / assumption | tests/test_plan.py::test_three_evidence_labels |
 | Cost after all LLM; sum(breakdown)==requests; latency_s | tests/test_openrouter.py::test_latency_s_is_measured + tests/test_e2e.py::test_mixed_elicitation_answers_stay_honest |

@@ -6,9 +6,10 @@ PAIR, like closure — `all_agree` only when every non-conflicted judge
 unanimous' (safe side). No single-judge bias point.
 
 Stability rule: UNANIMOUS (judge pair `all_agree` on theses) counts as zhoda
-only if it PERSISTS for `stability_rounds` consecutive rounds. Headcount
-majority does not early-stop the debate — it may become zhoda only at the
-rounds cap, if the majority streak also lasted `stability_rounds`.
+only if it PERSISTS for `stability_rounds` consecutive rounds, except at
+rounds_cap where a single unanimous check is enough. Headcount majority
+does not early-stop the debate and does not become zhoda at the cap
+(engine: `decision_origin = "majority_at_cap"`, dissent map).
 classify() is exposed separately for single-pass protocols (vote, red_team)
 where the streak must not apply.
 """
@@ -20,14 +21,16 @@ from .judges import Judges
 from .models import ConsensusStrength, bind_user_context
 from .providers.openrouter import OpenRouterProvider
 
-AGREEMENT_PROMPT = """Here are the theses of all factions:
+AGREEMENT_PROMPT = """User question: {question}
+
+Here are the theses of all factions:
 {theses}
 
-Do they all share the same primary recommendation (same stack/system as the main choice)?
-If recommended actions / architecture in the critical path are the same, they
-agree even when labels differ (e.g. both put ACID state on PostgreSQL and
-stream through Kafka).
-Managed vs self-hosted, caveats, and optional complements are NOT different positions.
+Do they all share the same primary recommendation — the main system/action
+that answers THAT question?
+Complements, caveats, and managed vs self-hosted are the same position only
+if the main pick is the same.
+If one faction's main pick is PostgreSQL and another's is Kafka, they do NOT agree — even if each mentions the other as optional.
 ONLY valid JSON:
 {{"all_agree": true}} or {{"all_agree": false}}"""
 
@@ -39,6 +42,7 @@ class ConsensusChecker:
         self.provider = provider
         self.stability_rounds = stability_rounds
         self.user_context: str = ""
+        self.question: str = ""
         self._unanimous_streak = 0
         self._majority_streak = 0
 
@@ -66,7 +70,10 @@ class ConsensusChecker:
                 self.provider.ask_json(
                     judge,
                     bind_user_context(
-                        AGREEMENT_PROMPT.format(theses=theses),
+                        AGREEMENT_PROMPT.format(
+                            question=self.question or "(unspecified)",
+                            theses=theses,
+                        ),
                         self.user_context,
                     ),
                 )

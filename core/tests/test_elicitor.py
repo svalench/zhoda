@@ -87,6 +87,8 @@ def test_url_on_grounding_question_stays_open() -> None:
         context="",
     )
     assert grounding_need("Evaluate project X", [q], ["https://x"], context="README") is None
+    assert grounding_need("Evaluate project X", [], [], context="") is not None
+    assert grounding_need("Evaluate project X", [], [], context="README") is None
 
 
 @pytest.mark.asyncio

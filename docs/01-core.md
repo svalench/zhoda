@@ -56,7 +56,10 @@ object (project, repo, document) and Stage 0 still cannot name that object
 was given — the engine returns `insufficient_context=True`,
 `consensus_strength=SPLIT`, `zhoda_reached=False`, decision
 `INSUFFICIENT_CONTEXT: …`, and **does not** collect positions or run
-debate.
+debate. `auto-clarify` / `no-clarify` skip Stage 0 LLM when that gate is
+already decidable from the question alone (no `--context`). `red_team`
+with `--context` also skips Stage 0: the source *is* the object; clarifying
+“maybe the driver sanitizes” must not wash out findings in the file.
 
 ## Stage 1 — Positions
 
@@ -103,7 +106,9 @@ anyone is asked to defect).
   opposition faction** with a different primary action (reserved member,
   `synthetic=True`, not a council vote). The rotating devil's advocate is
   **skipped** while that synthetic faction already sits at the table — one
-  chair, not two. If spawn is off or fails, birth unanimity
+  chair, not two — **and skipped when two or more council factions already
+  oppose each other** (live 2026-09-05: extra DA filled the objection cap
+  and never produced a switch). If spawn is off or fails, birth unanimity
   **fast-passes** (`rounds_taken = 0`, transcript `fast_pass:
   unanimity_at_birth`) instead of empty stability rounds.
 - **Rebuttal `SOURCE:`** lines are parsed into `rebuttal_evidence_url` and
@@ -118,23 +123,27 @@ anyone is asked to defect).
 ## Stage 4 — Consensus
 
 The judge pair scores `all_agree` on the same primary-recommendation
-criterion (thesis + answer), not prose similarity: **recommended actions /
-architecture on the critical path**, not labels. Stability rule: two
+criterion (thesis + answer), not prose similarity: **the main pick that
+answers the user question**. Complements and caveats are the same position
+only if that pick matches. PostgreSQL-as-ledger vs Kafka-as-ledger do **not**
+agree just because each mentions the other as optional. The agreement prompt
+includes the question. Stability rule: two
 consecutive **unanimous** checks (`all_agree`) must agree before zhoda is
-declared early (round-6 §1). Headcount majority (2/3 of voting heads) does
-**not** end the debate — it may count as zhoda only at `rounds_cap` if that
-majority also persisted for `stability_rounds`. `split` at the rounds cap
-becomes `deadlock`. Escalation is opt-in and
-fires on deadlock only; the appellate decision overwrites `decision` but
-carries `decision_origin = "appeal_without_consensus"` — a single model's
-fiat is labeled, never mistaken for zhoda (round-10 §2).
+declared **early**. Headcount majority (2/3 of voting heads) does
+**not** end the debate. At `rounds_cap` the current check is terminal:
+unanimous (even streak 1) is zhoda. Majority at the cap is **not** zhoda —
+`decision_origin = "majority_at_cap"`, dissent map of every faction thesis,
+no plan contract. `split` at the rounds cap becomes `deadlock`. Escalation
+is opt-in and fires on deadlock only; the appellate decision overwrites
+`decision` but carries `decision_origin = "appeal_without_consensus"` — a
+single model's fiat is labeled, never mistaken for zhoda (round-10 §2).
 
 ## Stage 5 — Verdict
 
 ```python
 Verdict {
   decision, zhoda_reached, consensus_strength, protocol,
-  decision_origin,        # "council" | "appeal_without_consensus"
+  decision_origin,        # "council" | "appeal_without_consensus" | "majority_at_cap"
   router_confidence, value_map,
   minority_report,        # preserved dissent — never erased; synthetic
                           # opposition is labeled (round-12)
@@ -169,12 +178,20 @@ On `UNANIMOUS`, `minority_report` is empty — the judges already said it is
 one position, even if faction objects were not merged. A synthetic
 opposition in the minority is labeled
 `[synthetic opposition — no council model held this position]` (round-12;
-same honesty as `decision_origin = "appeal_without_consensus"`). On split/deadlock,
+same honesty as `decision_origin = "appeal_without_consensus"`). On split/deadlock/majority-at-cap,
 `decision` is a dissent map of every faction thesis, not the leading
 faction's raw `answer`. On zhoda, the chairman **synthesizes** `decision`
 for the user (action first, closed objections, overturn conditions);
-unresolved ambiguities must not be asserted as facts. Fallback is the
-winner's thesis, never the raw platform answer. If Stage 0 cannot ground
+unresolved ambiguities must not be asserted as facts. `SUPERSEDED`
+objections are platform revisions, not refutations — they must not be
+bucketed with `CLOSED`. Winner `claims` stay in the synthesis prompt even
+if the thesis was watered down. If the chairman omits those claims, they
+are appended as `Findings:`. A hedge decision ("it depends", "both
+comparable", "choose based on team expertise") falls back to the winner
+thesis. On an XOR question (A or B / A vs B), a hybrid that adopts both
+options as the action also falls back to the winner thesis. A hedge revision
+that replaces a named pick is refused. Fallback is
+the winner's thesis, never the raw platform answer. If Stage 0 cannot ground
 the object of evaluation, `insufficient_context` short-circuits: SPLIT,
 no zhoda, no position or debate spend.
 

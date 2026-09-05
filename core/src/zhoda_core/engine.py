@@ -5,7 +5,8 @@
 Round-10: paths_rejected is honest (rejections by a REACHED consensus only);
 the plan contract never renders on a non-zhoda verdict; an appellate
 decision carries decision_origin="appeal_without_consensus" — a single
-model's fiat is labeled, never mistaken for zhoda.
+model's fiat is labeled, never mistaken for zhoda. Headcount majority at
+rounds_cap is decision_origin="majority_at_cap": dissent, not zhoda.
 """
 
 from collections.abc import Callable
@@ -213,8 +214,21 @@ class ZhodaEngine:
 
         elicit_questions: list[ClarifyingQuestion] = []
         elicit_answers: list[str] = []
+        pre_need = grounding_need(question, [], [], context)
         if value_map is not None:
             emit("elicit", "value_map provided — skip Stage 0", done=True)
+        elif pre_need is not None and clarify_mode != "smart":
+            # Объект уже ясно отсутствует — не тратим Stage 0, чтобы спросить его имя.
+            value_map = ValueMap()
+            emit("elicit", "elicit skipped — object missing", done=True)
+        elif (
+            context.strip()
+            and route.protocol is Protocol.RED_TEAM
+            and clarify_mode != "smart"
+        ):
+            # Исходник уже в --context; «а вдруг sanitize» не должен мыть находки.
+            value_map = ValueMap()
+            emit("elicit", "elicit skipped — source in --context", done=True)
         elif clarify_mode != "no-clarify":
             emit("elicit", "eliciting clarifying questions…")
 
@@ -282,6 +296,7 @@ class ZhodaEngine:
         debate.user_context = user_context
         clusterer.user_context = user_context
         consensus.user_context = user_context
+        consensus.question = question
 
         emit("positions", f"collecting positions ({len(self.council)} models)…")
         positions = await extract_positions(
@@ -330,6 +345,7 @@ class ZhodaEngine:
         emit("factions", f"factions: {len(factions)}", done=True)
 
         rounds_taken = 0
+        majority_at_cap = False
         if route.protocol == Protocol.VOTE:
             emit("consensus", "classifying agreement…")
             strength = await consensus.classify(factions, judges=judges)
@@ -345,6 +361,7 @@ class ZhodaEngine:
             strength = await consensus.classify(factions, judges=judges)
             zhoda = strength in (ConsensusStrength.UNANIMOUS, ConsensusStrength.MAJORITY)
             emit("consensus", f"zhoda={zhoda} {strength}", done=True)
+            mark("debate")
         else:
             zhoda, strength = False, ConsensusStrength.SPLIT
             if len(factions) == 1:
@@ -378,9 +395,10 @@ class ZhodaEngine:
                     if (
                         not zhoda
                         and rounds_taken == self.rounds_cap
-                        and strength is ConsensusStrength.MAJORITY
-                        and consensus.majority_is_stable
+                        and strength is ConsensusStrength.UNANIMOUS
                     ):
+                        # Early-stop требует streak; на капе ждать нечего.
+                        # Majority без all_agree — не згода (честный раскол).
                         zhoda = True
                     self.transcripts.append(
                         tid,
@@ -392,6 +410,9 @@ class ZhodaEngine:
             mark("debate")
             if not zhoda and strength == ConsensusStrength.SPLIT:
                 strength = ConsensusStrength.DEADLOCK
+            elif not zhoda and strength is ConsensusStrength.MAJORITY:
+                # Majority на капе — честный раскол, не згода и не апелляция.
+                majority_at_cap = True
 
         # escalation: the appellate model decides a deadlock — LABELED (round-10 §2)
         escalated_to = None
@@ -443,6 +464,8 @@ class ZhodaEngine:
         if appeal_decision:
             verdict.decision = appeal_decision
             verdict.decision_origin = "appeal_without_consensus"  # labeled fiat
+        elif majority_at_cap:
+            verdict.decision_origin = "majority_at_cap"
         verdict.escalated_to = escalated_to
         leading = max(factions, key=lambda f: len(f.members))
         if zhoda and verdict.decision_origin == "council" and leading.platform is not None:

@@ -2,7 +2,8 @@
 via alias_seed, transcripts in tmp_path).
 
 Round-10: the plan contract renders ONLY on zhoda; paths_rejected counts
-rejections by a reached consensus; an appeal carries decision_origin.
+rejections by a reached consensus; majority at cap is dissent
+(`decision_origin=majority_at_cap`); an appeal carries decision_origin.
 """
 
 import json
@@ -186,8 +187,6 @@ async def test_debate_loop_with_platform_revision(tmp_path) -> None:
         ("m2", ("withdraw your objection",), {"withdraw": True}),
         (None, ("theses of all factions",), {"all_agree": False}),
         (None, ("theses of all factions",), {"all_agree": False}),
-        (None, ("SYNTHESIZE THE COUNCIL DECISION",), DECISION),
-        (None, ("PLAN CONTRACT",), PLAN),
     ]
     engine = make_engine(ScriptedProvider(script), tmp_path, stability_rounds=1, rounds_cap=1)
     verdict = await engine.deliberate(
@@ -195,13 +194,17 @@ async def test_debate_loop_with_platform_revision(tmp_path) -> None:
         force_protocol=Protocol.DEBATE,
         clarify_mode="no-clarify",
     )
-    assert verdict.zhoda_reached is True
+    assert verdict.zhoda_reached is False
+    assert verdict.consensus_strength == ConsensusStrength.MAJORITY
+    assert verdict.decision_origin == "majority_at_cap"
+    assert "No zhoda" in verdict.decision
     assert "partitioning" in verdict.decision
-    assert verdict.decision != f"Answer: {PG_REVISED}"
-    assert verdict.minority_report and "Kafka" in verdict.minority_report
+    assert "Kafka" in verdict.decision or (
+        verdict.minority_report is not None and "Kafka" in verdict.minority_report
+    )
+    assert verdict.plan_contract is None
+    assert verdict.paths_rejected == []
     assert verdict.switches == []
-    assert verdict.plan_contract is not None  # zhoda -> plan renders
-    assert len(verdict.paths_rejected) >= 1  # the Kafka minority, rejected
     assert verdict.decision_tree["children"]
     assert verdict.cost.breakdown
 
@@ -337,16 +340,7 @@ def _closed_majority_round() -> list:
 async def test_majority_does_not_early_stop_before_cap(tmp_path) -> None:
     """2/3 голов — не згода на 2-м раунде; дебаты идут до cap."""
     aliases = make_aliases(COUNCIL, seed=42)
-    script = (
-        opening_script(aliases)
-        + _closed_majority_round()
-        + _closed_majority_round()
-        + _closed_majority_round()
-        + [
-            (None, ("SYNTHESIZE THE COUNCIL DECISION",), DECISION),
-            (None, ("PLAN CONTRACT",), PLAN),
-        ]
-    )
+    script = opening_script(aliases) + _closed_majority_round() * 3
     engine = make_engine(
         ScriptedProvider(script),
         tmp_path,
@@ -359,8 +353,47 @@ async def test_majority_does_not_early_stop_before_cap(tmp_path) -> None:
         clarify_mode="no-clarify",
     )
     assert verdict.rounds_taken == 3
-    assert verdict.zhoda_reached is True
+    assert verdict.zhoda_reached is False
     assert verdict.consensus_strength == ConsensusStrength.MAJORITY
+    assert verdict.decision_origin == "majority_at_cap"
+    assert verdict.plan_contract is None
+    assert "No zhoda" in verdict.decision
+    assert PG in verdict.decision
+    assert KF in verdict.decision
+
+
+@pytest.mark.asyncio
+async def test_unanimous_at_cap_is_zhoda_without_full_streak(tmp_path) -> None:
+    """Live kafka: unanimous только на последнем раунде капа — это згода."""
+    aliases = make_aliases(COUNCIL, seed=42)
+    majority = _closed_majority_round()
+    last = majority[:-2] + [
+        (None, ("theses of all factions",), {"all_agree": True}),
+        (None, ("theses of all factions",), {"all_agree": True}),
+    ]
+    script = (
+        opening_script(aliases)
+        + majority
+        + last
+        + [
+            (None, ("SYNTHESIZE THE COUNCIL DECISION",), DECISION),
+            (None, ("PLAN CONTRACT",), PLAN),
+        ]
+    )
+    engine = make_engine(
+        ScriptedProvider(script),
+        tmp_path,
+        stability_rounds=2,
+        rounds_cap=2,
+    )
+    verdict = await engine.deliberate(
+        "PostgreSQL or Kafka for a 50k RPS ledger?",
+        force_protocol=Protocol.DEBATE,
+        clarify_mode="no-clarify",
+    )
+    assert verdict.rounds_taken == 2
+    assert verdict.zhoda_reached is True
+    assert verdict.consensus_strength == ConsensusStrength.UNANIMOUS
 
 
 @pytest.mark.asyncio
@@ -553,6 +586,47 @@ async def test_red_team_attacks_unanimous_platform(tmp_path) -> None:
     events = engine.transcripts.read(verdict.transcript_id)
     rounds = [e for e in events if e.get("stage") == "round"]
     assert rounds and rounds[0]["critiques"]  # the advocate fired at unanimity
+    assert verdict.cost.breakdown.get("debate", 0) > 0
+
+
+@pytest.mark.asyncio
+async def test_red_team_with_context_skips_elicit(tmp_path) -> None:
+    """Live login: --context уже исходник — auto-clarify не спрашивает sanitize."""
+    aliases = make_aliases(COUNCIL, seed=42)
+    a1 = aliases["m1"]
+    script = [
+        ("m1", ("independent structured stance",), position(PG)),
+        ("m2", ("independent structured stance",), position(PG)),
+        ("m3", ("independent structured stance",), position(PG)),
+        (None, ("Synthesize the shared platform",), position(PG)),
+        (None, ("Name each faction",), {}),
+        (
+            None,
+            ("devil's advocate",),
+            {
+                "target_faction": a1,
+                "flaw_type": "logical",
+                "claim": "the platform never considers write amplification on SSDs",
+                "specifics": "",
+                "evidence_url": None,
+            },
+        ),
+        (None, ("Rebut it concisely",), "Covered by the storage engine."),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("Did the rebuttal",), {"closed": True}),
+        (None, ("SYNTHESIZE THE COUNCIL DECISION",), DECISION),
+        (None, ("PLAN CONTRACT",), PLAN),
+    ]
+    engine = make_engine(ScriptedProvider(script), tmp_path)
+    verdict = await engine.deliberate(
+        "Review this login helper for production use.",
+        force_protocol=Protocol.RED_TEAM,
+        clarify_mode="auto-clarify",
+        context="def login(user, password): ...",
+    )
+    assert verdict.insufficient_context is False
+    assert verdict.cost.breakdown.get("elicit", 0) == 0
+    assert "positions" in verdict.cost.breakdown
 
 
 @pytest.mark.asyncio
@@ -980,24 +1054,8 @@ async def test_url_answer_is_insufficient_context_and_skips_debate(tmp_path) -> 
 
 @pytest.mark.asyncio
 async def test_auto_clarify_grounding_is_insufficient_without_context(tmp_path) -> None:
-    """auto-clarify не спрашивает, но grounding-вопрос остаётся открытым → IC."""
-    grounding = {
-        "ambiguities": [
-            {
-                "ambiguity": "object unstated",
-                "why_it_matters": "cannot judge an unseen artifact",
-                "candidate_question": "Which project are we evaluating?",
-                "options": [],
-            }
-        ],
-    }
-    provider = ScriptedProvider(
-        [
-            ("m1", ("Do NOT answer",), grounding),
-            ("m2", ("Do NOT answer",), grounding),
-            ("m3", ("Do NOT answer",), grounding),
-        ]
-    )
+    """auto-clarify: объект уже ясно отсутствует — IC без Stage 0 LLM."""
+    provider = ScriptedProvider([])
     engine = make_engine(provider, tmp_path)
     verdict = await engine.deliberate(
         "Evaluate project X",
@@ -1009,9 +1067,9 @@ async def test_auto_clarify_grounding_is_insufficient_without_context(tmp_path) 
     assert verdict.consensus_strength == ConsensusStrength.SPLIT
     assert verdict.decision.startswith("INSUFFICIENT_CONTEXT:")
     assert verdict.rounds_taken == 0
+    assert verdict.cost.breakdown.get("elicit", 0) == 0
     assert "positions" not in verdict.cost.breakdown
     assert verdict.value_map.assumptions == []
-    assert "Which project are we evaluating?" in verdict.value_map.open_ambiguities
     assert provider.script == []
 
 
