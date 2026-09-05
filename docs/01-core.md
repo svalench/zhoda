@@ -152,7 +152,7 @@ anyone is asked to defect).
 - **Objection ledger**: `open | closed | superseded`. Caps:
   `max_new_per_round` (3) and `max_active` (6); overflow is marked
   `deferred`, never dropped (round-6 §2).
-- **Devil's advocate**: attacks the leading faction; on unanimity
+  - **Devil's advocate**: attacks the leading faction; on unanimity
   (red_team) attacks the only platform directly (round-9 §4). On `debate`,
   if clustering produced a single faction, the advocate **spawns an
   opposition faction** with a different primary action (reserved member,
@@ -161,9 +161,14 @@ anyone is asked to defect).
   **skipped** while that synthetic faction already sits at the table — one
   chair, not two — **and skipped when two or more council factions already
   oppose each other** (live 2026-09-05: extra DA filled the objection cap
-  and never produced a switch). If spawn is off or fails, birth unanimity
-  **fast-passes** (`rounds_taken = 0`, transcript `fast_pass:
-  unanimity_at_birth`) instead of empty stability rounds.
+  and never produced a switch). Required opposition is a **check**, not a
+  voter: spawn success/failure is run completeness, not extra headcount.
+  If spawn is off, the check is not requested. If spawn fails, birth
+  unanimity may still **fast-pass among responders** (`rounds_taken = 0`,
+  transcript `fast_pass: unanimity_at_birth`), but that is not a trusted
+  verdict: `zhoda_reached` stays false, no approved plan. If spawn is
+  skipped because several council factions already exist, the check is
+  `skipped` (multi_faction), not a failure.
 - **Rebuttal `SOURCE:`** lines are parsed into `rebuttal_evidence_url` and
   stripped from prose; a URL named from memory is `unverified_claim`.
 - **Closure**: both judges (outside the council, no silent fallback —
@@ -231,15 +236,18 @@ single model's fiat is labeled, never mistaken for zhoda (round-10 §2).
 ```python
 Verdict {
   decision, zhoda_reached, consensus_strength, protocol,
-  decision_origin,        # "council" | "appeal_without_consensus" | "majority_at_cap"
+  decision_origin,        # "council" | "appeal_without_consensus" |
+                          # "majority_at_cap" | "degraded"
   router_confidence, value_map,
   minority_report,        # preserved dissent — never erased; synthetic
                           # opposition is labeled (round-12)
   dissent_map[], switches[], rounds_taken, cost, transcript_id,
-  plan_contract?,         # rendered ONLY on zhoda (round-10 §2)
+  plan_contract?,         # rendered ONLY on trusted zhoda (round-10 §2)
   paths_rejected[],       # honest programmatic count (rounds 10-11)
   decision_tree, escalated_to?,
   insufficient_context,  # True → no debate; object of evaluation missing
+  run_id, completeness,  # requested/succeeded/failed/skipped checks
+  degraded,              # advisory rec; not zhoda and not an approved plan
 }
 ```
 
@@ -303,6 +311,31 @@ naming, decision synthesis and the plan contract are cache-keyed (not
 `transcript_id` — that would kill replay). `latency_s` is wall-clock from
 `begin_question` to the final snapshot, taken **after** all LLM calls
 (including decision synthesis and plan contract).
+
+Admission reserves **input + max output** tokens against the price table
+(a combined rate applies to both directions; `{input, output}` per 1K is
+allowed). Concurrent in-flight calls share one reservation pool. A paid
+model with no price is not estimated as $0: a capped run raises
+`UnknownPriceError` until an explicit strategy is set (`prices[model] = 0.0`
+is explicit). Missing `usage` is `usd_status=unknown` (or `partial` if
+tokens arrived without `cost`) — the report does not mint an exact total.
+If actual usage exceeds a positive estimate, record `overrun_usd`, freeze
+new admissions, and **do not** clamp `usd` down to the cap. Reservation
+release is once-only. One in-flight run per provider: overlapping
+`begin_question` raises `OverlappingRunError` rather than zeroing another
+run's counters.
+
+## Run completeness (quorum)
+
+Support among responders (e.g. `consensus_strength = unanimous` on the
+models that answered) is not run completeness. Before the first council
+call the engine records the requested roster and required checks. Failures
+do not shrink the denominator. A trusted verdict requires every requested
+check to be `succeeded` or `skipped`. Incomplete output may be a degraded
+advisory (`decision_origin = "degraded"`) but is not `zhoda_reached` and
+not an eligible approved plan. Early insufficient-context, one-faction
+fast-pass, escalation, and scheduler errors all pass this gate. Synthetic
+opposition never joins the voter roster.
 
 ## Session state
 

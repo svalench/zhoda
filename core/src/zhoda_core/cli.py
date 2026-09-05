@@ -15,7 +15,7 @@ from rich.status import Status
 from .config import load_council_config, make_engine, make_provider
 from .elicitor import ClarifyingQuestion
 from .env import load_zhoda_env
-from .models import CostReport, Protocol
+from .models import AccountingStatus, CostReport, Protocol
 from .progress import ProgressEvent
 from .providers.openrouter import ZhodaProviderError
 
@@ -75,7 +75,7 @@ def apply_progress(event: ProgressEvent, status: Status) -> None:
 
 
 def format_cost_breakdown(cost: CostReport) -> str:
-    """Нули из-за cache hit — 'cached', не '0' (ноль читается как баг)."""
+    """Нули из-за cache hit — 'cached', не '0'. Unknown/partial usd не маскируем."""
     parts: list[str] = []
     for stage, count in cost.breakdown.items():
         hits = cost.cache_breakdown.get(stage, 0)
@@ -83,6 +83,10 @@ def format_cost_breakdown(cost: CostReport) -> str:
             parts.append(f"{stage}: cached")
         else:
             parts.append(f"{stage}: {count}")
+    if cost.usd_status is not AccountingStatus.EXACT:
+        parts.append(f"usd_status={cost.usd_status}")
+    if cost.overrun_usd:
+        parts.append(f"overrun=${cost.overrun_usd:.4f}")
     return ", ".join(parts)
 
 

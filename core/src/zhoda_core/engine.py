@@ -1,9 +1,9 @@
 """Orchestration state machine: router -> elicitor -> positions -> factions
 (chairman names them) -> debate rounds (revise BEFORE switches) -> verdict
--> plan contract (ONLY on zhoda) + decision tree.
+-> plan contract (ONLY on trusted zhoda) + decision tree.
 
 Round-10: paths_rejected is honest (rejections by a REACHED consensus only);
-the plan contract never renders on a non-zhoda verdict; an appellate
+the plan contract never renders on a non-zhoda or degraded verdict; an appellate
 decision carries decision_origin="appeal_without_consensus" — a single
 model's fiat is labeled, never mistaken for zhoda. Headcount majority at
 rounds_cap is decision_origin="majority_at_cap": dissent, not zhoda.
@@ -35,6 +35,8 @@ from .models import (
     ObjectionStatus,
     PremiseRole,
     Protocol,
+    RunCompleteness,
+    RunContext,
     ValueMap,
     Verdict,
     bind_user_context,
@@ -77,6 +79,13 @@ ONLY valid JSON:
   "falsifiability": "...", "confidence": 0.0}}"""
 
 MAX_FACTION_NAME = 40
+
+
+def quorum_policy(protocol: Protocol, *, devils_advocate: bool) -> str:
+    """Default trusted verdict: полный обязательный набор, не responders-only."""
+    if protocol is Protocol.DEBATE and devils_advocate:
+        return "full_roster_plus_required_opposition"
+    return "full_council_positions"
 
 
 class ZhodaEngine:
@@ -193,7 +202,44 @@ class ZhodaEngine:
         context: str,
         value_map: ValueMap | None,
     ) -> Verdict:
-        self.provider.begin_question()
+        started = self.provider.begin_question()
+        run_ctx = started if isinstance(started, RunContext) else RunContext(run_id="")
+        try:
+            return await self._deliberate_after_open(
+                tid,
+                question,
+                debate,
+                clusterer,
+                consensus,
+                force_protocol=force_protocol,
+                clarify_mode=clarify_mode,
+                on_questions=on_questions,
+                on_progress=on_progress,
+                context=context,
+                value_map=value_map,
+                completeness=run_ctx.completeness,
+                run_id=run_ctx.run_id,
+            )
+        finally:
+            self.provider.end_question()
+
+    async def _deliberate_after_open(
+        self,
+        tid: str,
+        question: str,
+        debate: DebateEngine,
+        clusterer: FactionClusterer,
+        consensus: ConsensusChecker,
+        *,
+        force_protocol: Protocol | None,
+        clarify_mode: str,
+        on_questions: Callable[[list[ClarifyingQuestion]], list[str]] | None,
+        on_progress: Callable[[ProgressEvent], None] | None,
+        context: str,
+        value_map: ValueMap | None,
+        completeness: RunCompleteness,
+        run_id: str,
+    ) -> Verdict:
         catalog = option_catalog(question)
         debate.catalog = catalog
         clusterer.catalog = catalog
@@ -308,6 +354,8 @@ class ZhodaEngine:
                 cost=cost,
                 transcript_id=tid,
                 insufficient_context=True,
+                run_id=run_id,
+                completeness=completeness,
             )
             self.transcripts.append(
                 tid,
@@ -324,6 +372,11 @@ class ZhodaEngine:
         consensus.question = question
 
         emit("positions", f"collecting positions ({len(self.council)} models)…")
+        completeness.policy = quorum_policy(
+            route.protocol, devils_advocate=self.devils_advocate,
+        )
+        if route.protocol == Protocol.DEBATE and self.devils_advocate:
+            completeness.register("opposition", "synthetic")
         positions = await extract_positions(
             self.provider,
             self.council,
@@ -331,6 +384,7 @@ class ZhodaEngine:
             value_map,
             aliases,
             context=context,
+            completeness=completeness,
         )
         positions = [
             pos.model_copy(
@@ -363,19 +417,27 @@ class ZhodaEngine:
                     )
                 }
             )
-        if route.protocol == Protocol.DEBATE and len(factions) == 1 and self.devils_advocate:
-            opposition = await self._spawn_opposition(
-                question, factions[0], speakers, user_context,
-            )
-            if opposition is not None:
-                factions.append(opposition)
-                self.transcripts.append(
-                    tid,
-                    {
-                        "stage": "opposition_spawned",
-                        "faction": opposition.model_dump(),
-                    },
+        if completeness.get("opposition", "synthetic") is not None:
+            if len(factions) >= 2:
+                completeness.skip("opposition", "synthetic", "multi_faction")
+            elif not self.devils_advocate:
+                completeness.skip("opposition", "synthetic", "da_disabled")
+            else:
+                opposition = await self._spawn_opposition(
+                    question, factions[0], speakers, user_context,
                 )
+                if opposition is not None:
+                    completeness.succeed("opposition", "synthetic")
+                    factions.append(opposition)
+                    self.transcripts.append(
+                        tid,
+                        {
+                            "stage": "opposition_spawned",
+                            "faction": opposition.model_dump(),
+                        },
+                    )
+                else:
+                    completeness.fail("opposition", "synthetic", "spawn_failed")
         await self._name_factions(factions)
         self.transcripts.append(
             tid,
@@ -521,6 +583,11 @@ class ZhodaEngine:
             if strength is ConsensusStrength.UNANIMOUS:
                 strength = ConsensusStrength.MAJORITY
 
+        completeness.finalize()
+        degraded = not completeness.trusted
+        if degraded:
+            zhoda = False
+
         verdict = self.verdicts.build(
             factions,
             strength,
@@ -540,6 +607,14 @@ class ZhodaEngine:
             verdict.decision_origin = "appeal_without_consensus"  # labeled fiat
         elif majority_at_cap:
             verdict.decision_origin = "majority_at_cap"
+        if degraded:
+            verdict.degraded = True
+            verdict.decision_origin = "degraded"
+            verdict.decision = (
+                f"Recommended (degraded, incomplete run): {verdict.decision}"
+            )
+        verdict.run_id = run_id
+        verdict.completeness = completeness
         verdict.escalated_to = escalated_to
         if zhoda and verdict.decision_origin == "council" and leading.platform is not None:
             try:
@@ -560,9 +635,9 @@ class ZhodaEngine:
             zhoda_reached=zhoda,
             question=question,
         )
-        # the plan contract renders ONLY on zhoda (round-10 §2)
+        # the plan contract renders ONLY on trusted zhoda (incomplete run is advisory)
         emit("verdict", "rendering verdict…")
-        if zhoda:
+        if zhoda and not degraded:
             verdict.plan_contract = await render_plan_contract(
                 self.provider,
                 self.chairman,

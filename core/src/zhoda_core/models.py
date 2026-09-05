@@ -231,6 +231,126 @@ class Disagreement(BaseModel):
     summary: str
 
 
+class AccountingStatus(StrEnum):
+    """How trustworthy the usd total is. Unknown is not a silent $0."""
+
+    EXACT = "exact"
+    PARTIAL = "partial"
+    UNKNOWN = "unknown"
+
+
+class CheckStatus(StrEnum):
+    REQUESTED = "requested"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class CheckRecord(BaseModel):
+    """Один required check. Denominator — requested, не ответившие."""
+
+    check_id: str
+    kind: str
+    target: str
+    status: CheckStatus = CheckStatus.REQUESTED
+    reason: str = ""
+    attempts: int = 0
+
+
+class RunCompleteness(BaseModel):
+    """Support among responders ≠ run completeness. Trusted ⇒ все
+    requested checks succeeded или skipped; leftover requested — fail."""
+
+    policy: str = ""
+    checks: list[CheckRecord] = Field(default_factory=list)
+
+    def register(self, kind: str, target: str) -> CheckRecord:
+        rec = CheckRecord(check_id=f"{kind}:{target}", kind=kind, target=target)
+        self.checks.append(rec)
+        return rec
+
+    def _get(self, kind: str, target: str) -> CheckRecord | None:
+        want = f"{kind}:{target}"
+        for rec in self.checks:
+            if rec.check_id == want:
+                return rec
+        return None
+
+    def succeed(self, kind: str, target: str, *, reason: str = "", attempts: int = 1) -> None:
+        rec = self._get(kind, target)
+        if rec is None:
+            rec = self.register(kind, target)
+        rec.status = CheckStatus.SUCCEEDED
+        rec.reason = reason
+        rec.attempts += attempts
+
+    def fail(self, kind: str, target: str, reason: str, *, attempts: int = 1) -> None:
+        rec = self._get(kind, target)
+        if rec is None:
+            rec = self.register(kind, target)
+        rec.status = CheckStatus.FAILED
+        rec.reason = reason
+        rec.attempts += attempts
+
+    def skip(self, kind: str, target: str, reason: str) -> None:
+        rec = self._get(kind, target)
+        if rec is None:
+            rec = self.register(kind, target)
+        rec.status = CheckStatus.SKIPPED
+        rec.reason = reason
+
+    def get(self, kind: str, target: str) -> CheckRecord | None:
+        return self._get(kind, target)
+
+    def finalize(self) -> None:
+        """Leftover requested — отсутствие ответа, не успех. Quorum не сужаем."""
+        for rec in self.checks:
+            if rec.status is CheckStatus.REQUESTED:
+                rec.status = CheckStatus.FAILED
+                rec.reason = rec.reason or "missing"
+
+    @property
+    def trusted(self) -> bool:
+        """Полный обязательный набор. Не делим на число ответивших."""
+        if not self.checks:
+            return True
+        return all(
+            rec.status in (CheckStatus.SUCCEEDED, CheckStatus.SKIPPED)
+            for rec in self.checks
+        )
+
+    @property
+    def requested_count(self) -> int:
+        return len(self.checks)
+
+    @property
+    def succeeded_count(self) -> int:
+        return sum(1 for rec in self.checks if rec.status is CheckStatus.SUCCEEDED)
+
+    @property
+    def failed_count(self) -> int:
+        return sum(1 for rec in self.checks if rec.status is CheckStatus.FAILED)
+
+    @property
+    def skipped_count(self) -> int:
+        return sum(1 for rec in self.checks if rec.status is CheckStatus.SKIPPED)
+
+
+class RunContext(BaseModel):
+    """Изоляция учёта одного run (F читает completeness; E — terminal)."""
+
+    run_id: str
+    completeness: RunCompleteness = Field(default_factory=RunCompleteness)
+    reserved_usd: float = 0.0
+    in_flight: int = 0
+    attempts: int = 0
+    overrun_usd: float = 0.0
+    admissions_frozen: bool = False
+    closed: bool = False
+    usd_status: AccountingStatus = AccountingStatus.EXACT
+    failures: list[str] = Field(default_factory=list)
+
+
 class CostReport(BaseModel):
     requests: int = 0
     tokens_in: int = 0
@@ -240,6 +360,9 @@ class CostReport(BaseModel):
     latency_s: float = 0.0
     breakdown: dict[str, int] = Field(default_factory=dict)
     cache_breakdown: dict[str, int] = Field(default_factory=dict)
+    usd_status: AccountingStatus = AccountingStatus.EXACT
+    overrun_usd: float = 0.0
+    attempts: int = 0
 
 
 class PlanStep(BaseModel):
@@ -279,7 +402,7 @@ class DecisionNode(BaseModel):
 
     kind: str
     label: str
-    detail: dict = Field(default_factory=dict)
+    detail: dict[str, object] = Field(default_factory=dict)
     children: list[DecisionNode] = Field(default_factory=list)
 
 
@@ -292,7 +415,7 @@ class Verdict(BaseModel):
     zhoda_reached: bool
     consensus_strength: ConsensusStrength
     protocol: Protocol
-    # "council" | "appeal_without_consensus" | "majority_at_cap"
+    # "council" | "appeal_without_consensus" | "majority_at_cap" | "degraded"
     decision_origin: str = "council"
     router_confidence: float = 1.0
     value_map: ValueMap = Field(default_factory=ValueMap)
@@ -302,9 +425,12 @@ class Verdict(BaseModel):
     rounds_taken: int = 0
     cost: CostReport = Field(default_factory=CostReport)
     transcript_id: str = ""
-    plan_contract: PlanContract | None = None  # rendered ONLY on zhoda
+    plan_contract: PlanContract | None = None  # rendered ONLY on trusted zhoda
     paths_rejected: list[RejectedPath] = Field(default_factory=list)
-    decision_tree: dict = Field(default_factory=dict)
+    decision_tree: dict[str, object] = Field(default_factory=dict)
     escalated_to: str | None = None
     insufficient_context: bool = False  # объект оценки не задан — дебат не стартовал
     attributed_conditions: list[Condition] = Field(default_factory=list)
+    run_id: str = ""
+    completeness: RunCompleteness = Field(default_factory=RunCompleteness)
+    degraded: bool = False  # advisory: не zhoda и не approved plan

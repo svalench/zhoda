@@ -19,6 +19,10 @@ Current mapping (keep updated):
 | 429 transient vs quota, 4xx fail-fast | tests/test_openrouter.py |
 | Budget per question (delta), pre-call estimate | tests/test_openrouter.py |
 | Concurrent complete cannot overspend the cap (reserve before HTTP) | tests/test_openrouter.py::test_concurrent_completes_cannot_exceed_budget |
+| Partial council / failed required check is not trusted zhoda or approved plan | tests/test_e2e.py::test_d1_partial_council_is_not_trusted_zhoda + test_d2_invalid_required_json_is_degraded |
+| Unknown paid price is not a $0 reservation; underfunded admission is preflight | tests/test_openrouter.py::test_d3_unknown_price_blocks_underfunded_admission + test_d4_paid_unknown_price_zero_reservation_forbidden |
+| Overlapping begin_question is refused; reserved does not go negative | tests/test_openrouter.py::test_d5_overlapping_begin_question_is_refused + test_double_cleanup_does_not_go_negative |
+| Missing usage is unknown/partial, not an exact $0 total; overrun freezes admissions | tests/test_openrouter.py::test_missing_usage_is_unknown_not_exact_zero + test_external_overrun_freezes_admissions_without_clamping |
 | Compute-matched baselines: n_samples == zhoda.requests | tests/test_benchmarks.py::test_compare_uses_distinct_arms |
 | Cost-matched baselines stop at USD/token budget | tests/test_benchmarks.py::test_cost_matched_stops_at_usd_budget |
 | Open-ended SC is C calls: max(C-1, 1) gens + 1 cluster | tests/test_benchmarks.py::test_open_ended_sc_fits_compute_budget |

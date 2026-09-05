@@ -14,11 +14,12 @@ import json
 import os
 import sqlite3
 import time
+import uuid
 
 import httpx
 
 from ..env import load_zhoda_env
-from ..models import CostReport
+from ..models import AccountingStatus, CostReport, RunContext
 
 DEFAULT_MAX_TOKENS = 2000
 
@@ -52,6 +53,30 @@ class BudgetExceededError(ZhodaProviderError):
     """Per-question budget cap hit (pre-call estimate or accumulated delta)."""
 
 
+class UnknownPriceError(BudgetExceededError):
+    """Paid model without a price: a $0 reservation is not an estimate."""
+
+
+class OverlappingRunError(ZhodaProviderError):
+    """Interim guard: one in-flight run per provider. Concurrent begin is refused."""
+
+
+class _Reservation:
+    """Резерв одной попытки. release() идемпотентен — двойной cleanup не уходит в минус."""
+
+    def __init__(self, ctx: RunContext, estimate: float) -> None:
+        self.ctx = ctx
+        self.estimate = estimate
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        self.ctx.reserved_usd -= self.estimate
+        self.ctx.in_flight -= 1
+
+
 class OpenRouterProvider:
     BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -61,7 +86,7 @@ class OpenRouterProvider:
         budget_usd: float = 0.0,
         max_retries: int = 3,
         max_concurrency: int = 4,
-        prices: dict[str, float] | None = None,
+        prices: dict[str, float | dict[str, float]] | None = None,
         cache_path: str | None = None,
     ) -> None:
         if not api_key:
@@ -71,7 +96,7 @@ class OpenRouterProvider:
             raise ValueError("OPENROUTER_API_KEY is required (BYOK)")
         self.budget_usd = budget_usd
         self.max_retries = max_retries
-        self.prices = prices or {}
+        self.prices: dict[str, float | dict[str, float]] = prices or {}
         self.cost = CostReport()
         self._question_start = CostReport()
         self._question_t0: float | None = None
@@ -80,21 +105,46 @@ class OpenRouterProvider:
         if cache_path:
             self._db = sqlite3.connect(cache_path)
             self._db.execute("CREATE TABLE IF NOT EXISTS cache (k TEXT PRIMARY KEY, v TEXT)")
-        self._reserved_usd = 0.0
+        self._active_run: RunContext | None = None
+        self._closed_run: RunContext | None = None
         self._budget_lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self._client = httpx.AsyncClient(timeout=120.0)
 
-    def begin_question(self) -> None:
-        """Snapshot ALL counters at the start of a deliberation."""
+    def begin_question(self) -> RunContext:
+        """Открыть run. In-flight чужой run не обнуляется — overlapping error.
+
+        Полная изоляция по run_id в каждом complete() ломает сигнатуры; D5
+        допускает явный отказ второго begin на том же provider.
+        """
+        if self._active_run is not None and self._active_run.in_flight > 0:
+            raise OverlappingRunError(
+                f"run {self._active_run.run_id} still has {self._active_run.in_flight} "
+                "in-flight reservations; overlapping begin_question is refused"
+            )
         self._question_start = self.cost.model_copy()
         self._question_t0 = time.monotonic()
-        self._reserved_usd = 0.0
+        ctx = RunContext(run_id=uuid.uuid4().hex[:12])
+        self._active_run = ctx
+        return ctx
+
+    def end_question(self) -> None:
+        """Закрыть run. Резерв in-flight не трогаем здесь — его режет complete.finally."""
+        if self._active_run is not None:
+            self._active_run.closed = True
+            self._closed_run = self._active_run
+            self._active_run = None
+
+    def _ensure_run(self) -> RunContext:
+        if self._active_run is None or self._active_run.closed:
+            return self.begin_question()
+        return self._active_run
 
     def question_report(self) -> CostReport:
-        """Per-question delta: what THIS deliberation spent."""
+        """Per-question delta: what THIS deliberation spent. usd не клампится к cap."""
         started = self._question_t0
         latency = (time.monotonic() - started) if started is not None else 0.0
+        ctx = self._active_run or self._closed_run
         return CostReport(
             requests=self.cost.requests - self._question_start.requests,
             tokens_in=self.cost.tokens_in - self._question_start.tokens_in,
@@ -102,27 +152,61 @@ class OpenRouterProvider:
             cache_hits=self.cost.cache_hits - self._question_start.cache_hits,
             usd=self.cost.usd - self._question_start.usd,
             latency_s=latency,
+            usd_status=ctx.usd_status if ctx is not None else self.cost.usd_status,
+            overrun_usd=ctx.overrun_usd if ctx is not None else 0.0,
+            attempts=ctx.attempts if ctx is not None else 0,
         )
 
     @property
     def question_usd(self) -> float:
         return self.cost.usd - self._question_start.usd
 
-    def _estimate(self, model: str, max_tokens: int) -> float:
-        return self.prices.get(model, 0.0) * (max_tokens / 1000)
+    def _prices_for(self, model: str) -> tuple[float | None, float | None]:
+        """(input, output) USD / 1K tokens. Missing ≠ 0."""
+        if model not in self.prices:
+            return None, None
+        spec = self.prices[model]
+        if isinstance(spec, dict):
+            raw_in = spec.get("input")
+            raw_out = spec.get("output")
+            in_price = float(raw_in) if raw_in is not None else None
+            out_price = float(raw_out) if raw_out is not None else None
+            if in_price is None and out_price is None:
+                return None, None
+            return in_price, out_price
+        rate = float(spec)
+        return rate, rate
 
-    def _check_budget(self, model: str, max_tokens: int) -> float:
-        """Проверить кап. Возвращает estimate к резервированию до HTTP."""
+    def _estimate(self, model: str, prompt: str, max_tokens: int) -> float:
+        in_price, out_price = self._prices_for(model)
+        if in_price is None and out_price is None:
+            if model.endswith(":free"):
+                return 0.0
+            raise UnknownPriceError(
+                f"no price for paid model {model!r} — zero reservation is not an estimate; "
+                "set prices.input/output (or a combined rate) before a capped run"
+            )
+        in_tok = max(1, (len(prompt) + 3) // 4)
+        in_usd = (in_price or 0.0) * in_tok / 1000.0
+        out_usd = (out_price or 0.0) * max_tokens / 1000.0
+        return in_usd + out_usd
+
+    def _check_budget(self, model: str, prompt: str, max_tokens: int, ctx: RunContext) -> float:
+        """Preflight admission. Возвращает estimate к резерву до HTTP."""
+        if ctx.admissions_frozen:
+            raise BudgetExceededError(
+                f"admissions frozen after overrun ${ctx.overrun_usd:.4f} on run {ctx.run_id}"
+            )
         if self.budget_usd == 0 and not model.endswith(":free"):
             raise BudgetExceededError(f"budget is $0 — only :free models allowed, got {model!r}")
-        estimate = self._estimate(model, max_tokens)
+        estimate = self._estimate(model, prompt, max_tokens)
         if self.budget_usd > 0:
-            committed = self.question_usd + self._reserved_usd
+            committed = self.question_usd + ctx.reserved_usd
             if committed + estimate >= self.budget_usd:
                 raise BudgetExceededError(
                     f"estimate ${estimate:.4f} for {model} would exceed cap "
                     f"${self.budget_usd} (question already at ${self.question_usd:.4f}, "
-                    f"reserved ${self._reserved_usd:.4f})"
+                    f"reserved ${ctx.reserved_usd:.4f})"
                 )
         return estimate
 
@@ -132,7 +216,8 @@ class OpenRouterProvider:
         if self._db is not None:
             row = self._db.execute("SELECT v FROM cache WHERE k = ?", (key,)).fetchone()
             if row:
-                return row[0]
+                value = row[0]
+                return value if isinstance(value, str) else None
         return None
 
     def _cache_put(self, key: str, value: str) -> None:
@@ -149,22 +234,31 @@ class OpenRouterProvider:
         cache_key: str | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> str:
-        if cache_key:
-            cached = self._cache_get(cache_key)
-            if cached is not None:
-                self.cost.cache_hits += 1
-                return cached
+        reservation: _Reservation | None = None
         async with self._budget_lock:
-            estimate = self._check_budget(model, max_tokens)
-            self._reserved_usd += estimate
+            ctx = self._ensure_run()
+            if cache_key:
+                cached = self._cache_get(cache_key)
+                if cached is not None:
+                    self.cost.cache_hits += 1
+                    return cached
+            estimate = self._check_budget(model, prompt, max_tokens, ctx)
+            ctx.reserved_usd += estimate
+            ctx.in_flight += 1
+            reservation = _Reservation(ctx, estimate)
         try:
             async with self._semaphore:
-                return await self._with_retries(model, prompt, cache_key, max_tokens)
+                return await self._with_retries(
+                    model, prompt, cache_key, max_tokens, ctx, estimate,
+                )
         finally:
-            async with self._budget_lock:
-                self._reserved_usd -= estimate
+            if reservation is not None:
+                async with self._budget_lock:
+                    reservation.release()
 
-    async def ask_json(self, model: str, prompt: str, *, cache_key: str | None = None) -> dict:
+    async def ask_json(
+        self, model: str, prompt: str, *, cache_key: str | None = None,
+    ) -> dict[str, object]:
         """Strict JSON OBJECT with one syntax-only repair retry.
 
         Repair asks the model to return valid JSON; it does not invent
@@ -185,7 +279,7 @@ class OpenRouterProvider:
             return self._extract_json(repaired)
 
     @staticmethod
-    def _extract_json(text: str) -> dict:
+    def _extract_json(text: str) -> dict[str, object]:
         cleaned = text.strip()
         if cleaned.startswith("```"):
             cleaned = cleaned[cleaned.find("\n") + 1:].rstrip("`").strip()
@@ -197,10 +291,18 @@ class OpenRouterProvider:
             raise ValueError("expected a JSON object")
         return obj
 
-    async def _with_retries(self, model: str, prompt: str, cache_key: str | None, max_tokens: int) -> str:
+    async def _with_retries(
+        self,
+        model: str,
+        prompt: str,
+        cache_key: str | None,
+        max_tokens: int,
+        ctx: RunContext,
+        estimate: float,
+    ) -> str:
         for attempt in range(self.max_retries):
             try:
-                return await self._call(model, prompt, cache_key, max_tokens)
+                return await self._call(model, prompt, cache_key, max_tokens, ctx, estimate)
             except RateLimitError as exc:
                 if attempt == self.max_retries - 1:
                     raise QuotaExceededError(
@@ -214,7 +316,16 @@ class OpenRouterProvider:
                 await asyncio.sleep(float(2**attempt))
         raise RuntimeError("unreachable")
 
-    async def _call(self, model: str, prompt: str, cache_key: str | None, max_tokens: int) -> str:
+    async def _call(
+        self,
+        model: str,
+        prompt: str,
+        cache_key: str | None,
+        max_tokens: int,
+        ctx: RunContext,
+        estimate: float,
+    ) -> str:
+        ctx.attempts += 1
         response = await self._client.post(
             self.BASE_URL,
             headers={"Authorization": f"Bearer {self.api_key}"},
@@ -233,11 +344,27 @@ class OpenRouterProvider:
             raise ServerError(f"{response.status_code}: {response.text[:200]}")
 
         data = response.json()
-        usage = data.get("usage") or {}
         self.cost.requests += 1
-        self.cost.tokens_in += int(usage.get("prompt_tokens") or 0)
-        self.cost.tokens_out += int(usage.get("completion_tokens") or 0)
-        self.cost.usd += float(usage.get("cost") or 0.0)
+        usage = data.get("usage")
+        if not isinstance(usage, dict):
+            ctx.usd_status = AccountingStatus.UNKNOWN
+            ctx.failures.append("missing_usage")
+        else:
+            self.cost.tokens_in += int(usage.get("prompt_tokens") or 0)
+            self.cost.tokens_out += int(usage.get("completion_tokens") or 0)
+            if "cost" not in usage:
+                if ctx.usd_status is AccountingStatus.EXACT:
+                    ctx.usd_status = AccountingStatus.PARTIAL
+                ctx.failures.append("missing_cost")
+            else:
+                actual = float(usage["cost"] or 0.0)
+                self.cost.usd += actual
+                if estimate > 0 and actual > estimate:
+                    ctx.overrun_usd += actual - estimate
+                    ctx.admissions_frozen = True
+        self.cost.usd_status = ctx.usd_status
+        self.cost.overrun_usd = ctx.overrun_usd
+        self.cost.attempts = ctx.attempts
 
         text: str = data["choices"][0]["message"]["content"]
         if cache_key:

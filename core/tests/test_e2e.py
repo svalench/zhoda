@@ -12,9 +12,9 @@ import pytest
 
 from zhoda_core.anonymize import content_alias_seed, make_aliases
 from zhoda_core.engine import ZhodaEngine
-from zhoda_core.models import ConsensusStrength, Protocol
+from zhoda_core.models import CheckStatus, ConsensusStrength, Protocol
 from zhoda_core.progress import ProgressEvent
-from zhoda_core.providers.openrouter import OpenRouterProvider
+from zhoda_core.providers.openrouter import OpenRouterProvider, ZhodaProviderError
 
 COUNCIL = ["m1", "m2", "m3"]
 JUDGES = ("j1", "j2")
@@ -1451,4 +1451,82 @@ async def test_supplied_value_map_skips_elicitation(tmp_path) -> None:
     assert not any(e.get("stage") == "elicit" for e in events)
     assert provider.script == []
     assert verdict.zhoda_reached is True
+
+
+class FlakyCouncilProvider(ScriptedProvider):
+    """Совет a/b/c: отвечает только a; b/c и required opposition падают."""
+
+    async def complete(self, model, prompt, **kwargs):
+        if "independent structured stance" in prompt and model in {"m2", "m3"}:
+            raise ZhodaProviderError(f"{model} failed")
+        if "Spawn an opposition faction" in prompt:
+            raise ZhodaProviderError("opposition failed")
+        return await super().complete(model, prompt, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_d1_partial_council_is_not_trusted_zhoda(tmp_path) -> None:
+    """D1: отсутствие ответа не повышает доверие. Roster — requested, не responders."""
+    script = [
+        ("m1", ("independent structured stance",), position(PG)),
+        (None, ("Name each faction",), {}),
+    ]
+    engine = make_engine(FlakyCouncilProvider(script), tmp_path)
+    verdict = await engine.deliberate(
+        "PostgreSQL or Kafka?",
+        force_protocol=Protocol.DEBATE,
+        clarify_mode="no-clarify",
+    )
+    assert verdict.zhoda_reached is False
+    assert verdict.degraded is True
+    assert verdict.plan_contract is None
+    assert verdict.decision_origin == "degraded"
+    assert "degraded" in verdict.decision
+    by_id = {rec.check_id: rec for rec in verdict.completeness.checks}
+    assert set(by_id) == {
+        "position:m1",
+        "position:m2",
+        "position:m3",
+        "opposition:synthetic",
+    }
+    assert by_id["position:m1"].status is CheckStatus.SUCCEEDED
+    assert by_id["position:m2"].status is CheckStatus.FAILED
+    assert by_id["position:m3"].status is CheckStatus.FAILED
+    assert by_id["opposition:synthetic"].status is CheckStatus.FAILED
+    assert by_id["opposition:synthetic"].reason == "spawn_failed"
+    assert verdict.completeness.requested_count == 4
+    assert verdict.completeness.trusted is False
+    events = engine.transcripts.read(verdict.transcript_id)
+    assert any(e.get("fast_pass") == "unanimity_at_birth" for e in events)
+    assert verdict.consensus_strength is ConsensusStrength.UNANIMOUS
+
+
+@pytest.mark.asyncio
+async def test_d2_invalid_required_json_is_degraded(tmp_path) -> None:
+    """D2: невалидный JSON обязательной проверки → degraded, не approved plan."""
+    script = [
+        ("m1", ("independent structured stance",), position(PG)),
+        ("m2", ("independent structured stance",), position(PG)),
+        ("m3", ("independent structured stance",), "NOT_JSON"),
+        (None, ("Synthesize the shared platform",), position(PG)),
+        (None, ("Name each faction",), {}),
+    ]
+    engine = make_engine(ScriptedProvider(script), tmp_path, devils_advocate=False)
+    verdict = await engine.deliberate(
+        "Does SQL NULL equal TRUE?",
+        force_protocol=Protocol.VOTE,
+        clarify_mode="no-clarify",
+    )
+    assert verdict.zhoda_reached is False
+    assert verdict.degraded is True
+    assert verdict.plan_contract is None
+    assert verdict.decision_origin == "degraded"
+    by_id = {rec.check_id: rec for rec in verdict.completeness.checks}
+    assert by_id["position:m1"].status is CheckStatus.SUCCEEDED
+    assert by_id["position:m2"].status is CheckStatus.SUCCEEDED
+    assert by_id["position:m3"].status is CheckStatus.FAILED
+    assert "JSON" in by_id["position:m3"].reason or "json" in by_id["position:m3"].reason.lower()
+    assert verdict.completeness.requested_count == 3
+    assert "opposition:synthetic" not in by_id
+
 
