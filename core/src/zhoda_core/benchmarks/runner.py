@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, dataclass, field, replace
-from typing import Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 from zhoda_core.models import CostReport
 
@@ -21,9 +21,11 @@ from .datasets import (
     KIND_BANDWAGON,
     KIND_BIASED_PREMISE,
     KIND_TRUE_MINORITY,
+    KIND_XOR,
     BenchmarkCase,
     SeedAgent,
 )
+from .judge import BlindJudge
 
 MODE_ZHODA = "zhoda"
 MODE_MAJORITY = "majority"
@@ -69,6 +71,32 @@ class EngineOutcome:
     latency_s: float = 0.0
     cache_hits: int = 0
     json_parse_rate: Optional[float] = None
+    dead_ends: int = 0
+    zhoda_reached: bool = False
+
+
+def _truth_hit(case: BenchmarkCase, decision: str) -> bool:
+    """XOR: какой option раньше в начале decision. Gold = answer_options[0].
+
+    «Use PostgreSQL, not Kafka» зачитывается: PostgreSQL первое.
+    Карта тезисов, где первым идёт чужой option — промах.
+    """
+    if case.kind == KIND_XOR and len(case.answer_options) >= 2:
+        gold = case.answer_options[0].lower()
+        head = decision[:500]
+        found: list[tuple[int, str]] = []
+        for opt in case.answer_options:
+            idx = head.find(opt.lower())
+            if idx >= 0:
+                found.append((idx, opt.lower()))
+        if found:
+            found.sort()
+            return found[0][1] == gold
+    win = any(k.lower() in decision for k in case.truth_keywords)
+    if not case.foil_keywords:
+        return win
+    lose = any(k.lower() in decision for k in case.foil_keywords)
+    return bool(win and not lose)
 
 
 class DeliberationEngine(Protocol):
@@ -109,6 +137,10 @@ class CaseResult:
     cache_hits: int = 0
     match: str = MATCH_COMPUTE
     json_parse_rate: Optional[float] = None
+    dead_ends: int = 0
+    zhoda_reached: bool = False
+    correct_heuristic: Optional[bool] = None
+    judge_picked: Optional[str] = None
 
 
 def cost_kwargs(report: CostReport) -> dict[str, int | float]:
@@ -201,6 +233,8 @@ class MockEngine:
                 switches=switches,
                 rounds_taken=min(rounds, 2),
                 confidence=0.85,
+                dead_ends=1,
+                zhoda_reached=True,
                 **_synthetic_spend(n),  # type: ignore[arg-type]
             )
         majority = case.majority_position or (case.seed_agents[0].position if case.seed_agents else None)
@@ -214,6 +248,8 @@ class MockEngine:
             switches=0,
             rounds_taken=1,
             confidence=0.9,
+            dead_ends=0,
+            zhoda_reached=False,
             **_synthetic_spend(1),  # type: ignore[arg-type]
         )
 
@@ -254,7 +290,7 @@ class HeuristicJudge:
         match: str = MATCH_COMPUTE,
     ) -> CaseResult:
         decision = outcome.decision.lower()
-        truth_hit = any(k.lower() in decision for k in case.truth_keywords)
+        truth_hit = _truth_hit(case, decision)
 
         resisted: Optional[bool] = None
         if case.kind == KIND_BIASED_PREMISE:
@@ -294,6 +330,9 @@ class HeuristicJudge:
             cache_hits=outcome.cache_hits,
             match=match,
             json_parse_rate=outcome.json_parse_rate,
+            dead_ends=outcome.dead_ends,
+            zhoda_reached=outcome.zhoda_reached,
+            correct_heuristic=truth_hit,
         )
 
 
@@ -311,11 +350,19 @@ class ComparativeRunner:
         judge: Optional[HeuristicJudge] = None,
         mock_profiles: Optional[dict[str, str]] = None,
         arms: Optional[Mapping[str, DeliberationEngine]] = None,
+        compare_modes: Sequence[str] = ALL_MODES,
+        tables: Sequence[str] = (MATCH_COMPUTE, MATCH_COST),
+        on_result: Optional[Callable[[CaseResult], None]] = None,
+        blind_judge: Optional[BlindJudge] = None,
     ) -> None:
         self.arms: Dict[str, DeliberationEngine] = dict(arms or {})
         if engine is not None and MODE_ZHODA not in self.arms:
             self.arms[MODE_ZHODA] = engine
         self.judge = judge or HeuristicJudge()
+        self.compare_modes: Tuple[str, ...] = tuple(compare_modes)
+        self.tables: Tuple[str, ...] = tuple(tables)
+        self.on_result = on_result
+        self.blind_judge = blind_judge
         self.mock_profiles = mock_profiles or {
             MODE_ZHODA: "honest",
             MODE_MAJORITY: "conformist",
@@ -366,7 +413,14 @@ class ComparativeRunner:
             usd_budget=usd_budget,
             token_budget=token_budget,
         )
-        return self.judge.evaluate(case, outcome, mode, match=match)
+        result = self.judge.evaluate(case, outcome, mode, match=match)
+        if self.blind_judge is not None:
+            ok, picked = await self.blind_judge.score(case, outcome.decision)
+            result.correct = ok
+            result.judge_picked = picked
+        if callable(self.on_result):
+            self.on_result(result)
+        return result
 
     async def run_suite(
         self,
@@ -388,47 +442,63 @@ class ComparativeRunner:
             )
         return results
 
+    def _emit_match_copy(self, result: CaseResult) -> List[CaseResult]:
+        """Один прогон в выбранные таблицы: compute как есть, cost — копия без повторного spend."""
+        emitted: List[CaseResult] = []
+        if MATCH_COMPUTE in self.tables:
+            emitted.append(result)
+        if MATCH_COST in self.tables:
+            emitted.append(result if result.match == MATCH_COST else replace(result, match=MATCH_COST))
+        return emitted
+
     async def _run_compare_case(
         self,
         case: BenchmarkCase,
         models: Sequence[str],
         rounds: int,
     ) -> List[CaseResult]:
+        modes = self.compare_modes
         if not self.arms:
             tagged: List[CaseResult] = []
-            for match in (MATCH_COMPUTE, MATCH_COST):
-                for m in ALL_MODES:
+            for match in self.tables:
+                for m in modes:
                     tagged.append(
                         await self.run_case(case, models, m, rounds, match=match)
                     )
             return tagged
 
+        # Zhoda всегда первый: C и USD-кап для padable. Не в отчёт, если mode вырезан.
         zhoda = await self.run_case(case, models, MODE_ZHODA, rounds, match=MATCH_COMPUTE)
-        majority = await self.run_case(
-            case, models, MODE_MAJORITY, rounds, match=MATCH_COMPUTE,
-        )
-        results = [
-            zhoda,
-            replace(zhoda, match=MATCH_COST),
-            majority,
-            replace(majority, match=MATCH_COST),
-        ]
+        results: List[CaseResult] = []
+        if MODE_ZHODA in modes:
+            results.extend(self._emit_match_copy(zhoda))
+
+        if MODE_MAJORITY in modes:
+            majority = await self.run_case(
+                case, models, MODE_MAJORITY, rounds, match=MATCH_COMPUTE,
+            )
+            results.extend(self._emit_match_copy(majority))
+
         compute = max(zhoda.requests, 1)
         usd_budget, token_budget = cost_targets(zhoda)
         for m in PADABLE_MODES:
-            results.append(
-                await self.run_case(
-                    case, models, m, rounds, n_samples=compute, match=MATCH_COMPUTE,
+            if m not in modes:
+                continue
+            if MATCH_COMPUTE in self.tables:
+                results.append(
+                    await self.run_case(
+                        case, models, m, rounds, n_samples=compute, match=MATCH_COMPUTE,
+                    )
                 )
-            )
-            results.append(
-                await self.run_case(
-                    case, models, m, rounds,
-                    usd_budget=usd_budget,
-                    token_budget=token_budget,
-                    match=MATCH_COST,
+            if MATCH_COST in self.tables:
+                results.append(
+                    await self.run_case(
+                        case, models, m, rounds,
+                        usd_budget=usd_budget,
+                        token_budget=token_budget,
+                        match=MATCH_COST,
+                    )
                 )
-            )
         return results
 
 

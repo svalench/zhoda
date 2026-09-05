@@ -57,9 +57,15 @@ was given — the engine returns `insufficient_context=True`,
 `consensus_strength=SPLIT`, `zhoda_reached=False`, decision
 `INSUFFICIENT_CONTEXT: …`, and **does not** collect positions or run
 debate. `auto-clarify` / `no-clarify` skip Stage 0 LLM when that gate is
-already decidable from the question alone (no `--context`). `red_team`
-with `--context` also skips Stage 0: the source *is* the object; clarifying
-“maybe the driver sanitizes” must not wash out findings in the file.
+already decidable from the question alone (no `--context`). A **loaded
+premise** in the question (`why is` / `since` / `given that` /
+`everyone agrees`, or bare always/never when the question is not XOR)
+is recorded in `open_ambiguities` even in `no-clarify` — never as a
+constraint. Positions, debate and synthesis must challenge it. `vote` and
+`red_team` also skip Stage 0 in `auto-clarify` / `no-clarify`: a factual
+lookup is not an interview, and `red_team` must not invent “maybe the
+driver sanitizes” ambiguities that wash findings out of `decision`.
+`red_team` with `--context`: the source *is* the object.
 
 ## Stage 1 — Positions
 
@@ -72,6 +78,8 @@ Position { model, thesis, answer, claims[], falsifiability, confidence }
 ```
 
 Positions are anonymized from the start (`model` holds the alias).
+Aliases are shuffled per deliberation; the default seed is
+`hash(question + council + context)` so a repeat can hit the cache.
 A shared **user context** block (`ValueMap.as_prompt_block`: goal, success
 criteria, constraints including answered Q&A, anti-goals, unresolved
 ambiguities) is prepended to every prompt that reasons about the question
@@ -104,7 +112,8 @@ anyone is asked to defect).
   (red_team) attacks the only platform directly (round-9 §4). On `debate`,
   if clustering produced a single faction, the advocate **spawns an
   opposition faction** with a different primary action (reserved member,
-  `synthetic=True`, not a council vote). The rotating devil's advocate is
+  `synthetic=True`, not a council vote) that still must not treat a loaded
+  premise as a fact. The rotating devil's advocate is
   **skipped** while that synthetic faction already sits at the table — one
   chair, not two — **and skipped when two or more council factions already
   oppose each other** (live 2026-09-05: extra DA filled the objection cap
@@ -114,11 +123,27 @@ anyone is asked to defect).
 - **Rebuttal `SOURCE:`** lines are parsed into `rebuttal_evidence_url` and
   stripped from prose; a URL named from memory is `unverified_claim`.
 - **Closure**: both judges (outside the council, no silent fallback —
-  round-9 §2) must agree the rebuttal addressed the objection.
+  round-9 §2) must agree the rebuttal **refutes** the specific claim.
+  Acknowledgment and `CONCEDE` never close — the objection stays `OPEN`
+  so revision/switch can fire (live 2026-09-05: easy closures → switch ≈ 0).
 - **Superseded**: the author withdraws, or both judges agree the revision
   addressed the objection (round-7 §1).
-- **Switches**: open objection by ID + non-empty citation + the target IS
-  the objection's author faction.
+- **Revision**: hedge that replaces a named pick is refused. On an XOR
+  question (A or B / A vs B) a revision that **flips the named pick** is
+  refused — that is a switch, not a platform rewrite. A revision that
+  adopts a loaded premise the previous thesis already challenged is
+  refused.
+- **Switches**: open objection by ID + citation that **quotes the objection
+  claim** (not a restatement of the destination thesis) + the target IS
+  the objection's author faction. Critiques must quote the opponent thesis
+  (cross-examination, not parallel essays). A switch from a thesis that
+  already challenges a loaded premise toward one that adopts it is
+  refused.
+- **Cache**: every debate/consensus/verdict LLM call is keyed by
+  `(stage, model, prompt)`. Aliases are seeded from
+  `hash(question + council + context)` when `alias_seed` is unset, so a
+  repeat of the same inputs can replay. A different question still
+  shuffles differently.
 
 ## Stage 4 — Consensus
 
@@ -132,8 +157,14 @@ consecutive **unanimous** checks (`all_agree`) must agree before zhoda is
 declared **early**. Headcount majority (2/3 of voting heads) does
 **not** end the debate. At `rounds_cap` the current check is terminal:
 unanimous (even streak 1) is zhoda. Majority at the cap is **not** zhoda —
-`decision_origin = "majority_at_cap"`, dissent map of every faction thesis,
-no plan contract. `split` at the rounds cap becomes `deadlock`. Escalation
+`decision_origin = "majority_at_cap"`, no plan contract. `decision` leads
+with `Recommended (majority at cap, not zhoda):` + the leading faction
+**thesis** (not raw `answer`), then a `Dissent:` list of the other theses.
+If that thesis **adopts a loaded premise**, the labeled rec is a protocol
+premise-reject (`The premise is false: … are not confirmed constraints`);
+the minority theses stay in `Dissent`. That agreement is **not zhoda**.
+Split/deadlock stay a full thesis map under `No zhoda`. `split` at the
+rounds cap becomes `deadlock`. Escalation
 is opt-in and fires on deadlock only; the appellate decision overwrites
 `decision` but carries `decision_origin = "appeal_without_consensus"` — a
 single model's fiat is labeled, never mistaken for zhoda (round-10 §2).
@@ -178,11 +209,18 @@ On `UNANIMOUS`, `minority_report` is empty — the judges already said it is
 one position, even if faction objects were not merged. A synthetic
 opposition in the minority is labeled
 `[synthetic opposition — no council model held this position]` (round-12;
-same honesty as `decision_origin = "appeal_without_consensus"`). On split/deadlock/majority-at-cap,
+same honesty as `decision_origin = "appeal_without_consensus"`). On split/deadlock,
 `decision` is a dissent map of every faction thesis, not the leading
-faction's raw `answer`. On zhoda, the chairman **synthesizes** `decision`
+faction's raw `answer`. On majority-at-cap it is still not zhoda, but the
+leading **thesis** is the recommended action (labeled), then dissent —
+unless the thesis adopts a loaded user premise, in which case the rec
+is a protocol reject of that premise (not a silent copy of the minority).
+Unanimous adoption of a loaded premise is demoted: not zhoda, majority-at-cap
+format. On zhoda, the chairman **synthesizes** `decision`
 for the user (action first, closed objections, overturn conditions);
-unresolved ambiguities must not be asserted as facts. `SUPERSEDED`
+unresolved ambiguities must not be asserted as facts. The question's
+wording is not a confirmed constraint: a loaded premise must be rejected,
+not explained as if it were true. `SUPERSEDED`
 objections are platform revisions, not refutations — they must not be
 bucketed with `CLOSED`. Winner `claims` stay in the synthesis prompt even
 if the thesis was watered down. If the chairman omits those claims, they
@@ -190,8 +228,11 @@ are appended as `Findings:`. A hedge decision ("it depends", "both
 comparable", "choose based on team expertise") falls back to the winner
 thesis. On an XOR question (A or B / A vs B), a hybrid that adopts both
 options as the action also falls back to the winner thesis. A hedge revision
-that replaces a named pick is refused. Fallback is
-the winner's thesis, never the raw platform answer. If Stage 0 cannot ground
+that replaces a named pick is refused. XOR pick-flip revision is refused.
+Fallback is
+the winner's thesis, never the raw platform answer. A synthesis that
+adopts a loaded premise falls back to a challenging winner thesis, or to
+the protocol premise-reject. If Stage 0 cannot ground
 the object of evaluation, `insufficient_context` short-circuits: SPLIT,
 no zhoda, no position or debate spend.
 
@@ -200,7 +241,9 @@ no zhoda, no position or debate spend.
 Per-question budget cap, config price table, semantic cache
 (`cache_hits` counted), per-stage request breakdown in every verdict.
 `sum(breakdown.values()) == requests`. A stage with 0 requests and
-`cache_hits > 0` is shown as `cached`, not `0`. `latency_s` is wall-clock from
+`cache_hits > 0` is shown as `cached`, not `0`. Debate rounds, consensus,
+naming, decision synthesis and the plan contract are cache-keyed (not
+`transcript_id` — that would kill replay). `latency_s` is wall-clock from
 `begin_question` to the final snapshot, taken **after** all LLM calls
 (including decision synthesis and plan contract).
 
@@ -219,3 +262,17 @@ otherwise), `router_classifiers` (two distinct), `chairman`, `rounds_cap`,
 `escalation.{enabled,model}`,
 `budget_per_question_usd`, `max_concurrency`, `prices`, `cache_path`,
 `transcripts_dir`.
+
+## Benchmarks
+
+`python -m zhoda_core.benchmarks` compares Zhoda debate to vote, a
+single-pass council, self-consistency, and best-of-N. `--suite decision`
+is 51 tasks (XOR architecture, security, ops, plus sycophancy/minority
+seeds). `paths_rejected` on a reached zhoda is `dead_ends`; the report
+adds `avg_dead_ends` and `dead_ends_per_usd`. Headline accuracy is
+keyword-first; `--judge llm` overlays a blind committed-pick judge
+(arm name hidden; dissent map is a miss). Each compare arm gets its
+own sqlite (`cache-zhoda.db`, `cache-majority.db`, …) so vote does
+not reuse debate completions. `--shared-cache` restores the old leak.
+Live numbers: [docs/benchmarks-and-reputation.md](benchmarks-and-reputation.md)
+and `docs/live-runs/`.

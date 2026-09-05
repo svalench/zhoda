@@ -22,3 +22,15 @@ def test_different_seeds_different_order() -> None:
     second = make_aliases(models, seed=2)
     assert set(first.values()) == set(second.values())  # same alias pool
     assert first != second  # different assignment
+
+
+def test_content_seed_replays_the_same_question() -> None:
+    """Повтор вопроса — те же алиасы, иначе кэш дебата не попадает."""
+    from zhoda_core.anonymize import content_alias_seed
+
+    models = ["openai/a", "google/b", "deepseek/c"]
+    seed = content_alias_seed("PostgreSQL or Kafka?", models, context="slo=10ms")
+    assert seed == content_alias_seed("PostgreSQL or Kafka?", models, context="slo=10ms")
+    assert make_aliases(models, seed=seed) == make_aliases(models, seed=seed)
+    other = content_alias_seed("Monolith or services?", models, context="slo=10ms")
+    assert seed != other

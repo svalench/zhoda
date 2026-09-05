@@ -188,6 +188,7 @@ def deliberate(
                 f"\n[bold]zhoda_reached:[/bold] {verdict.zhoda_reached} "
                 f"({verdict.consensus_strength}, rounds: {verdict.rounds_taken})"
             )
+            console.print(f"protocol: {verdict.protocol}")
             if verdict.insufficient_context:
                 console.print(
                     "[yellow]insufficient_context — council will not judge "
@@ -211,6 +212,8 @@ def deliberate(
                 )
             if verdict.switches:
                 console.print(f"[bold]switches:[/bold] {len(verdict.switches)}")
+            else:
+                console.print("switches: 0")
             if verdict.paths_rejected:
                 console.print(f"[bold]paths rejected:[/bold] {len(verdict.paths_rejected)}")
             elif verdict.zhoda_reached and not verdict.minority_report:

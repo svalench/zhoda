@@ -67,8 +67,11 @@ def first(pat: str, default: str = "") -> str:
     return m.group(1).strip() if m else default
 
 ic = "1" if "insufficient_context" in text else "0"
+proto = first(r"^protocol:\s+(vote|debate|red_team)") or first(
+    r"^✓ protocol=(vote|debate|red_team)"
+)
 print("\t".join([
-    first(r"^✓ protocol=(vote|debate|red_team)"),
+    proto,
     first(r"^zhoda_reached:\s+(\S+)"),
     first(r"^zhoda_reached:\s+\S+\s+\(([^,]+), rounds:"),
     first(r"^zhoda_reached:.*rounds:\s*(\d+)"),

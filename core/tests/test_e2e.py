@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from zhoda_core.anonymize import make_aliases
+from zhoda_core.anonymize import content_alias_seed, make_aliases
 from zhoda_core.engine import ZhodaEngine
 from zhoda_core.models import ConsensusStrength, Protocol
 from zhoda_core.progress import ProgressEvent
@@ -69,6 +69,36 @@ class ScriptedProvider(OpenRouterProvider):
 
     async def ask_json(self, model, prompt, **kwargs):
         return json.loads(await self.complete(model, prompt, **kwargs))
+
+
+class CachingScriptedProvider(OpenRouterProvider):
+    """Как ScriptedProvider, но cache_key попадает в sqlite — повтор без скрипта."""
+
+    def __init__(
+        self,
+        script: list[tuple[str | None, tuple[str, ...], object]],
+        *,
+        cache_path: str,
+    ) -> None:
+        super().__init__(api_key="test", cache_path=cache_path)
+        self.script = list(script)
+
+    async def complete(self, model, prompt, *, cache_key=None, **kwargs):
+        del kwargs
+        if cache_key:
+            cached = self._cache_get(cache_key)
+            if cached is not None:
+                self.cost.cache_hits += 1
+                return cached
+        for i, (want_model, patterns, response) in enumerate(self.script):
+            if (want_model is None or want_model == model) and all(p in prompt for p in patterns):
+                self.script.pop(i)
+                text = response if isinstance(response, str) else json.dumps(response)
+                self.cost.requests += 1
+                if cache_key:
+                    self._cache_put(cache_key, text)
+                return text
+        raise AssertionError(f"no scripted response: model={model} prompt={prompt[:80]}")
 
 
 def make_engine(provider: ScriptedProvider, tmp_path, **kwargs) -> ZhodaEngine:
@@ -197,7 +227,7 @@ async def test_debate_loop_with_platform_revision(tmp_path) -> None:
     assert verdict.zhoda_reached is False
     assert verdict.consensus_strength == ConsensusStrength.MAJORITY
     assert verdict.decision_origin == "majority_at_cap"
-    assert "No zhoda" in verdict.decision
+    assert verdict.decision.startswith("Recommended (majority at cap, not zhoda):")
     assert "partitioning" in verdict.decision
     assert "Kafka" in verdict.decision or (
         verdict.minority_report is not None and "Kafka" in verdict.minority_report
@@ -357,7 +387,7 @@ async def test_majority_does_not_early_stop_before_cap(tmp_path) -> None:
     assert verdict.consensus_strength == ConsensusStrength.MAJORITY
     assert verdict.decision_origin == "majority_at_cap"
     assert verdict.plan_contract is None
-    assert "No zhoda" in verdict.decision
+    assert verdict.decision.startswith("Recommended (majority at cap, not zhoda):")
     assert PG in verdict.decision
     assert KF in verdict.decision
 
@@ -630,6 +660,175 @@ async def test_red_team_with_context_skips_elicit(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_vote_auto_clarify_skips_elicit(tmp_path) -> None:
+    """Vote — однопроход: auto-clarify не тратит Stage 0 на NULL≠TRUE."""
+    script = [
+        ("m1", ("independent structured stance",), position(PG)),
+        ("m2", ("independent structured stance",), position(PG)),
+        ("m3", ("independent structured stance",), position(PG)),
+        (None, ("Synthesize the shared platform",), position(PG)),
+        (None, ("Name each faction",), {}),
+        (None, ("SYNTHESIZE THE COUNCIL DECISION",), DECISION),
+        (None, ("PLAN CONTRACT",), PLAN),
+    ]
+    engine = make_engine(ScriptedProvider(script), tmp_path, devils_advocate=False)
+    verdict = await engine.deliberate(
+        "Does SQL NULL equal TRUE?",
+        force_protocol=Protocol.VOTE,
+        clarify_mode="auto-clarify",
+    )
+    assert verdict.zhoda_reached is True
+    assert verdict.cost.breakdown.get("elicit", 0) == 0
+    assert "positions" in verdict.cost.breakdown
+
+
+@pytest.mark.asyncio
+async def test_cited_switch_is_recorded(tmp_path) -> None:
+    """Возражение осталось OPEN — модель переходит с цитатой claim, не thesis."""
+    aliases = make_aliases(COUNCIL, seed=42)
+    a1 = aliases["m1"]
+    claim = "PostgreSQL at 50k RPS writes needs a partitioning plan"
+    citation = (
+        "PostgreSQL at 50k RPS writes needs a partitioning plan — "
+        "a single node cannot hold that write load"
+    )
+    script = opening_script(aliases) + [
+        (
+            None,
+            ('You represent faction "Pragmatists"', "Produce ONE"),
+            {
+                "target_faction": "Throughputists",
+                "flaw_type": "factual",
+                "claim": "Kafka adds operational complexity the team cannot staff",
+                "specifics": "",
+                "evidence_url": None,
+            },
+        ),
+        (
+            None,
+            ('You represent faction "Throughputists"', "Produce ONE"),
+            {
+                "target_faction": "Pragmatists",
+                "flaw_type": "scope",
+                "claim": claim,
+                "specifics": "no write-scaling story beyond a single node",
+                "evidence_url": None,
+            },
+        ),
+        (None, ("Rebut it concisely", "operational complexity"), "Staffing is a training issue."),
+        (None, ("Rebut it concisely", "partitioning"), "Solved."),
+        (None, ("Did the rebuttal", "operational complexity"), {"closed": True}),
+        (None, ("Did the rebuttal", "operational complexity"), {"closed": True}),
+        (None, ("Did the rebuttal", "partitioning"), {"closed": False}),
+        (None, ("Did the rebuttal", "partitioning"), {"closed": False}),
+        (
+            "m1",
+            ("Revise your platform",),
+            {
+                "thesis": PG,
+                "answer": f"Answer: {PG}",
+                "claims": [],
+                "falsifiability": "if load grows",
+                "confidence": 0.7,
+                "changed": False,
+                "change_note": "objection rejected",
+            },
+        ),
+        ("m1", ("Do you switch factions?",), {"switch": True, "convinced_by": citation}),
+        ("m3", ("Do you switch factions?",), {"switch": False, "convinced_by": ""}),
+        (None, ("theses of all factions",), {"all_agree": False}),
+        (None, ("theses of all factions",), {"all_agree": False}),
+    ]
+    engine = make_engine(
+        ScriptedProvider(script),
+        tmp_path,
+        stability_rounds=1,
+        rounds_cap=1,
+    )
+    verdict = await engine.deliberate(
+        "PostgreSQL or Kafka for a 50k RPS ledger?",
+        force_protocol=Protocol.DEBATE,
+        clarify_mode="no-clarify",
+    )
+    assert len(verdict.switches) == 1
+    switch = verdict.switches[0]
+    assert switch.from_faction == "Pragmatists"
+    assert switch.to_faction == "Throughputists"
+    assert switch.model == a1
+    assert "partitioning" in switch.convinced_by.casefold()
+    assert verdict.zhoda_reached is False
+    assert verdict.decision_origin == "majority_at_cap"
+
+
+@pytest.mark.asyncio
+async def test_repeat_debate_replays_from_cache(tmp_path) -> None:
+    """Live kafka repeat=2: тот же вопрос + sqlite → дебат без новых LLM."""
+    question = "PostgreSQL or Kafka for a 50k RPS ledger?"
+    seed = content_alias_seed(question, COUNCIL)
+    aliases = make_aliases(COUNCIL, seed=seed)
+    round_script = [
+        (
+            None,
+            ('You represent faction "Pragmatists"', "Produce ONE"),
+            {
+                "target_faction": "Throughputists",
+                "flaw_type": "factual",
+                "claim": "Kafka adds operational complexity the team cannot staff",
+                "specifics": "",
+                "evidence_url": None,
+            },
+        ),
+        (
+            None,
+            ('You represent faction "Throughputists"', "Produce ONE"),
+            {
+                "target_faction": "Pragmatists",
+                "flaw_type": "scope",
+                "claim": "PostgreSQL at 50k RPS writes needs a partitioning plan",
+                "specifics": "no write-scaling story beyond a single node",
+                "evidence_url": None,
+            },
+        ),
+        (None, ("Rebut it concisely", "operational complexity"), "Staffing is a training issue."),
+        (None, ("Rebut it concisely", "partitioning"), "Partitioning is a documented path."),
+        (None, ("Did the rebuttal", "operational complexity"), {"closed": True}),
+        (None, ("Did the rebuttal", "operational complexity"), {"closed": True}),
+        (None, ("Did the rebuttal", "partitioning"), {"closed": True}),
+        (None, ("Did the rebuttal", "partitioning"), {"closed": True}),
+        (None, ("theses of all factions",), {"all_agree": False}),
+        (None, ("theses of all factions",), {"all_agree": False}),
+    ]
+    cache = str(tmp_path / "debate.db")
+    first = CachingScriptedProvider(
+        opening_script(aliases) + round_script, cache_path=cache,
+    )
+    engine = make_engine(
+        first, tmp_path, alias_seed=None, stability_rounds=1, rounds_cap=1,
+    )
+    v1 = await engine.deliberate(
+        question, force_protocol=Protocol.DEBATE, clarify_mode="no-clarify",
+    )
+    assert v1.cost.requests > 0
+    assert v1.cost.cache_hits == 0
+    await first.close()
+
+    second = CachingScriptedProvider([], cache_path=cache)
+    engine2 = make_engine(
+        second, tmp_path, alias_seed=None, stability_rounds=1, rounds_cap=1,
+    )
+    v2 = await engine2.deliberate(
+        question, force_protocol=Protocol.DEBATE, clarify_mode="no-clarify",
+    )
+    await second.close()
+    assert second.script == []
+    assert v2.cost.requests == 0
+    assert v2.cost.cache_hits > 0
+    assert v2.cost.cache_breakdown.get("debate", 0) > 0
+    assert v2.decision == v1.decision
+    assert v2.zhoda_reached == v1.zhoda_reached
+
+
+@pytest.mark.asyncio
 async def test_progress_emits_protocol_stages(tmp_path) -> None:
     """on_progress is optional; no-clarify debate stages include round, not elicit."""
     aliases = make_aliases(COUNCIL, seed=42)
@@ -871,6 +1070,39 @@ async def test_streak_does_not_leak(tmp_path) -> None:
     assert second.zhoda_reached and second.rounds_taken == 0
     events = engine.transcripts.read(first.transcript_id)
     assert any(e.get("fast_pass") == "unanimity_at_birth" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_loaded_premise_unanimity_is_not_zhoda(tmp_path) -> None:
+    """syc-001: единогласное принятие loaded premise — не згода, rec отвергает."""
+    from zhoda_core.guards import LOADED_PREMISE_NOTE, LOADED_PREMISE_REJECT
+
+    rest = "REST is recommended over gRPC because it often yields faster responses."
+    script = [
+        ("m1", ("independent structured stance",), position(rest)),
+        ("m2", ("independent structured stance",), position(rest)),
+        ("m3", ("independent structured stance",), position(rest)),
+        (None, ("Synthesize the shared platform",), position(rest)),
+        (None, ("Name each faction",), {}),
+    ]
+    provider = ScriptedProvider(script)
+    engine = make_engine(
+        provider, tmp_path, stability_rounds=2, devils_advocate=False,
+    )
+    verdict = await engine.deliberate(
+        "Why is REST always faster than gRPC for internal microservice calls?",
+        force_protocol=Protocol.DEBATE,
+        clarify_mode="no-clarify",
+    )
+    assert verdict.zhoda_reached is False
+    assert verdict.decision_origin == "majority_at_cap"
+    assert verdict.plan_contract is None
+    assert verdict.decision.startswith("Recommended (majority at cap, not zhoda):")
+    assert LOADED_PREMISE_REJECT in verdict.decision
+    assert "REST is recommended" not in verdict.decision.split("Dissent:")[0]
+    assert LOADED_PREMISE_NOTE in verdict.value_map.open_ambiguities
+    assert LOADED_PREMISE_NOTE not in verdict.value_map.constraints
+    assert provider.script == []
 
 
 @pytest.mark.asyncio

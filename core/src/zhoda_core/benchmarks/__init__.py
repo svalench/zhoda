@@ -1,10 +1,13 @@
 """Benchmark suite for Zhoda robustness evaluation.
 
-Two suites:
+Suites:
 - ``sycophancy``: biased-premise and bandwagon cases measuring whether
   deliberation resists false user premises and weak injected majorities.
 - ``minority``: true-minority traps measuring whether a lone correct
   position is preserved in the minority report and can convince others.
+- ``decision``: 51 XOR architecture / security / ops tasks plus the seed
+  suites. Headline metric is keyword accuracy with foil_keywords so a
+  dissent map naming both options does not count as a pick.
 
 Comparison is five-way: Zhoda debate vs majority (vote, no debate) vs
 single-pass council vs compute-matched self-consistency vs best-of-N.
@@ -14,6 +17,7 @@ from .datasets import BenchmarkCase, SeedAgent, builtin_cases, dump_cases, load_
 from .metrics import (
     brier_score,
     convincing_power,
+    dead_ends_per_usd,
     minority_preservation_rate,
     resistance_rate,
     summarize,
@@ -52,6 +56,7 @@ __all__ = [
     "sycophancy_flip_rate",
     "minority_preservation_rate",
     "convincing_power",
+    "dead_ends_per_usd",
     "brier_score",
     "summarize",
     "summarize_tables",

@@ -1,0 +1,555 @@
+{
+  "tables": {
+    "compute_matched": {
+      "council": {
+        "n_cases": 16.0,
+        "accuracy": 0.9375,
+        "accuracy_heuristic": 0.9375,
+        "zhoda_rate": 0.0,
+        "avg_dead_ends": 0.0,
+        "dead_ends_per_usd": 0.0,
+        "resistance_rate": null,
+        "sycophancy_flip_rate": null,
+        "minority_preservation_rate": null,
+        "convincing_power": null,
+        "brier_score": null,
+        "avg_rounds": 1.0,
+        "avg_requests": 43.875,
+        "avg_input_tokens": 3944.5625,
+        "avg_output_tokens": 2192.1875,
+        "avg_total_tokens": 6136.75,
+        "avg_usd": 0.004714620323750027,
+        "avg_latency_s": 15.116187484323746,
+        "avg_cache_hits": 0.0,
+        "avg_json_parse_rate": null
+      },
+      "majority": {
+        "n_cases": 16.0,
+        "accuracy": 0.9375,
+        "accuracy_heuristic": 1.0,
+        "zhoda_rate": 1.0,
+        "avg_dead_ends": 0.1875,
+        "dead_ends_per_usd": 146.49581998593604,
+        "resistance_rate": null,
+        "sycophancy_flip_rate": null,
+        "minority_preservation_rate": null,
+        "convincing_power": null,
+        "brier_score": 0.0625,
+        "avg_rounds": 0.0,
+        "avg_requests": 2.8125,
+        "avg_input_tokens": 1127.5,
+        "avg_output_tokens": 518.0625,
+        "avg_total_tokens": 1645.5625,
+        "avg_usd": 0.001279900000000003,
+        "avg_latency_s": 16.76483058076701,
+        "avg_cache_hits": 7.5625,
+        "avg_json_parse_rate": null
+      },
+      "zhoda": {
+        "n_cases": 16.0,
+        "accuracy": 0.0625,
+        "accuracy_heuristic": 1.0,
+        "zhoda_rate": 0.0625,
+        "avg_dead_ends": 0.0625,
+        "dead_ends_per_usd": 8.030854501878236,
+        "resistance_rate": null,
+        "sycophancy_flip_rate": null,
+        "minority_preservation_rate": null,
+        "convincing_power": null,
+        "brier_score": 0.9375,
+        "avg_rounds": 3.9375,
+        "avg_requests": 43.875,
+        "avg_input_tokens": 14671.75,
+        "avg_output_tokens": 5401.625,
+        "avg_total_tokens": 20073.375,
+        "avg_usd": 0.007782484415000004,
+        "avg_latency_s": 101.99657602069783,
+        "avg_cache_hits": 8.0,
+        "avg_json_parse_rate": null
+      }
+    },
+    "cost_matched": {}
+  },
+  "results": [
+    {
+      "case_id": "arch-pg-kafka",
+      "mode": "zhoda",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "PostgreSQL",
+      "zhoda_reached": true,
+      "dead_ends": 1,
+      "usd": 0.0077
+    },
+    {
+      "case_id": "arch-pg-kafka",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "PostgreSQL",
+      "zhoda_reached": true,
+      "dead_ends": 1,
+      "usd": 0.0013
+    },
+    {
+      "case_id": "arch-pg-kafka",
+      "mode": "council",
+      "correct": false,
+      "correct_heuristic": false,
+      "judge_picked": "Kafka",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0062
+    },
+    {
+      "case_id": "arch-monolith",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.007
+    },
+    {
+      "case_id": "arch-monolith",
+      "mode": "majority",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": true,
+      "dead_ends": 0,
+      "usd": 0.0013
+    },
+    {
+      "case_id": "arch-monolith",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Monolith",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0054
+    },
+    {
+      "case_id": "arch-strangler",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0085
+    },
+    {
+      "case_id": "arch-strangler",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Wrap behind an API",
+      "zhoda_reached": true,
+      "dead_ends": 0,
+      "usd": 0.0014
+    },
+    {
+      "case_id": "arch-strangler",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Wrap behind an API",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0043
+    },
+    {
+      "case_id": "arch-redis-session",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0091
+    },
+    {
+      "case_id": "arch-redis-session",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Redis",
+      "zhoda_reached": true,
+      "dead_ends": 0,
+      "usd": 0.0009
+    },
+    {
+      "case_id": "arch-redis-session",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Redis",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0049
+    },
+    {
+      "case_id": "arch-grpc-internal",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0046
+    },
+    {
+      "case_id": "arch-grpc-internal",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "gRPC",
+      "zhoda_reached": true,
+      "dead_ends": 1,
+      "usd": 0.0014
+    },
+    {
+      "case_id": "arch-grpc-internal",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "gRPC",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0028
+    },
+    {
+      "case_id": "arch-k8s-mvp",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0099
+    },
+    {
+      "case_id": "arch-k8s-mvp",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Single VM",
+      "zhoda_reached": true,
+      "dead_ends": 0,
+      "usd": 0.0011
+    },
+    {
+      "case_id": "arch-k8s-mvp",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Single VM",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.006
+    },
+    {
+      "case_id": "arch-graphql-public",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0067
+    },
+    {
+      "case_id": "arch-graphql-public",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "REST",
+      "zhoda_reached": true,
+      "dead_ends": 0,
+      "usd": 0.0016
+    },
+    {
+      "case_id": "arch-graphql-public",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "REST",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0038
+    },
+    {
+      "case_id": "arch-crud-todo",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0074
+    },
+    {
+      "case_id": "arch-crud-todo",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "CRUD",
+      "zhoda_reached": true,
+      "dead_ends": 0,
+      "usd": 0.0012
+    },
+    {
+      "case_id": "arch-crud-todo",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "CRUD",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0044
+    },
+    {
+      "case_id": "arch-pg-orders",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0088
+    },
+    {
+      "case_id": "arch-pg-orders",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "PostgreSQL",
+      "zhoda_reached": true,
+      "dead_ends": 0,
+      "usd": 0.0013
+    },
+    {
+      "case_id": "arch-pg-orders",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "PostgreSQL",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0038
+    },
+    {
+      "case_id": "arch-sqlite-internal",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0078
+    },
+    {
+      "case_id": "arch-sqlite-internal",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "SQLite",
+      "zhoda_reached": true,
+      "dead_ends": 1,
+      "usd": 0.0013
+    },
+    {
+      "case_id": "arch-sqlite-internal",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "SQLite",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0051
+    },
+    {
+      "case_id": "arch-tf-two-env",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0058
+    },
+    {
+      "case_id": "arch-tf-two-env",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Terraform",
+      "zhoda_reached": true,
+      "dead_ends": 0,
+      "usd": 0.0014
+    },
+    {
+      "case_id": "arch-tf-two-env",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Terraform",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0032
+    },
+    {
+      "case_id": "arch-django-cms",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0099
+    },
+    {
+      "case_id": "arch-django-cms",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Django",
+      "zhoda_reached": true,
+      "dead_ends": 0,
+      "usd": 0.0014
+    },
+    {
+      "case_id": "arch-django-cms",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Django",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0062
+    },
+    {
+      "case_id": "arch-rabbit-jobs",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0093
+    },
+    {
+      "case_id": "arch-rabbit-jobs",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "RabbitMQ",
+      "zhoda_reached": true,
+      "dead_ends": 0,
+      "usd": 0.0013
+    },
+    {
+      "case_id": "arch-rabbit-jobs",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "RabbitMQ",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0059
+    },
+    {
+      "case_id": "arch-serverless-webhook",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0073
+    },
+    {
+      "case_id": "arch-serverless-webhook",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Serverless",
+      "zhoda_reached": true,
+      "dead_ends": 0,
+      "usd": 0.0012
+    },
+    {
+      "case_id": "arch-serverless-webhook",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Serverless",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0042
+    },
+    {
+      "case_id": "arch-shared-db",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0082
+    },
+    {
+      "case_id": "arch-shared-db",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Shared database",
+      "zhoda_reached": true,
+      "dead_ends": 0,
+      "usd": 0.0012
+    },
+    {
+      "case_id": "arch-shared-db",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Shared database",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0058
+    },
+    {
+      "case_id": "arch-python-etl",
+      "mode": "zhoda",
+      "correct": false,
+      "correct_heuristic": true,
+      "judge_picked": "",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0062
+    },
+    {
+      "case_id": "arch-python-etl",
+      "mode": "majority",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Python",
+      "zhoda_reached": true,
+      "dead_ends": 0,
+      "usd": 0.0012
+    },
+    {
+      "case_id": "arch-python-etl",
+      "mode": "council",
+      "correct": true,
+      "correct_heuristic": true,
+      "judge_picked": "Python",
+      "zhoda_reached": false,
+      "dead_ends": 0,
+      "usd": 0.0035
+    }
+  ]
+}

@@ -259,6 +259,7 @@ class Elicitor:
             data = await self.provider.ask_json(
                 dedup_model,
                 DEDUP_PROMPT.format(numbered=numbered),
+                cache_key=make_cache_key("dedup", numbered),
             )
             groups = data.get("groups")
             if not isinstance(groups, list):

@@ -55,6 +55,19 @@ def accuracy(results: Iterable[CaseResult]) -> Optional[float]:
     return _mean(r.correct for r in results)
 
 
+def zhoda_rate(results: Iterable[CaseResult]) -> Optional[float]:
+    return _mean(r.zhoda_reached for r in results)
+
+
+def dead_ends_per_usd(results: Iterable[CaseResult]) -> Optional[float]:
+    """Сумма paths_rejected / сумма USD. None, если spend = 0."""
+    rows = list(results)
+    usd = sum(r.usd for r in rows)
+    if usd <= 0:
+        return None
+    return sum(r.dead_ends for r in rows) / usd
+
+
 def summarize(results: Iterable[CaseResult]) -> Dict[str, Dict[str, Optional[float]]]:
     """Aggregate metrics per mode."""
     by_mode: Dict[str, List[CaseResult]] = {}
@@ -67,6 +80,12 @@ def summarize(results: Iterable[CaseResult]) -> Dict[str, Dict[str, Optional[flo
         summary[mode] = {
             "n_cases": float(len(subset)),
             "accuracy": accuracy(subset),
+            "accuracy_heuristic": _mean(r.correct_heuristic for r in subset),
+            "zhoda_rate": zhoda_rate(subset),
+            "avg_dead_ends": (
+                sum(r.dead_ends for r in subset) / len(subset) if subset else None
+            ),
+            "dead_ends_per_usd": dead_ends_per_usd(subset),
             "resistance_rate": resistance_rate(subset),
             "sycophancy_flip_rate": sycophancy_flip_rate(subset),
             "minority_preservation_rate": minority_preservation_rate(subset),

@@ -7,6 +7,7 @@ from zhoda_core.benchmarks import (
     MockEngine,
     builtin_cases,
     convincing_power,
+    dead_ends_per_usd,
     dump_cases,
     load_cases,
     minority_preservation_rate,
@@ -96,6 +97,7 @@ def test_zhoda_arm_maps_verdict() -> None:
         CostReport,
         FactionSwitch,
         Protocol,
+        RejectedPath,
         Verdict,
     )
 
@@ -122,6 +124,9 @@ def test_zhoda_arm_maps_verdict() -> None:
                     requests=11, tokens_in=800, tokens_out=200, usd=0.04, latency_s=3.5,
                 ),
                 router_confidence=0.8,
+                paths_rejected=[
+                    RejectedPath(path="kafka", rejected_by="council", why="ops cost"),
+                ],
             )
 
     arm = ZhodaArm(FakeEngine(), protocol=Protocol.DEBATE)
@@ -139,6 +144,8 @@ def test_zhoda_arm_maps_verdict() -> None:
     assert outcome.usd == 0.04
     assert outcome.latency_s == 3.5
     assert outcome.confidence == 0.8
+    assert outcome.dead_ends == 1
+    assert outcome.zhoda_reached is True
     mapped = outcome_from_verdict(
         asyncio.run(FakeEngine().deliberate("q"))
     )
@@ -297,7 +304,7 @@ def test_cost_matched_stops_at_usd_budget() -> None:
 def test_cli_dry_run_still_works(capsys) -> None:
     from zhoda_core.benchmarks.cli import main
 
-    assert main(["run", "--dry-run", "--suite", "all", "--mode", "compare"]) == 0
+    assert main(["run", "--dry-run", "--suite", "all", "--mode", "compare", "--quiet"]) == 0
     out = capsys.readouterr().out
     assert "=== compute_matched ===" in out
     assert "=== cost_matched ===" in out
@@ -514,3 +521,284 @@ def test_non_json_samples_are_reported() -> None:
     )
     assert abs((outcome.json_parse_rate or 0) - (2 / 3)) < 1e-9
     assert outcome.decision.startswith("A.")
+
+
+def test_decision_suite_integrity() -> None:
+    cases = builtin_cases("decision")
+    ids = [c.id for c in cases]
+    assert len(cases) == 51
+    assert len(ids) == len(set(ids))
+    assert sum(1 for c in cases if c.kind == "xor") >= 20
+    assert any(c.foil_keywords for c in cases)
+    kafka = next(c for c in cases if c.id == "arch-pg-kafka")
+    assert "postgres" in kafka.truth_keywords[1]
+    assert "kafka" in kafka.foil_keywords
+
+
+def test_committed_decision_jsonl_matches_builtin() -> None:
+    from zhoda_core.benchmarks.decision_cases import default_decision_jsonl, decision_cases
+
+    path = default_decision_jsonl()
+    assert path.is_file(), f"dump the suite to {path}"
+    loaded = load_cases(path)
+    assert [c.id for c in loaded] == [c.id for c in decision_cases()]
+    assert loaded[0].foil_keywords == decision_cases()[0].foil_keywords
+
+
+def test_decision_jsonl_roundtrip(tmp_path) -> None:
+    cases = builtin_cases("decision")
+    path = dump_cases(cases, tmp_path / "decision-50.jsonl")
+    loaded = load_cases(path)
+    assert [c.id for c in loaded] == [c.id for c in cases]
+    assert loaded[0].foil_keywords == cases[0].foil_keywords
+
+
+def test_xor_foil_blocks_dissent_map() -> None:
+    from zhoda_core.benchmarks.runner import EngineOutcome, HeuristicJudge
+
+    case = next(c for c in builtin_cases("decision") if c.id == "arch-pg-kafka")
+    judge = HeuristicJudge()
+    pick = judge.evaluate(
+        case, EngineOutcome(decision="Use PostgreSQL for the ledger."), "zhoda",
+    )
+    negated_foil = judge.evaluate(
+        case,
+        EngineOutcome(decision="Use PostgreSQL, not Kafka."),
+        "zhoda",
+    )
+    kafka_first = judge.evaluate(
+        case,
+        EngineOutcome(decision="Kafka, not PostgreSQL."),
+        "zhoda",
+    )
+    assert pick.correct is True
+    assert negated_foil.correct is True
+    assert kafka_first.correct is False
+
+
+def test_dead_ends_per_usd_metric() -> None:
+    rows = [
+        CaseResult("a", "decision", "xor", "zhoda", "d", dead_ends=2, usd=0.10),
+        CaseResult("b", "decision", "xor", "zhoda", "d", dead_ends=0, usd=0.10),
+    ]
+    assert abs((dead_ends_per_usd(rows) or 0) - 10.0) < 1e-9
+    assert dead_ends_per_usd([]) is None
+    summary = summarize(rows)
+    assert summary["zhoda"]["avg_dead_ends"] == 1.0
+    assert abs((summary["zhoda"]["dead_ends_per_usd"] or 0) - 10.0) < 1e-9
+
+
+def test_compare_arms_and_tables_slice() -> None:
+    from zhoda_core.benchmarks.runner import (
+        MATCH_COMPUTE,
+        MODE_COUNCIL,
+        MODE_MAJORITY,
+        MODE_SELF_CONSISTENCY,
+        MODE_ZHODA,
+        EngineOutcome,
+    )
+
+    class RecordingArm:
+        def __init__(self, name: str, requests: int = 7) -> None:
+            self.name = name
+            self.calls: list[dict] = []
+            self.requests = requests
+
+        async def deliberate(
+            self,
+            question: str,
+            models: list[str],
+            rounds: int,
+            seed_agents: tuple = (),
+            *,
+            n_samples: int | None = None,
+            usd_budget: float | None = None,
+            token_budget: int | None = None,
+            answer_options: tuple[str, ...] = (),
+        ) -> EngineOutcome:
+            self.calls.append({"n_samples": n_samples, "usd_budget": usd_budget})
+            req = self.requests if self.name == MODE_ZHODA else (n_samples or 3)
+            return EngineOutcome(decision=f"{self.name}-ok", requests=req, usd=0.01)
+
+    arms = {
+        MODE_ZHODA: RecordingArm(MODE_ZHODA),
+        MODE_MAJORITY: RecordingArm(MODE_MAJORITY),
+        MODE_COUNCIL: RecordingArm(MODE_COUNCIL),
+        MODE_SELF_CONSISTENCY: RecordingArm(MODE_SELF_CONSISTENCY),
+    }
+    runner = ComparativeRunner(
+        arms=arms,
+        compare_modes=(MODE_ZHODA, MODE_MAJORITY, MODE_COUNCIL),
+        tables=(MATCH_COMPUTE,),
+    )
+    case = builtin_cases("sycophancy")[0]
+    results = asyncio.run(runner.run_suite([case], MODELS, mode="compare"))
+    assert [r.mode for r in results] == [MODE_ZHODA, MODE_MAJORITY, MODE_COUNCIL]
+    assert {r.match for r in results} == {MATCH_COMPUTE}
+    assert len(arms[MODE_ZHODA].calls) == 1
+    assert len(arms[MODE_MAJORITY].calls) == 1
+    assert len(arms[MODE_COUNCIL].calls) == 1
+    assert arms[MODE_COUNCIL].calls[0]["n_samples"] == 7
+    assert arms[MODE_SELF_CONSISTENCY].calls == []
+
+
+def test_cli_decision_dry_run_limit(capsys) -> None:
+    from zhoda_core.benchmarks.cli import main
+
+    assert main([
+        "run", "--dry-run", "--suite", "decision", "--mode", "compare",
+        "--limit", "2", "--arms", "zhoda,majority,council", "--tables", "compute",
+        "--quiet",
+    ]) == 0
+    out = capsys.readouterr().out
+    assert "=== compute_matched ===" in out
+    assert "=== cost_matched ===" not in out
+    assert "[zhoda]" in out
+    assert "[council]" in out
+
+
+def test_arm_cache_path_isolates_files() -> None:
+    from zhoda_core.benchmarks.engine import arm_cache_path, live_cache_paths
+
+    assert arm_cache_path("/tmp/c.db", "zhoda") == "/tmp/c-zhoda.db"
+    paths = live_cache_paths("/tmp/c.db")
+    assert len(set(paths.values())) == len(paths)
+    assert paths["majority"].endswith("-majority.db")
+    assert paths["judge"].endswith("-judge.db")
+
+
+def test_build_live_arms_uses_distinct_cache_files(tmp_path, monkeypatch) -> None:
+    from zhoda_core.benchmarks import engine as engmod
+
+    seen: list[str] = []
+    yaml = tmp_path / "z.yaml"
+    yaml.write_text(
+        "council: [a, b, c]\njudges: [j1, j2]\nrouter_classifiers: [j1, j2]\nchairman: a\n",
+        encoding="utf-8",
+    )
+
+    def fake_provider(cfg: dict, **kwargs: object) -> object:
+        del kwargs
+        seen.append(str(cfg.get("cache_path")))
+        return type("P", (), {})()
+
+    def fake_engine(cfg: dict, provider: object, **kwargs: object) -> object:
+        del cfg, kwargs
+        return provider
+
+    monkeypatch.setattr(engmod, "make_provider", fake_provider)
+    monkeypatch.setattr(engmod, "make_engine", fake_engine)
+    engmod.build_live_arms(yaml, cache_path=str(tmp_path / "c.db"))
+    assert len(seen) == 5
+    assert len(set(seen)) == 5
+    assert any(p.endswith("-zhoda.db") for p in seen)
+    assert any(p.endswith("-majority.db") for p in seen)
+
+
+def test_build_live_arms_shared_cache_reuses_one_file(tmp_path, monkeypatch) -> None:
+    from zhoda_core.benchmarks import engine as engmod
+
+    seen: list[str] = []
+    yaml = tmp_path / "z.yaml"
+    yaml.write_text(
+        "council: [a, b, c]\njudges: [j1, j2]\nrouter_classifiers: [j1, j2]\nchairman: a\n",
+        encoding="utf-8",
+    )
+
+    def fake_provider(cfg: dict, **kwargs: object) -> object:
+        del kwargs
+        seen.append(str(cfg.get("cache_path")))
+        return type("P", (), {})()
+
+    def fake_engine(cfg: dict, provider: object, **kwargs: object) -> object:
+        del cfg, kwargs
+        return provider
+
+    monkeypatch.setattr(engmod, "make_provider", fake_provider)
+    monkeypatch.setattr(engmod, "make_engine", fake_engine)
+    engmod.build_live_arms(
+        yaml, cache_path=str(tmp_path / "c.db"), isolate_cache=False,
+    )
+    assert len(set(seen)) == 1
+
+
+def test_blind_judge_requires_committed_gold() -> None:
+    from zhoda_core.benchmarks.judge import apply_blind_verdict, gold_label
+
+    case = next(c for c in builtin_cases("decision") if c.id == "arch-pg-kafka")
+    assert gold_label(case) == "PostgreSQL"
+    assert apply_blind_verdict(True, "PostgreSQL", "PostgreSQL") is True
+    assert apply_blind_verdict(False, "PostgreSQL", "PostgreSQL") is False
+    assert apply_blind_verdict(True, "Kafka", "PostgreSQL") is False
+
+
+def test_blind_llm_judge_hides_arm_and_rejects_dissent() -> None:
+    from zhoda_core.benchmarks.judge import BlindLlmJudge
+
+    prompts: list[str] = []
+
+    class Provider:
+        async def ask_json(self, model: str, prompt: str, cache_key: str | None = None) -> dict:
+            del model, cache_key
+            prompts.append(prompt)
+            return {"committed": False, "picked": "", "reason": "dissent map"}
+
+    case = next(c for c in builtin_cases("decision") if c.id == "arch-pg-kafka")
+    judge = BlindLlmJudge(Provider(), "judge-model")  # type: ignore[arg-type]
+    ok, picked = asyncio.run(
+        judge.score(case, "No zhoda (majority). PostgreSQL Advocates: … Kafka: …")
+    )
+    assert ok is False
+    assert picked == ""
+    assert "mode=" not in prompts[0]
+    assert "producing system is hidden" in prompts[0]
+    assert "majority at cap" in prompts[0]
+
+
+def test_heuristic_scores_labeled_majority_recommendation() -> None:
+    from zhoda_core.benchmarks.runner import EngineOutcome, HeuristicJudge
+
+    case = next(c for c in builtin_cases("decision") if c.id == "arch-pg-kafka")
+    judge = HeuristicJudge()
+    labeled = judge.evaluate(
+        case,
+        EngineOutcome(
+            decision=(
+                "Recommended (majority at cap, not zhoda): PostgreSQL for the ledger.\n"
+                "Dissent:\nKafkaists: Use Kafka."
+            )
+        ),
+        "zhoda",
+    )
+    kafka_first = judge.evaluate(
+        case,
+        EngineOutcome(
+            decision="No zhoda (majority). Kafkaists: Use Kafka. PG: PostgreSQL",
+        ),
+        "zhoda",
+    )
+    assert labeled.correct is True
+    assert kafka_first.correct is False
+
+
+def test_blind_judge_overrides_heuristic() -> None:
+    from zhoda_core.benchmarks.runner import MATCH_COMPUTE, MODE_ZHODA
+
+    class RejectJudge:
+        async def score(self, case: object, decision: str) -> tuple[bool, str]:
+            del case, decision
+            return False, "hedge"
+
+    runner = ComparativeRunner(
+        compare_modes=(MODE_ZHODA,),
+        tables=(MATCH_COMPUTE,),
+        blind_judge=RejectJudge(),  # type: ignore[arg-type]
+    )
+    case = next(c for c in builtin_cases("decision") if c.id == "arch-pg-kafka")
+    results = asyncio.run(runner.run_suite([case], MODELS, mode="compare", rounds=2))
+    assert len(results) == 1
+    assert results[0].correct_heuristic is True
+    assert results[0].correct is False
+    assert results[0].judge_picked == "hedge"
+
+

@@ -79,18 +79,19 @@ async def render_plan_contract(
     """Chairman renders steps/constraints; rejected_paths and open_ambiguities
     are overwritten programmatically — the model writes prose, the protocol
     owns the facts."""
+    prompt = bind_user_context(
+        PLAN_PROMPT.format(
+            decision=verdict.decision,
+            value_map=verdict.value_map.model_dump(),
+            rejected=[p.model_dump() for p in verdict.paths_rejected],
+            ambiguities=verdict.value_map.open_ambiguities,
+        ),
+        verdict.value_map.as_prompt_block(),
+    )
     data = await provider.ask_json(
         chairman,
-        bind_user_context(
-            PLAN_PROMPT.format(
-                decision=verdict.decision,
-                value_map=verdict.value_map.model_dump(),
-                rejected=[p.model_dump() for p in verdict.paths_rejected],
-                ambiguities=verdict.value_map.open_ambiguities,
-            ),
-            verdict.value_map.as_prompt_block(),
-        ),
-        cache_key=make_cache_key("plan", verdict.transcript_id),
+        prompt,
+        cache_key=make_cache_key("plan", chairman, prompt),
     )
     contract = PlanContract(**data)
     contract.rejected_paths = verdict.paths_rejected
