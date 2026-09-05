@@ -146,5 +146,7 @@ Measured batches (2026-09-05, cheap paid council):
 - `--no-clarify`, cap 6: [eval-batch.md](live-runs/2026-09-05-eval-batch.md)
 - `--auto-clarify`, cap 4, majority-at-cap ≠ zhoda:
   [eval-cap.md](live-runs/2026-09-05-eval-cap.md)
+- Что изменили и как это едет:
+  [protocol.md](live-runs/2026-09-05-protocol.md)
 
 Re-parse хронікі with `python eval/analyze.py eval/runs/<stamp>`.
