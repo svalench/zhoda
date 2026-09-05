@@ -11,7 +11,7 @@ rounds_cap is decision_origin="majority_at_cap": dissent, not zhoda.
 
 from collections.abc import Callable
 
-from .anonymize import make_aliases
+from .anonymize import content_alias_seed, make_aliases
 from .consensus import ConsensusChecker
 from .debate import DebateEngine
 from .elicitor import (
@@ -22,6 +22,11 @@ from .elicitor import (
     grounding_need,
 )
 from .factions import ADVOCATE_ALIAS, Faction, FactionClusterer
+from .guards import (
+    challenges_loaded_premise,
+    loaded_premise_ambiguities,
+    looks_like_loaded_premise,
+)
 from .judges import Judges
 from .models import (
     ConsensusStrength,
@@ -37,7 +42,7 @@ from .models import (
 from .plan import collect_rejected_paths, render_plan_contract
 from .positions import extract_positions
 from .progress import ProgressEvent
-from .providers.openrouter import OpenRouterProvider
+from .providers.openrouter import OpenRouterProvider, make_cache_key
 from .router import ProtocolRouter
 from .transcripts import TranscriptStore
 from .tree import build_decision_tree
@@ -58,6 +63,8 @@ ONLY valid JSON: {{"decision": "...", "winning_arguments": ["..."]}}"""
 
 OPPOSITION_PROMPT = """Spawn an opposition faction. The council currently holds ONE position.
 Write a genuine alternative with a DIFFERENT primary recommended action — not a nitpick.
+If the question embeds a loaded premise (always/never/since/given that/why is),
+the alternative must still not treat that premise as a fact.
 
 Question: {question}
 Current thesis: {thesis}
@@ -186,7 +193,12 @@ class ZhodaEngine:
         value_map: ValueMap | None,
     ) -> Verdict:
         self.provider.begin_question()
-        aliases = make_aliases(self.council, seed=self.alias_seed)
+        seed = (
+            self.alias_seed
+            if self.alias_seed is not None
+            else content_alias_seed(question, self.council, context=context)
+        )
+        aliases = make_aliases(self.council, seed=seed)
         speakers = {alias: real for real, alias in aliases.items()}
         judges = Judges(self.judge_models, aliases)
         breakdown: dict[str, int] = {}
@@ -222,13 +234,13 @@ class ZhodaEngine:
             value_map = ValueMap()
             emit("elicit", "elicit skipped — object missing", done=True)
         elif (
-            context.strip()
-            and route.protocol is Protocol.RED_TEAM
-            and clarify_mode != "smart"
+            route.protocol in (Protocol.VOTE, Protocol.RED_TEAM)
+            and clarify_mode == "auto-clarify"
         ):
-            # Исходник уже в --context; «а вдруг sanitize» не должен мыть находки.
+            # Однопроход: интервью не меняет NULL≠TRUE и не должно мыть находки
+            # гипотезой «а вдруг sanitize». no-clarify и так молча пустой value_map.
             value_map = ValueMap()
-            emit("elicit", "elicit skipped — source in --context", done=True)
+            emit("elicit", "elicit skipped — single-pass protocol", done=True)
         elif clarify_mode != "no-clarify":
             emit("elicit", "eliciting clarifying questions…")
 
@@ -267,6 +279,13 @@ class ZhodaEngine:
             )
         else:
             value_map = ValueMap()
+        value_map = value_map.model_copy(
+            update={
+                "open_ambiguities": loaded_premise_ambiguities(
+                    question, list(value_map.open_ambiguities)
+                )
+            }
+        )
         mark("elicit")
 
         need = grounding_need(question, elicit_questions, elicit_answers, context)
@@ -294,6 +313,7 @@ class ZhodaEngine:
 
         user_context = value_map.as_prompt_block()
         debate.user_context = user_context
+        debate.question = question
         clusterer.user_context = user_context
         consensus.user_context = user_context
         consensus.question = question
@@ -420,20 +440,22 @@ class ZhodaEngine:
         if strength == ConsensusStrength.DEADLOCK and self.escalation_model:
             emit("appeal", "appellate review…")
             escalated_to = self.escalation_model
+            appeal_prompt = bind_user_context(
+                APPEAL_PROMPT.format(
+                    question=question,
+                    theses="; ".join(
+                        f"{f.name}: {f.platform.thesis}" for f in factions if f.platform
+                    ),
+                    objections="; ".join(
+                        c.claim for c in debate.objections if c.status == ObjectionStatus.OPEN
+                    ),
+                ),
+                user_context,
+            )
             appeal = await self.provider.ask_json(
                 self.escalation_model,
-                bind_user_context(
-                    APPEAL_PROMPT.format(
-                        question=question,
-                        theses="; ".join(
-                            f"{f.name}: {f.platform.thesis}" for f in factions if f.platform
-                        ),
-                        objections="; ".join(
-                            c.claim for c in debate.objections if c.status == ObjectionStatus.OPEN
-                        ),
-                    ),
-                    user_context,
-                ),
+                appeal_prompt,
+                cache_key=make_cache_key("appeal", self.escalation_model, appeal_prompt),
             )
             appeal_decision = appeal.get("decision")
             self.transcripts.append(
@@ -448,6 +470,19 @@ class ZhodaEngine:
             if c.status == ObjectionStatus.OPEN
         ]
 
+        leading = max(factions, key=lambda f: len(f.members))
+        # Сикофанское «согласие» на loaded premise — не згода.
+        if (
+            zhoda
+            and leading.platform is not None
+            and looks_like_loaded_premise(question)
+            and not challenges_loaded_premise(leading.platform.thesis)
+        ):
+            zhoda = False
+            majority_at_cap = True
+            if strength is ConsensusStrength.UNANIMOUS:
+                strength = ConsensusStrength.MAJORITY
+
         verdict = self.verdicts.build(
             factions,
             strength,
@@ -460,6 +495,7 @@ class ZhodaEngine:
             switches=debate.switches,
             cost=CostReport(),
             divergences=divergences,
+            question=question,
         )
         if appeal_decision:
             verdict.decision = appeal_decision
@@ -467,7 +503,6 @@ class ZhodaEngine:
         elif majority_at_cap:
             verdict.decision_origin = "majority_at_cap"
         verdict.escalated_to = escalated_to
-        leading = max(factions, key=lambda f: len(f.members))
         if zhoda and verdict.decision_origin == "council" and leading.platform is not None:
             try:
                 verdict.decision = await synthesize_decision(
@@ -515,7 +550,12 @@ class ZhodaEngine:
         if not lines:
             return
         try:
-            names = await self.provider.ask_json(self.chairman, NAMING_PROMPT.format(lines=lines))
+            names_prompt = NAMING_PROMPT.format(lines=lines)
+            names = await self.provider.ask_json(
+                self.chairman,
+                names_prompt,
+                cache_key=make_cache_key("name", self.chairman, names_prompt),
+            )
         except Exception:  # noqa: BLE001
             return
         seen: set[str] = set()
@@ -539,16 +579,18 @@ class ZhodaEngine:
         actor = self.council[0]
         speakers[ADVOCATE_ALIAS] = actor
         try:
+            opp_prompt = bind_user_context(
+                OPPOSITION_PROMPT.format(
+                    question=question,
+                    thesis=leading.platform.thesis,
+                    answer=leading.platform.answer,
+                ),
+                user_context,
+            )
             data = await self.provider.ask_json(
                 actor,
-                bind_user_context(
-                    OPPOSITION_PROMPT.format(
-                        question=question,
-                        thesis=leading.platform.thesis,
-                        answer=leading.platform.answer,
-                    ),
-                    user_context,
-                ),
+                opp_prompt,
+                cache_key=make_cache_key("opp", actor, opp_prompt),
             )
             platform = Position(model=ADVOCATE_ALIAS, **data)
         except Exception:  # noqa: BLE001

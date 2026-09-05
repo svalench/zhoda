@@ -2,7 +2,13 @@
 
 import pytest
 
-from zhoda_core.debate import DebateEngine
+from zhoda_core.debate import (
+    CLOSURE_PROMPT,
+    SWITCH_PROMPT,
+    DebateEngine,
+    citation_quotes_objection,
+    is_concede_rebuttal,
+)
 from zhoda_core.models import Critique, FactionSwitch, FlawType, ObjectionStatus
 
 
@@ -25,7 +31,9 @@ def make_switch(**kwargs) -> FactionSwitch:
         "model": "Response A",
         "from_faction": "Pragmatists",
         "to_faction": "Throughputists",  # the objection's author
-        "convinced_by": "the write-scaling argument",
+        "convinced_by": (
+            "PostgreSQL handles 50k RPS writes on a single node is false"
+        ),
     }
     return FactionSwitch(**(base | kwargs))
 
@@ -134,6 +142,60 @@ def test_hedge_revision_is_refused() -> None:
     assert not should_apply_revision(pick, pick, changed=False)
 
 
+def test_xor_pick_flip_revision_is_refused() -> None:
+    from zhoda_core.guards import should_apply_revision
+
+    question = "Monolith vs microservices for a 4-person team building a B2B SaaS MVP?"
+    old = "For a 4-person team, a monolithic architecture is generally preferable."
+    flipped = (
+        "Adopting a microservices architecture from the start can be beneficial "
+        "despite the small team size."
+    )
+    assert not should_apply_revision(old, flipped, changed=True, question=question)
+    caveated = old + " Keep modules ready to extract later."
+    assert should_apply_revision(old, caveated, changed=True, question=question)
+
+
+def test_xor_always_option_is_not_loaded_premise() -> None:
+    from zhoda_core.guards import looks_like_loaded_premise
+
+    assert not looks_like_loaded_premise(
+        "Pin lockfiles or always install the latest patch of every dependency?"
+    )
+    assert looks_like_loaded_premise(
+        "Why is REST always faster than gRPC for internal microservice calls?"
+    )
+    assert looks_like_loaded_premise(
+        "Since containers always add overhead, should we run the API as root?"
+    )
+
+
+def test_loaded_premise_revision_is_refused() -> None:
+    from zhoda_core.guards import should_apply_revision
+
+    question = "Why is REST always faster than gRPC for internal microservice calls?"
+    challenged = "The premise is false: gRPC is typically faster than REST."
+    adopted = "REST is recommended over gRPC because it often yields faster responses."
+    assert not should_apply_revision(challenged, adopted, changed=True, question=question)
+    assert should_apply_revision(
+        challenged, challenged + " Prefer protobuf on the mesh.", changed=True,
+        question=question,
+    )
+
+
+def test_loaded_premise_switch_is_blocked() -> None:
+    from zhoda_core.guards import blocks_loaded_premise_switch
+
+    question = "Why is REST always faster than gRPC for internal microservice calls?"
+    challenged = "The premise is false: gRPC is typically faster than REST."
+    adopted = "REST is recommended over gRPC because it often yields faster responses."
+    assert blocks_loaded_premise_switch(question, challenged, adopted)
+    assert not blocks_loaded_premise_switch(question, adopted, challenged)
+    assert not blocks_loaded_premise_switch(
+        "PostgreSQL or Kafka for a ledger?", challenged, adopted,
+    )
+
+
 def test_xor_question_rejects_hybrid_action() -> None:
     from zhoda_core.guards import is_hybrid_decision, looks_like_xor_question
 
@@ -165,3 +227,99 @@ def test_supersede_prompt_rejects_caveat_only() -> None:
 
     assert "NOT addressed" in SUPERSEDE_PROMPT
     assert "primary recommended action" in SUPERSEDE_PROMPT
+
+
+def test_closure_prompt_rejects_acknowledgment() -> None:
+    assert "CONCEDE" in CLOSURE_PROMPT
+    assert "closed=false" in CLOSURE_PROMPT
+
+
+def test_switch_prompt_requires_quote_not_destination_thesis() -> None:
+    assert "Do you switch factions?" in SWITCH_PROMPT
+    assert "not restate the opposing thesis" in SWITCH_PROMPT
+    assert "loaded premise" in SWITCH_PROMPT
+
+
+def test_concede_rebuttal_is_detected() -> None:
+    assert is_concede_rebuttal("CONCEDE")
+    assert is_concede_rebuttal("concede — no counter-argument")
+    assert not is_concede_rebuttal("We accept the point.")
+    assert not is_concede_rebuttal("Partitioning is solved.")
+
+
+def test_switch_citation_must_quote_the_objection() -> None:
+    claim = "PostgreSQL handles 50k RPS writes on a single node"
+    assert citation_quotes_objection(
+        "PostgreSQL handles 50k RPS writes on a single node is false",
+        claim,
+    )
+    assert not citation_quotes_objection("", claim)
+    assert not citation_quotes_objection("Kafka is the simpler operational story", claim)
+    engine = make_engine()
+    critique = engine.register_critique(make_critique())
+    assert engine.validate_switch(make_switch(objection_id=critique.id))
+    assert not engine.validate_switch(make_switch(
+        objection_id=critique.id,
+        convinced_by="the destination thesis restated",
+    ))
+
+
+@pytest.mark.asyncio
+async def test_concede_skips_closure_and_debate_calls_are_cached() -> None:
+    """CONCEDE не зовёт судей закрытия; все LLM-вызовы несут cache_key."""
+    from zhoda_core.factions import Faction
+    from zhoda_core.judges import Judges
+    from zhoda_core.models import Position
+
+    keys: list[str | None] = []
+    closure_asked = {"n": 0}
+
+    class Spy:
+        async def complete(self, model, prompt, *, cache_key=None, **kwargs):
+            del model, kwargs
+            keys.append(cache_key)
+            if "Rebut it concisely" in prompt:
+                return "CONCEDE"
+            raise AssertionError(prompt[:120])
+
+        async def ask_json(self, model, prompt, *, cache_key=None, **kwargs):
+            del model, kwargs
+            keys.append(cache_key)
+            if "Did the rebuttal" in prompt:
+                closure_asked["n"] += 1
+                return {"closed": True}
+            if "Produce ONE" in prompt:
+                if 'You represent faction "Pragmatists"' in prompt:
+                    target = "Throughputists"
+                else:
+                    target = "Pragmatists"
+                return {
+                    "target_faction": target,
+                    "flaw_type": "factual",
+                    "claim": "PostgreSQL handles 50k RPS writes on a single node",
+                    "specifics": "",
+                    "evidence_url": None,
+                }
+            if "Revise your platform" in prompt:
+                return {"changed": False, "thesis": "Use PostgreSQL (simple, sufficient)"}
+            if "Do you switch factions?" in prompt:
+                return {"switch": False, "convinced_by": ""}
+            return {}
+
+    pg = Position(model="Response A", thesis="Use PostgreSQL (simple, sufficient)", answer="pg")
+    kf = Position(model="Response B", thesis="Use Kafka (built for throughput)", answer="kf")
+    factions = [
+        Faction(name="Pragmatists", members=["Response A"], platform=pg),
+        Faction(name="Throughputists", members=["Response B"], platform=kf),
+    ]
+    engine = DebateEngine(provider=Spy())  # type: ignore[arg-type]
+    round_ = await engine.run_round(
+        1,
+        factions,
+        speakers={"Response A": "m1", "Response B": "m2"},
+        judges=Judges(("j1", "j2"), {}),
+    )
+    assert closure_asked["n"] == 0
+    assert all(c.status is ObjectionStatus.OPEN for c in round_.critiques)
+    assert keys
+    assert all(k for k in keys)

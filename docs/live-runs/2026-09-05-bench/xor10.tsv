@@ -1,0 +1,31 @@
+case_id	mode	llm	heur	picked	zhoda	dead	req	usd	cache
+arch-monolith	zhoda	1	1	Monolith	0	0	33	0.0054	16
+arch-monolith	majority	1	1	Monolith	1	0	10	0.0032	0
+arch-monolith	council	1	1	Monolith	0	0	33	0.0037	0
+arch-strangler	zhoda	1	1	Wrap behind an API	0	0	51	0.0095	9
+arch-strangler	majority	1	1	Wrap behind an API	1	0	10	0.0033	0
+arch-strangler	council	1	1	Wrap behind an API	0	0	51	0.0049	0
+arch-redis-session	zhoda	1	1	Redis	0	0	50	0.0079	4
+arch-redis-session	majority	1	1	Redis	1	0	10	0.0029	0
+arch-redis-session	council	1	1	Redis	0	0	50	0.0044	0
+arch-grpc-internal	zhoda	1	1	gRPC	0	0	45	0.0086	6
+arch-grpc-internal	majority	1	1	gRPC	1	0	10	0.0037	0
+arch-grpc-internal	council	1	1	gRPC	0	0	45	0.0049	0
+arch-k8s-mvp	zhoda	1	1	Single VM	0	0	45	0.0079	6
+arch-k8s-mvp	majority	1	1	Single VM	1	0	10	0.0031	0
+arch-k8s-mvp	council	1	1	Single VM	0	0	45	0.0044	0
+arch-graphql-public	zhoda	1	1	REST	0	0	53	0.0085	4
+arch-graphql-public	majority	1	1	REST	1	0	10	0.0034	0
+arch-graphql-public	council	1	1	REST	0	0	53	0.0061	0
+ops-flags	zhoda	1	1	Feature flags	0	0	33	0.0055	16
+ops-flags	majority	1	1	Feature flags	1	0	10	0.0030	0
+ops-flags	council	1	1	Feature flags	0	0	33	0.0027	0
+ops-staging	zhoda	1	0	Yes	0	0	33	0.0052	16
+ops-staging	majority	1	0	Yes	1	0	10	0.0032	0
+ops-staging	council	1	1	Yes	0	0	33	0.0028	0
+ops-friday	zhoda	1	1	No	0	0	33	0.0055	16
+ops-friday	majority	0	0	No	1	0	10	0.0033	0
+ops-friday	council	1	1	No	0	0	33	0.0034	0
+ops-pin-deps	zhoda	1	0	Pin lockfiles	0	0	45	0.0070	6
+ops-pin-deps	majority	1	0	Pin lockfiles	1	0	10	0.0028	0
+ops-pin-deps	council	1	1	Pin lockfiles	0	0	45	0.0038	0

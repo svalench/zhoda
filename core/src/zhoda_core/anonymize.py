@@ -1,11 +1,14 @@
 """Anonymization (protocol invariant): critics never see real model names.
 
-Round-4 §7: aliases are generated PER DELIBERATION (engine calls this inside
-deliberate(), not once at init) — a stable mapping across sessions would
-allow statistical de-anonymization. Labels are A..Z, AA..AZ, ... so councils
-larger than 26 models don't crash.
+Aliases are generated PER DELIBERATION (engine calls this inside
+deliberate(), not once at init). Default seed is a hash of
+question+council+context so a repeat of the same inputs can hit the debate
+cache; a different question still shuffles differently — not a global map
+that would de-anonymize models across sessions. Labels are A..Z, AA..AZ, ...
+so councils larger than 26 models don't crash.
 """
 
+import hashlib
 import random
 
 
@@ -17,6 +20,12 @@ def _label(index: int) -> str:
         index, rem = divmod(index - 1, 26)
         label = chr(65 + rem) + label
     return label
+
+
+def content_alias_seed(question: str, models: list[str], *, context: str = "") -> int:
+    """Стабильный seed для повтора того же вопроса — иначе кэш дебата мёртв."""
+    raw = hashlib.sha256("::".join((question, context, *models)).encode()).hexdigest()[:16]
+    return int(raw, 16)
 
 
 def make_aliases(models: list[str], *, seed: int | None = None) -> dict[str, str]:

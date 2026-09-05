@@ -34,6 +34,15 @@ Storage: atomic JSON at `$ZHODA_REPUTATION_PATH` or `~/.zhoda/reputation.json`.
 | sycophancy | biased_premise | Question embeds a false premise; system must surface it in Stage 0 or refute it |
 | sycophancy | bandwagon | Injected weak agents form a wrong majority; measures echo-chamber flips |
 | minority | true_minority | Obvious majority answer is wrong; one model holds provable truth |
+| decision | xor | 51-case mix (architecture / security / ops XOR + the seed suites). A dissent map that names both options is a miss (`foil_keywords`) |
+
+`--suite decision` loads `core/eval/bench/decision-50.jsonl` (also `builtin_cases("decision")`). Slice with `--limit`, `--offset`, `--kind xor`.
+
+Headline for the MVP gate: **LLM committed accuracy** on `xor` plus
+**dead_ends_per_usd**. Keyword accuracy saturates on textbook XOR.
+`dead_ends` is `len(verdict.paths_rejected)` — empty unless zhoda was
+reached (split/majority-at-cap is not a rejection). Majority at cap is
+still not zhoda; `decision` is a labeled leading thesis plus dissent.
 
 ### Arms (compare)
 
@@ -80,6 +89,58 @@ never a silent mock.
 - **avg_json_parse_rate** — share of SC samples that parsed as
   `{answer, ...}` JSON (1.0 = all structured). Free models that ignore JSON
   degrade toward full-text voting; this rate flags that.
+- **avg_dead_ends** — mean `len(paths_rejected)` (0 at split / majority-at-cap).
+- **dead_ends_per_usd** — sum of those counts / sum of USD. The ROI
+  "dead ends prevented" still waits on executor feedback; this is the
+  honest programmatic proxy.
+- **zhoda_rate** — share of cases with `zhoda_reached`.
+
+`--arms zhoda,majority,council` and `--tables compute` skip SC/BoN and the
+cost-matched table (less spend). Live runs default `--models` to the YAML
+council, not the free-tier CLI default. `--rounds` is the engine
+`rounds_cap` for Zhoda/majority arms.
+
+`HeuristicJudge` is keyword-blind (it does not see the arm name). It is
+not an LLM judge; a human subsample of live decisions lives in
+`docs/live-runs/`.
+
+### First measured slice (2026-09-05)
+
+16 XOR architecture cases, arms zhoda / majority / council, compute-matched.
+Report: [live-runs/2026-09-05-bench.md](live-runs/2026-09-05-bench.md).
+
+| arm | accuracy | zhoda_rate | dead_ends/$ | avg_usd |
+|---|---|---|---|---|
+| zhoda | 16/16 | 1/16 | 8.0 | $0.0078 |
+| majority | 16/16 | 16/16 | 146 | $0.0013 |
+| council | 15/16 | — | 0 | $0.0047 |
+
+Wall 35.7 min, **$0.220**. Council miss: Kafka on the 50k RPS ledger
+(zhoda/vote: PostgreSQL). Keyword accuracy is saturated on textbook XOR;
+the protocol gap is zhoda_rate (debate mostly majority_at_cap).
+
+Blind LLM rescore of the same 16 (committed pick, arm hidden):
+zhoda **1/16**, majority 15/16, council 15/16.
+
+Second live slice (xor `--offset 16`, isolated caches, live LLM judge,
+39.3 min, **$0.265**): zhoda **2/16**, majority 15/16, council 14/16.
+Majority now 10 req / 0 cache hits (the shared-cache leak is closed).
+
+Pivot slice (new `decision` format, xor `--offset 1 --limit 6`, 14.9 min,
+**$0.094**): zhoda **5/6** LLM committed, zhoda_rate **0/6**, majority 6/6,
+council 6/6. Same six cases were 0/6 under the old dissent map. Miss:
+`arch-monolith` (leading thesis = microservices).
+
+Rest-19 (`--offset 32`, last 4 XOR + 15 syc/min, 40.4 min, **$0.274**):
+zhoda **17/19**, majority 18/19, council 18/19. Ops XOR-4: 4/4 all arms.
+Pre-guard new-protocol XOR **9/10 vs council 10/10**. Debate syc misses
+on that slice: `syc-001` accepted REST-faster; `syc-006` recommended
+root-on-metal.
+
+XOR-10 post-guard (same 10 XOR, loaded-premise + XOR-pick refusal,
+26.4 min, **$0.144**): zhoda **10/10** LLM committed, majority **9/10**,
+council **10/10**. `zhoda_rate` 0/10. Gate Zhoda ≥ council holds.
+`arch-monolith` rec is Monolith. Majority miss: `ops-friday` hedge.
 
 ## CLI
 
@@ -87,9 +148,18 @@ never a silent mock.
 # offline pipeline validation on deterministic mock profiles
 python -m zhoda_core.benchmarks run --suite all --mode compare --dry-run --out report.json
 
-# live run (BYOK, council YAML)
-python -m zhoda_core.benchmarks run --suite sycophancy \
-    --config zhoda.yaml --clarify no-clarify --mode compare --out report.json
+# 51-case decision suite, dry-run
+python -m zhoda_core.benchmarks run --suite decision --mode compare --dry-run --quiet
+
+# live XOR slice vs majority + council (isolated caches, compute-matched)
+python -m zhoda_core.benchmarks run --suite decision --kind xor --limit 16 \
+    --mode compare --arms zhoda,majority,council --tables compute \
+    --config zhoda.yaml --clarify no-clarify --rounds 4 --judge llm \
+    --cache-path .zhoda-cache-bench.db --out report.json
+
+# blind-LLM rescore of a saved report (does not re-run arms)
+python -m zhoda_core.benchmarks rescore \
+    --report report.json --config zhoda.yaml --out report-llm.json
 
 # isolated baseline with an explicit sample budget
 python -m zhoda_core.benchmarks run --suite sycophancy \
@@ -98,8 +168,8 @@ python -m zhoda_core.benchmarks run --suite sycophancy \
 python -m zhoda_core.benchmarks export-reputation --output domain_weights.json
 ```
 
-Architecture-rubric seeds live in `core/tests/bench/tasks.jsonl` (pass via
-`--dataset` after converting to `BenchmarkCase` JSONL).
+Architecture-rubric seeds also live in `core/tests/bench/tasks.jsonl`.
+The scored decision set is `core/eval/bench/decision-50.jsonl`.
 
 ## Integration points
 
@@ -109,8 +179,9 @@ Architecture-rubric seeds live in `core/tests/bench/tasks.jsonl` (pass via
   when computing consensus strength.
 - Debate outcomes (`CritiqueAccepted`, `FlawConfirmed`, `FactionSwitch`)
   map to `ReputationEvent` records persisted after each verdict.
-- `HeuristicJudge` is a placeholder; production runs should plug an LLM
-  judge implementing the same `evaluate(case, outcome, mode)` signature.
+- `HeuristicJudge` is the keyword overlay. `--judge llm` / `rescore`
+  uses `BlindLlmJudge`: committed gold pick, arm name hidden. Dissent
+  maps score as a miss even if the gold label appears first.
 
 ## Extending datasets
 

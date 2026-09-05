@@ -150,8 +150,8 @@ class Critique(BaseModel):
 
 
 class FactionSwitch(BaseModel):
-    """Public faction change: open objection by ID + non-empty citation +
-    target IS the objection's author faction."""
+    """Public faction change: open objection by ID + citation quoting the
+    objection claim + target IS the objection's author faction."""
 
     model: str
     from_faction: str

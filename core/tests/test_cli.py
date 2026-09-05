@@ -4,7 +4,7 @@ import pytest
 from typer.testing import CliRunner
 
 from zhoda_core.cli import app, apply_progress, format_cost_breakdown, resolve_clarify_mode
-from zhoda_core.models import CostReport
+from zhoda_core.models import CostReport, Protocol
 from zhoda_core.progress import ProgressEvent
 
 
@@ -20,6 +20,13 @@ def test_auto_clarify_flag_resolves() -> None:
         )
         == "auto-clarify"
     )
+
+
+def test_cli_protocol_line_is_eval_stable() -> None:
+    """eval/run.sh якорится на `protocol: vote|debate|red_team`, не на traceback."""
+    assert str(Protocol.VOTE) == "vote"
+    assert str(Protocol.DEBATE) == "debate"
+    assert str(Protocol.RED_TEAM) == "red_team"
 
 
 def test_conflicting_clarify_flags_are_rejected() -> None:

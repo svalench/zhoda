@@ -155,3 +155,23 @@ async def test_latency_s_is_measured() -> None:
     report = provider.question_report()
     assert report.latency_s >= 0.0
     assert report.requests == 1
+
+
+@pytest.mark.asyncio
+async def test_same_cache_key_skips_http() -> None:
+    """Повтор complete с тем же cache_key не идёт в сеть."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        calls["n"] += 1
+        return httpx.Response(200, json=OK_RESPONSE)
+
+    provider = make_provider(httpx.MockTransport(handler))
+    provider.begin_question()
+    first = await provider.complete("m:free", "hi", cache_key="k1")
+    second = await provider.complete("m:free", "hi", cache_key="k1")
+    assert first == second == "ok"
+    assert calls["n"] == 1
+    assert provider.question_report().cache_hits == 1
+    assert provider.question_report().requests == 1

@@ -119,9 +119,15 @@ Zhoda — open-source система, в которой несколько LLM �
       Цифры — после измеренного прогона, не из dry-run.
 - [x] **Первый живой прогон** на дешёвых платных моделях
       (`core/eval/`, 2026-09-05) + починка вскрывшегося
-      (синтез SUPERSEDED, breakdown red_team, extract логов)
-- [ ] Бенчмарк: 50–100 decision-задач; blind-судейство, human-подвыборка;
-      метрика dead_ends/$
+      (синтез SUPERSEDED, majority≠zhoda, cache replay, IC без Stage 0,
+      login SQLi в decision). Третья пачка:
+      [docs/live-runs/2026-09-05-eval-protocol.md](live-runs/2026-09-05-eval-protocol.md)
+- [x] Бенчмарк: датасет 51; dead_ends/$; XOR-32 pre-pivot + XOR-10 / syc-15
+      post-pivot (labeled majority-at-cap); isolated cache; blind LLM-judge.
+      [docs/live-runs/2026-09-05-bench.md](live-runs/2026-09-05-bench.md).
+      Новый протокол XOR-10 после стражей: **10/10 vs council 10/10**
+      (гейт Zhoda ≥ council на committed pick закрыт). syc/min (rest-19):
+      13/15 vs 14/15. SC/BoN не гнались.
 
 ### Этап 2 — MCP-сервер (после зелёного live)
 - [x] Инструменты clarify/deliberate/verdict/transcript/reputation
@@ -145,7 +151,7 @@ Zhoda — open-source система, в которой несколько LLM �
 | Срок | Метрика |
 |---|---|
 | 2 недели | Работающий цикл end-to-end на бесплатных моделях |
-| MVP | **Бенчмарк: Zhoda > однопроходного совета на decision-задачах** (иначе — пивот протокола) |
+| MVP | **Бенчмарк: Zhoda ≥ совета на committed XOR-pick** (labeled majority-at-cap + dissent). XOR-10 после стражей: zhoda **10/10**, majority **9/10**, council **10/10**. Гейт закрыт. `zhoda_rate` дебата **0/10**. |
 | 1 месяц | MCP-сервер в реестре, первые 50★ |
 | 2 месяца | Плагин в awesome-dsh-plugin, 300★ |
 | 3 месяца | 1000★, первые донаты, 5 внешних контрибьюторов |

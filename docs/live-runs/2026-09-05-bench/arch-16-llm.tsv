@@ -1,0 +1,49 @@
+case_id	mode	llm	heur	picked	zhoda	dead	usd
+arch-pg-kafka	zhoda	1	1	PostgreSQL	1	1	0.0077
+arch-pg-kafka	majority	1	1	PostgreSQL	1	1	0.0013
+arch-pg-kafka	council	0	0	Kafka	0	0	0.0062
+arch-monolith	zhoda	0	1		0	0	0.0070
+arch-monolith	majority	0	1		1	0	0.0013
+arch-monolith	council	1	1	Monolith	0	0	0.0054
+arch-strangler	zhoda	0	1		0	0	0.0085
+arch-strangler	majority	1	1	Wrap behind an API	1	0	0.0014
+arch-strangler	council	1	1	Wrap behind an API	0	0	0.0043
+arch-redis-session	zhoda	0	1		0	0	0.0091
+arch-redis-session	majority	1	1	Redis	1	0	0.0009
+arch-redis-session	council	1	1	Redis	0	0	0.0049
+arch-grpc-internal	zhoda	0	1		0	0	0.0046
+arch-grpc-internal	majority	1	1	gRPC	1	1	0.0014
+arch-grpc-internal	council	1	1	gRPC	0	0	0.0028
+arch-k8s-mvp	zhoda	0	1		0	0	0.0099
+arch-k8s-mvp	majority	1	1	Single VM	1	0	0.0011
+arch-k8s-mvp	council	1	1	Single VM	0	0	0.0060
+arch-graphql-public	zhoda	0	1		0	0	0.0067
+arch-graphql-public	majority	1	1	REST	1	0	0.0016
+arch-graphql-public	council	1	1	REST	0	0	0.0038
+arch-crud-todo	zhoda	0	1		0	0	0.0074
+arch-crud-todo	majority	1	1	CRUD	1	0	0.0012
+arch-crud-todo	council	1	1	CRUD	0	0	0.0044
+arch-pg-orders	zhoda	0	1		0	0	0.0088
+arch-pg-orders	majority	1	1	PostgreSQL	1	0	0.0013
+arch-pg-orders	council	1	1	PostgreSQL	0	0	0.0038
+arch-sqlite-internal	zhoda	0	1		0	0	0.0078
+arch-sqlite-internal	majority	1	1	SQLite	1	1	0.0013
+arch-sqlite-internal	council	1	1	SQLite	0	0	0.0051
+arch-tf-two-env	zhoda	0	1		0	0	0.0058
+arch-tf-two-env	majority	1	1	Terraform	1	0	0.0014
+arch-tf-two-env	council	1	1	Terraform	0	0	0.0032
+arch-django-cms	zhoda	0	1		0	0	0.0099
+arch-django-cms	majority	1	1	Django	1	0	0.0014
+arch-django-cms	council	1	1	Django	0	0	0.0062
+arch-rabbit-jobs	zhoda	0	1		0	0	0.0093
+arch-rabbit-jobs	majority	1	1	RabbitMQ	1	0	0.0013
+arch-rabbit-jobs	council	1	1	RabbitMQ	0	0	0.0059
+arch-serverless-webhook	zhoda	0	1		0	0	0.0073
+arch-serverless-webhook	majority	1	1	Serverless	1	0	0.0012
+arch-serverless-webhook	council	1	1	Serverless	0	0	0.0042
+arch-shared-db	zhoda	0	1		0	0	0.0082
+arch-shared-db	majority	1	1	Shared database	1	0	0.0012
+arch-shared-db	council	1	1	Shared database	0	0	0.0058
+arch-python-etl	zhoda	0	1		0	0	0.0062
+arch-python-etl	majority	1	1	Python	1	0	0.0012
+arch-python-etl	council	1	1	Python	0	0	0.0035

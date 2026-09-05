@@ -12,7 +12,11 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from .factions import ADVOCATE_ALIAS, Faction
-from .guards import should_apply_revision
+from .guards import (
+    blocks_loaded_premise_switch,
+    claims_reflected_in_decision,
+    should_apply_revision,
+)
 from .judges import Judges
 from .models import (
     Critique,
@@ -22,7 +26,7 @@ from .models import (
     Position,
     bind_user_context,
 )
-from .providers.openrouter import OpenRouterProvider
+from .providers.openrouter import OpenRouterProvider, make_cache_key
 
 MIN_CLAIM_LEN = 20
 
@@ -42,7 +46,10 @@ def extract_source(text: str) -> tuple[str, str | None]:
 CRITIQUE_PROMPT = """You represent faction \"{name}\". Platform thesis: {platform}
 Strongest opposing faction \"{opponent}\": {opponent_thesis}
 
-Produce ONE concrete critique of the opposing position. ONLY valid JSON:
+Produce ONE concrete critique of the opposing position.
+Quote the exact phrase from the opposing thesis you dispute — do not write a
+parallel essay that ignores their wording.
+ONLY valid JSON:
 {{"target_faction": "{opponent}", "flaw_type": "factual|logical|scope|values_mismatch",
   "claim": "the specific statement you dispute",
   "specifics": "what exactly is missing (required for scope/values_mismatch)",
@@ -70,16 +77,28 @@ be labeled UNVERIFIED unless fetched. If you genuinely cannot, answer CONCEDE.""
 CLOSURE_PROMPT = """Objection ({flaw_type}): {claim} {specifics}
 Rebuttal: {rebuttal}
 
-Did the rebuttal substantively address the objection? ONLY valid JSON:
+Did the rebuttal substantively REFUTE the specific objection claim?
+closed=true only if the rebuttal contradicts that claim with a reason.
+Acknowledgment, CONCEDE, "we accept", or restating the platform is closed=false.
+ONLY valid JSON:
 {{"closed": true}} or {{"closed": false}}"""
 
-SWITCH_PROMPT = """An open objection stands against your faction's CURRENT platform.
+SWITCH_PROMPT = """An open objection stands against your faction's CURRENT platform
+after a rebuttal that did NOT close it (and any revision that did not fix it).
 Objection: {claim}
 Opposing thesis: {opponent_thesis}
 
 Do you switch factions? ONLY valid JSON:
-{{"switch": true, "convinced_by": "the exact argument that convinced you"}}
-or {{"switch": false, "convinced_by": ""}}"""
+{{"switch": true, "convinced_by": "quote the objection claim that convinced you"}}
+or {{"switch": false, "convinced_by": "quote the part of the objection that is false"}}
+
+Rules:
+- switch=true if the objection shows your primary recommendation is wrong.
+  convinced_by MUST quote words from the Objection, not restate the opposing thesis.
+- switch=false only if you name a concrete fact the objection gets wrong.
+- An empty convinced_by is invalid. Restating the destination thesis is not a citation.
+- If the question embeds a loaded premise and your thesis already challenges it,
+  switch=false: do not defect toward treating that premise as true."""
 
 REVISE_PROMPT = """Your faction \"{name}\" platform thesis: {thesis}
 Open objections that survived this round:
@@ -89,6 +108,10 @@ Revise your platform to account for valid criticism — or keep it and justify
 why the objections fail. Keep the same primary recommended action unless an
 objection refutes that action. Do not replace a named pick with "it depends"
 or "choose based on team expertise". Caveats may be added; the main choice stays.
+If the question is A or B / A vs B, do not change the named pick — a pick
+change is a faction switch, not a revision. If the question embeds a loaded
+premise (always/never/since/given that/why is), do not revise toward treating
+that premise as true.
 ONLY valid JSON:
 {{"thesis": "...", "answer": "...",
   "claims": [{{"claim": "...", "evidence_url": null, "confidence": 0.0}}],
@@ -120,12 +143,24 @@ _FLAW_PRIORITY = {
 }
 
 
+def is_concede_rebuttal(text: str) -> bool:
+    """CONCEDE из промпта — не опровержение; возражение остаётся OPEN."""
+    return bool(re.match(r"concede\b", (text or "").strip(), re.IGNORECASE))
+
+
+def citation_quotes_objection(convinced_by: str, claim: str) -> bool:
+    """Цитата перехода должна узнавать claim возражения, не thesis оппонента."""
+    return bool((convinced_by or "").strip()) and claims_reflected_in_decision(
+        [claim], convinced_by,
+    )
+
+
 class Round(BaseModel):
     number: int
     critiques: list[Critique] = Field(default_factory=list)
     switches: list[FactionSwitch] = Field(default_factory=list)
-    revisions: list[dict] = Field(default_factory=list)
-    deferred: list[dict] = Field(default_factory=list)
+    revisions: list[dict[str, str]] = Field(default_factory=list)
+    deferred: list[dict[str, str]] = Field(default_factory=list)
 
 
 class DebateEngine:
@@ -143,11 +178,22 @@ class DebateEngine:
         self.max_new_per_round = max_new_per_round
         self.max_active = max_active
         self.user_context: str = ""
+        self.question: str = ""
         self.objections: list[Critique] = []
         self.switches: list[FactionSwitch] = []
 
     def _bind(self, prompt: str) -> str:
         return bind_user_context(prompt, self.user_context)
+
+    async def _ask(self, model: str, prompt: str) -> dict[str, object]:
+        return await self.provider.ask_json(
+            model, prompt, cache_key=make_cache_key("deb", model, prompt),
+        )
+
+    async def _say(self, model: str, prompt: str) -> str:
+        return await self.provider.complete(
+            model, prompt, cache_key=make_cache_key("deb", model, prompt),
+        )
 
     def register_critique(self, critique: Critique) -> Critique:
         """Structural prefilter + ID assignment (semantic validation: judges)."""
@@ -204,7 +250,7 @@ class DebateEngine:
             return False
         if objection.author_faction and objection.author_faction != switch.to_faction:
             return False
-        return bool(switch.convinced_by.strip())
+        return citation_quotes_objection(switch.convinced_by, objection.claim)
 
     def active_objections(self) -> list[Critique]:
         """Top-priority open objections within the active cap."""
@@ -290,7 +336,7 @@ class DebateEngine:
             speaker = speakers.get(target.members[(number - 1) % len(target.members)])
             if speaker is None:
                 return None
-            text = await self.provider.complete(
+            text = await self._say(
                 speaker,
                 self._bind(REBUTTAL_PROMPT.format(
                     name=target.name, platform=target.platform.thesis,
@@ -307,8 +353,14 @@ class DebateEngine:
         async def judge_closure(item: tuple[Critique, str]) -> None:
             critique, rebuttal = item
             target = next(f for f in factions if f.name == critique.target_faction)
+            if is_concede_rebuttal(rebuttal):
+                prose, url = extract_source(rebuttal)
+                critique.rebuttal = prose
+                if url:
+                    critique.rebuttal_evidence_url = url
+                return
             votes = await asyncio.gather(
-                *(self.provider.ask_json(
+                *(self._ask(
                     judge,
                     self._bind(CLOSURE_PROMPT.format(
                         flaw_type=critique.flaw_type, claim=critique.claim,
@@ -332,7 +384,7 @@ class DebateEngine:
 
         alias_of = {v: k for k, v in speakers.items()}
 
-        async def revise(faction: Faction) -> tuple[Faction, dict, str] | None:
+        async def revise(faction: Faction) -> tuple[Faction, dict[str, object], str] | None:
             open_against = self._open_against(faction)
             if not open_against or not faction.members or faction.platform is None:
                 return None
@@ -342,7 +394,7 @@ class DebateEngine:
             objections_text = "\n".join(
                 f"- [{c.flaw_type}] {c.claim} {c.specifics}" for c in open_against
             )
-            data = await self.provider.ask_json(
+            data = await self._ask(
                 speaker,
                 self._bind(REVISE_PROMPT.format(
                     name=faction.name, thesis=faction.platform.thesis,
@@ -360,32 +412,42 @@ class DebateEngine:
             faction, data, speaker = item
             if faction.platform is None:
                 continue
+            new_thesis = str(data.get("thesis") or "")
             if not should_apply_revision(
                 faction.platform.thesis,
-                str(data.get("thesis") or ""),
+                new_thesis,
                 changed=bool(data.get("changed")),
+                question=self.question,
             ):
                 continue
+            raw_conf = data.get("confidence")
             faction.platform = Position(
                 model=alias_of.get(speaker, faction.platform.model),
-                thesis=data["thesis"],
-                answer=data.get("answer", faction.platform.answer),
+                thesis=new_thesis,
+                answer=str(data.get("answer") or faction.platform.answer),
                 claims=faction.platform.claims,
-                falsifiability=data.get("falsifiability", faction.platform.falsifiability),
-                confidence=float(data.get("confidence", faction.platform.confidence)),
+                falsifiability=str(
+                    data.get("falsifiability") or faction.platform.falsifiability
+                ),
+                confidence=(
+                    float(raw_conf)
+                    if isinstance(raw_conf, (int, float, str))
+                    else faction.platform.confidence
+                ),
             )
             round_.revisions.append({
-                "faction": faction.name, "change_note": data.get("change_note", ""),
+                "faction": faction.name,
+                "change_note": str(data.get("change_note") or ""),
             })
             for critique in self._open_against(faction):
-                author = next(
+                author_faction = next(
                     (f for f in factions if f.name == critique.author_faction), None,
                 )
                 withdrawn = False
-                if author is not None and author.members:
-                    author_speaker = speakers.get(author.members[0])
+                if author_faction is not None and author_faction.members:
+                    author_speaker = speakers.get(author_faction.members[0])
                     if author_speaker is not None:
-                        answer = await self.provider.ask_json(
+                        answer = await self._ask(
                             author_speaker,
                             self._bind(WITHDRAW_PROMPT.format(
                                 flaw_type=critique.flaw_type, claim=critique.claim,
@@ -396,7 +458,7 @@ class DebateEngine:
                         withdrawn = bool(answer.get("withdraw"))
                 if not withdrawn:
                     votes = await asyncio.gather(
-                        *(self.provider.ask_json(
+                        *(self._ask(
                             judge,
                             self._bind(SUPERSEDE_PROMPT.format(
                                 flaw_type=critique.flaw_type, claim=critique.claim,
@@ -418,7 +480,7 @@ class DebateEngine:
             if not open_against or faction.platform is None:
                 continue
             for member in list(faction.members):
-                speaker = speakers.get(member)
+                member_model = speakers.get(member)
                 objection = next(
                     (
                         c for c in open_against
@@ -426,13 +488,13 @@ class DebateEngine:
                     ),
                     None,
                 )
-                if speaker is None or objection is None:
+                if member_model is None or objection is None:
                     continue
                 target = next(
                     f for f in factions if f.name == objection.author_faction
                 )
-                data = await self.provider.ask_json(
-                    speaker,
+                data = await self._ask(
+                    member_model,
                     self._bind(SWITCH_PROMPT.format(
                         claim=objection.claim,
                         opponent_thesis=target.platform.thesis if target.platform else "",
@@ -440,9 +502,13 @@ class DebateEngine:
                 )
                 if not data.get("switch"):
                     continue
+                from_thesis = faction.platform.thesis if faction.platform else ""
+                to_thesis = target.platform.thesis if target.platform else ""
+                if blocks_loaded_premise_switch(self.question, from_thesis, to_thesis):
+                    continue
                 switch = FactionSwitch(
                     model=member, from_faction=faction.name, to_faction=target.name,
-                    convinced_by=data.get("convinced_by", ""),
+                    convinced_by=str(data.get("convinced_by") or ""),
                     objection_id=objection.id,
                 )
                 if self.validate_switch(switch):
@@ -465,13 +531,13 @@ class DebateEngine:
         speakers: dict[str, str],
         prompt: str,
         number: int,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         if target.platform is None:
             return None
         speaker = speakers.get(faction.members[(number - 1) % len(faction.members)])
         if speaker is None:
             return None
-        return await self.provider.ask_json(
+        return await self._ask(
             speaker,
             self._bind(prompt.format(
                 name=faction.name,

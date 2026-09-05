@@ -1,0 +1,15 @@
+---
+description: no-clarify never emits an elicit progress stage
+globs: core/src/zhoda_core/engine.py, core/tests/test_e2e.py
+alwaysApply: false
+---
+
+# no-clarify и Stage 0
+
+`clarify_mode == "no-clarify"` не эмитит `stage=elicit` в `on_progress`, даже
+если протокол (`vote` / `red_team`) и так пропускает Stage 0 LLM.
+
+`auto-clarify` может записать `elicit skipped — …` (done=True).
+`no-clarify` молча ставит пустой `ValueMap`.
+
+Тест: `tests/test_e2e.py::test_progress_emits_protocol_stages`.

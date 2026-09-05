@@ -19,7 +19,7 @@ import asyncio
 from .factions import ADVOCATE_ALIAS, Faction
 from .judges import Judges
 from .models import ConsensusStrength, bind_user_context
-from .providers.openrouter import OpenRouterProvider
+from .providers.openrouter import OpenRouterProvider, make_cache_key
 
 AGREEMENT_PROMPT = """User question: {question}
 
@@ -65,17 +65,19 @@ class ConsensusChecker:
         )
         probe = Faction(name="probe", members=[m for f in factions for m in f.members])
         pair = judges.outside() or judges.pair_for(probe)
+        prompt = bind_user_context(
+            AGREEMENT_PROMPT.format(
+                question=self.question or "(unspecified)",
+                theses=theses,
+            ),
+            self.user_context,
+        )
         votes = await asyncio.gather(
             *(
                 self.provider.ask_json(
                     judge,
-                    bind_user_context(
-                        AGREEMENT_PROMPT.format(
-                            question=self.question or "(unspecified)",
-                            theses=theses,
-                        ),
-                        self.user_context,
-                    ),
+                    prompt,
+                    cache_key=make_cache_key("agree", judge, prompt),
                 )
                 for judge in pair
             ),

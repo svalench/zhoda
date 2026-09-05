@@ -15,7 +15,7 @@ Current mapping (keep updated):
 
 | Invariant | Test |
 |---|---|
-| Aliases per deliberation, 27+ models | tests/test_anonymize.py |
+| Aliases per deliberation, 27+ models, content seed replays | tests/test_anonymize.py |
 | 429 transient vs quota, 4xx fail-fast | tests/test_openrouter.py |
 | Budget per question (delta), pre-call estimate | tests/test_openrouter.py |
 | Concurrent complete cannot overspend the cap (reserve before HTTP) | tests/test_openrouter.py::test_concurrent_completes_cannot_exceed_budget |
@@ -24,13 +24,24 @@ Current mapping (keep updated):
 | Open-ended SC is C calls: max(C-1, 1) gens + 1 cluster | tests/test_benchmarks.py::test_open_ended_sc_fits_compute_budget |
 | SC json_parse_rate counts unstructured fallback | tests/test_benchmarks.py::test_non_json_samples_are_reported |
 | CaseResult records tokens/usd/latency/cache_hits | tests/test_benchmarks.py::test_zhoda_arm_maps_verdict |
+| Decision suite 51 unique ids; JSONL matches builtin | tests/test_benchmarks.py::test_decision_suite_integrity + test_committed_decision_jsonl_matches_builtin |
+| XOR foil: dissent map is not a pick | tests/test_benchmarks.py::test_xor_foil_blocks_dissent_map |
+| dead_ends from paths_rejected; dead_ends_per_usd | tests/test_benchmarks.py::test_zhoda_arm_maps_verdict + test_dead_ends_per_usd_metric |
+| Compare --arms/--tables slice skips unselected spend | tests/test_benchmarks.py::test_compare_arms_and_tables_slice |
+| Per-arm sqlite cache; vote does not reuse debate keys | tests/test_benchmarks.py::test_build_live_arms_uses_distinct_cache_files |
+| Blind LLM judge: committed gold, dissent is a miss | tests/test_benchmarks.py::test_blind_judge_requires_committed_gold + test_blind_llm_judge_hides_arm_and_rejects_dissent |
 | SC majority on `answer` field, not full text | tests/test_benchmarks.py::test_self_consistency_votes_on_answer_not_full_text |
 | SC maps to `answer_options` | tests/test_benchmarks.py::test_self_consistency_maps_to_answer_options |
 | Open-ended SC clusters via blind judge | tests/test_benchmarks.py::test_self_consistency_open_ended_clusters_equivalent_answers |
 | Revision converges platforms (not attrition) | tests/test_e2e.py::test_debate_loop_with_platform_revision |
 | Stability rule blocks a flip | tests/test_e2e.py::test_stability_rule_blocks_a_flip |
 | Smart mode without callback degrades, never drops | tests/test_e2e.py::test_smart_mode_without_callback_degrades |
-| Switch needs open objection + cited argument | tests/test_debate.py |
+| Switch needs open objection + cited argument quoting the claim | tests/test_debate.py |
+| CONCEDE rebuttal never closes; debate LLM calls are cache-keyed | tests/test_debate.py::test_concede_skips_closure_and_debate_calls_are_cached |
+| Repeat debate replays from sqlite (aliases from question) | tests/test_e2e.py::test_repeat_debate_replays_from_cache |
+| Same cache_key skips HTTP | tests/test_openrouter.py::test_same_cache_key_skips_http |
+| Cited switch is recorded on the verdict | tests/test_e2e.py::test_cited_switch_is_recorded |
+| Vote/red_team auto-clarify skip Stage 0 LLM | tests/test_e2e.py::test_vote_auto_clarify_skips_elicit + test_red_team_with_context_skips_elicit |
 | Closure only by target faction; supersede leaves ledger | tests/test_debate.py |
 | CLI imports without factions↔judges cycle | tests/test_imports.py |
 | CLI --auto-clarify / --no-clarify flags | tests/test_cli.py |
@@ -43,6 +54,9 @@ Current mapping (keep updated):
 | SUPERSEDED ≠ CLOSED in decision prompt; winner claims kept | tests/test_verdict.py::test_superseded_is_revision_not_refutation + test_synthesize_keeps_winner_claims_out_of_closed_bucket |
 | Hedge synthesis falls back to winner thesis | tests/test_verdict.py::test_hedge_synthesis_falls_back_to_winner_thesis |
 | Hedge revision of a named pick is refused | tests/test_debate.py::test_hedge_revision_is_refused |
+| XOR revision cannot flip the named pick | tests/test_debate.py::test_xor_pick_flip_revision_is_refused |
+| Loaded premise is not a constraint; rec cannot adopt it | tests/test_verdict.py::test_majority_at_cap_does_not_adopt_loaded_premise + tests/test_e2e.py::test_loaded_premise_unanimity_is_not_zhoda |
+| Switch toward adopting a loaded premise is refused | tests/test_debate.py::test_loaded_premise_switch_is_blocked |
 | Agreement is primary rec for the user question, not shared complements | tests/test_consensus.py::test_agreement_prompt_asks_about_the_user_question |
 | Birth unanimity fast-pass / DA spawn opposition | tests/test_e2e.py |
 | Grounding gate: URL/deixis/empty object → insufficient_context, no debate | tests/test_e2e.py::test_url_answer_is_insufficient_context_and_skips_debate |
@@ -55,6 +69,7 @@ Current mapping (keep updated):
 | Unasked elicitation → open_ambiguities, never assumptions | tests/test_elicitor.py + tests/test_e2e.py::test_auto_clarify_grounding_is_insufficient_without_context |
 | Elicitation loops until models report enough or turn cap; leftover → open_ambiguities | tests/test_elicitor.py::test_interview_asks_followup_until_models_report_enough |
 | Majority headcount does not early-stop; majority at cap is not zhoda; zhoda early-stop is unanimous streak | tests/test_e2e.py::test_majority_does_not_early_stop_before_cap + tests/test_consensus.py + tests/test_verdict.py::test_majority_without_zhoda_lists_all_theses |
+| Majority-at-cap decision leads with labeled thesis, then dissent | tests/test_verdict.py::test_majority_without_zhoda_lists_all_theses |
 | XOR question + hybrid synthesis falls back to winner thesis | tests/test_verdict.py::test_xor_hybrid_synthesis_falls_back_to_winner_thesis |
 | Synthetic opposition labeled in minority / tree | tests/test_verdict.py::test_synthetic_opposition_is_labeled_in_minority + tests/test_plan.py::test_synthetic_faction_is_labeled_on_the_tree |
 | Rotating DA skipped when synthetic opposition exists | tests/test_e2e.py::test_advocate_spawns_opposition_on_unanimous_debate |
