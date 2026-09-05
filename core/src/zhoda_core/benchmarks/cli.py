@@ -225,7 +225,7 @@ def _cmd_rescore(args: argparse.Namespace) -> int:
     from zhoda_core.config import load_council_config, make_provider
 
     from .engine import arm_cache_path
-    from .judge import BlindLlmJudge
+    from .judge import BlindLlmJudge, GradeStatus
 
     path = Path(args.report)
     report = json.loads(path.read_text(encoding="utf-8"))
@@ -249,12 +249,18 @@ def _cmd_rescore(args: argparse.Namespace) -> int:
             if row.get("correct_heuristic") is None:
                 row["correct_heuristic"] = row.get("correct")
             case = cases[str(row["case_id"])]
-            ok, picked = await judge.score(case, str(row["decision"]))
-            row["correct"] = ok
-            row["judge_picked"] = picked
+            grade = await judge.score(case, str(row["decision"]))
+            row["grade_status"] = str(grade.status)
+            row["grade_error"] = grade.error
+            row["judge_picked"] = grade.picked_id
+            if grade.status == GradeStatus.GRADED:
+                row["correct"] = grade.correct
+            else:
+                row["correct"] = None
             print(
                 f"{row['case_id']}\t{row['mode']}\t"
-                f"heur={row['correct_heuristic']}\tllm={ok}\tpick={picked}",
+                f"heur={row['correct_heuristic']}\t"
+                f"llm={row['correct']}\tstatus={grade.status}\tpick={grade.picked_id}",
                 flush=True,
             )
 

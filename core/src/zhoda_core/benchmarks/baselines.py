@@ -13,6 +13,7 @@ from typing import Iterable, Sequence
 
 from zhoda_core.models import CostReport
 from zhoda_core.providers.openrouter import OpenRouterProvider, make_cache_key
+from zhoda_core.stage_dtos import PickBestVote, parse_stage
 
 from .datasets import SeedAgent, seed_agents_context
 from .runner import (
@@ -487,8 +488,15 @@ class BestOfNArm:
             PICK_BEST_PROMPT.format(question=question, candidates=numbered),
             cache_key=make_cache_key("bon", question, numbered),
         )
-        index = int(pick.get("index") or 1)
-        chosen = answers[max(0, min(index, len(answers)) - 1)]
+        parsed = parse_stage(PickBestVote, pick, stage="bon")
+        if (
+            parsed.value is None
+            or parsed.value.index < 1
+            or parsed.value.index > len(answers)
+        ):
+            chosen = ""
+        else:
+            chosen = answers[parsed.value.index - 1]
         report = self.provider.question_report()
         return _outcome(chosen, report, rounds_taken=1, transcript=list(answers))
 

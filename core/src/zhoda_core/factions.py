@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from .actions import OptionCatalog, actions_equivalent, bind_action
 from .models import Disagreement, Position, bind_user_context
 from .providers.openrouter import OpenRouterProvider, make_cache_key
+from .stage_dtos import SameVote, parse_stage, position_from_model
 
 if TYPE_CHECKING:
     from .judges import Judges  # только аннотации — иначе цикл с judges.py
@@ -126,20 +127,23 @@ class FactionClusterer:
             return_exceptions=True,
         )
         for (i, j), res in zip(candidates, results, strict=True):
-            if not isinstance(res, dict):
+            parsed = parse_stage(
+                SameVote,
+                res if isinstance(res, dict) else None,
+                stage="pairwise",
+            )
+            if parsed.value is None:
                 continue
-            if res.get("same"):
+            if parsed.value.same:
                 parent[find(j)] = find(i)
-            else:
-                divergence = res.get("divergence")
-                if isinstance(divergence, str) and divergence:
-                    self.divergences.append(
-                        Disagreement(
-                            topic=divergence,
-                            factions=[positions[i].model, positions[j].model],
-                            summary=divergence,
-                        )
+            elif parsed.value.divergence:
+                self.divergences.append(
+                    Disagreement(
+                        topic=parsed.value.divergence,
+                        factions=[positions[i].model, positions[j].model],
+                        summary=parsed.value.divergence,
                     )
+                )
 
         groups: dict[int, list[Position]] = {}
         for i, position in enumerate(positions):
@@ -192,4 +196,7 @@ class FactionClusterer:
             prompt,
             cache_key=make_cache_key("synth", prompt),
         )
-        return Position(model=members[0].model, **data)
+        parsed = position_from_model(data, alias=members[0].model, prompt=prompt)
+        if parsed.value is None:
+            return members[0]
+        return parsed.value

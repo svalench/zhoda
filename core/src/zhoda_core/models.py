@@ -152,7 +152,7 @@ class Claim(BaseModel):
     claim: str
     evidence_url: str | None = None
     confidence: float = 0.5
-    verified: bool = False  # set by a source verifier, or for user-provided sources
+    verified: bool = False  # engine-owned: verifier or user source, never model JSON
 
     @field_validator("evidence_url", mode="before")
     @classmethod
@@ -201,7 +201,7 @@ class Critique(BaseModel):
     claim: str
     specifics: str = ""
     evidence_url: str | None = None
-    evidence_verified: bool = False  # same three-label discipline as Claim
+    evidence_verified: bool = False  # engine-owned; model JSON cannot set this
     rebuttal: str = ""
     rebuttal_evidence_url: str | None = None
     status: ObjectionStatus = ObjectionStatus.OPEN

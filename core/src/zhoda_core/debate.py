@@ -28,6 +28,16 @@ from .models import (
     bind_user_context,
 )
 from .providers.openrouter import OpenRouterProvider, make_cache_key
+from .stage_dtos import (
+    AddressedVote,
+    ClosedVote,
+    ParseFailure,
+    ReviseVote,
+    SwitchVote,
+    WithdrawVote,
+    critique_from_model,
+    parse_stage,
+)
 
 MIN_CLAIM_LEN = 20
 
@@ -162,6 +172,7 @@ class Round(BaseModel):
     switches: list[FactionSwitch] = Field(default_factory=list)
     revisions: list[dict[str, str]] = Field(default_factory=list)
     deferred: list[dict[str, str]] = Field(default_factory=list)
+    parse_failures: list[ParseFailure] = Field(default_factory=list)
 
 
 class DebateEngine:
@@ -183,6 +194,7 @@ class DebateEngine:
         self.catalog: OptionCatalog | None = None
         self.objections: list[Critique] = []
         self.switches: list[FactionSwitch] = []
+        self.parse_failures: list[ParseFailure] = []
 
     def _bind(self, prompt: str) -> str:
         return bind_user_context(prompt, self.user_context)
@@ -196,6 +208,12 @@ class DebateEngine:
         return await self.provider.complete(
             model, prompt, cache_key=make_cache_key("deb", model, prompt),
         )
+
+    def _record_parse(self, failure: ParseFailure | None, round_: Round) -> None:
+        if failure is None:
+            return
+        round_.parse_failures.append(failure)
+        self.parse_failures.append(failure)
 
     def register_critique(self, critique: Critique) -> Critique:
         """Structural prefilter + ID assignment (semantic validation: judges)."""
@@ -321,13 +339,20 @@ class DebateEngine:
             )
             raw.append(("devils_advocate", da))
 
+        allowed_factions = {f.name for f in factions}
         for author, item in raw:
             if not isinstance(item, dict):
                 continue
+            parsed = critique_from_model(
+                item,
+                author=author,
+                allowed_factions=allowed_factions,
+            )
+            if parsed.value is None:
+                self._record_parse(parsed.error, round_)
+                continue
             try:
-                critique = Critique(**item)
-                critique.author_faction = author
-                self.admit(critique, round_)
+                self.admit(parsed.value, round_)
             except (ValueError, TypeError):
                 continue
 
@@ -371,7 +396,16 @@ class DebateEngine:
                 ) for judge in judges.pair_for(target)),
                 return_exceptions=True,
             )
-            if votes and all(isinstance(v, dict) and v.get("closed") for v in votes):
+            flags: list[bool] = []
+            for vote in votes:
+                parsed = parse_stage(
+                    ClosedVote,
+                    vote if isinstance(vote, dict) else None,
+                    stage="closure",
+                )
+                self._record_parse(parsed.error, round_)
+                flags.append(parsed.value.closed if parsed.value is not None else False)
+            if flags and all(flags):
                 self.close_objection(critique.id, rebuttal, rebuttal_by=target.name)
             else:
                 prose, url = extract_source(rebuttal)
@@ -414,35 +448,34 @@ class DebateEngine:
             faction, data, speaker = item
             if faction.platform is None:
                 continue
-            new_thesis = str(data.get("thesis") or "")
-            change_note = str(data.get("change_note") or "")
+            parsed = parse_stage(ReviseVote, data, stage="revise")
+            self._record_parse(parsed.error, round_)
+            vote = parsed.value
+            if vote is None:
+                continue
+            new_thesis = vote.thesis
+            change_note = vote.change_note
             if not should_apply_revision(
                 faction.platform.thesis,
                 new_thesis,
-                changed=bool(data.get("changed")),
+                changed=vote.changed,
                 question=self.question,
                 correction=bool(self._open_against(faction)),
                 change_note=change_note,
             ):
                 continue
-            raw_conf = data.get("confidence")
             prior = faction.platform.action
+            new_answer = vote.answer or faction.platform.answer
             faction.platform = Position(
                 model=alias_of.get(speaker, faction.platform.model),
                 thesis=new_thesis,
-                answer=str(data.get("answer") or faction.platform.answer),
+                answer=new_answer,
                 claims=faction.platform.claims,
-                falsifiability=str(
-                    data.get("falsifiability") or faction.platform.falsifiability
-                ),
-                confidence=(
-                    float(raw_conf)
-                    if isinstance(raw_conf, (int, float, str))
-                    else faction.platform.confidence
-                ),
+                falsifiability=vote.falsifiability or faction.platform.falsifiability,
+                confidence=vote.confidence,
                 action=attach_action(
                     new_thesis,
-                    str(data.get("answer") or faction.platform.answer),
+                    new_answer,
                     self.catalog,
                     prior=prior,
                     provenance=change_note or "revision",
@@ -450,7 +483,7 @@ class DebateEngine:
             )
             round_.revisions.append({
                 "faction": faction.name,
-                "change_note": str(data.get("change_note") or ""),
+                "change_note": change_note,
             })
             for critique in self._open_against(faction):
                 author_faction = next(
@@ -468,7 +501,11 @@ class DebateEngine:
                                 thesis=faction.platform.thesis,
                             )),
                         )
-                        withdrawn = bool(answer.get("withdraw"))
+                        parsed_w = parse_stage(WithdrawVote, answer, stage="withdraw")
+                        self._record_parse(parsed_w.error, round_)
+                        withdrawn = (
+                            parsed_w.value.withdraw if parsed_w.value is not None else False
+                        )
                 if not withdrawn:
                     votes = await asyncio.gather(
                         *(self._ask(
@@ -481,10 +518,18 @@ class DebateEngine:
                         ) for judge in judges.pair_for(faction)),
                         return_exceptions=True,
                     )
-                    if not (
-                        votes
-                        and all(isinstance(v, dict) and v.get("addressed") for v in votes)
-                    ):
+                    flags = []
+                    for raw_vote in votes:
+                        parsed_a = parse_stage(
+                            AddressedVote,
+                            raw_vote if isinstance(raw_vote, dict) else None,
+                            stage="supersede",
+                        )
+                        self._record_parse(parsed_a.error, round_)
+                        flags.append(
+                            parsed_a.value.addressed if parsed_a.value is not None else False
+                        )
+                    if not (flags and all(flags)):
                         continue
                 self.supersede_objection(critique.id)
 
@@ -513,7 +558,9 @@ class DebateEngine:
                         opponent_thesis=target.platform.thesis if target.platform else "",
                     )),
                 )
-                if not data.get("switch"):
+                parsed_s = parse_stage(SwitchVote, data, stage="switch")
+                self._record_parse(parsed_s.error, round_)
+                if parsed_s.value is None or not parsed_s.value.switch:
                     continue
                 from_thesis = faction.platform.thesis if faction.platform else ""
                 to_thesis = target.platform.thesis if target.platform else ""
@@ -521,7 +568,7 @@ class DebateEngine:
                     continue
                 switch = FactionSwitch(
                     model=member, from_faction=faction.name, to_faction=target.name,
-                    convinced_by=str(data.get("convinced_by") or ""),
+                    convinced_by=parsed_s.value.convinced_by,
                     objection_id=objection.id,
                     action_id=(
                         target.platform.action.action_id

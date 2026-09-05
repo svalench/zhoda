@@ -359,5 +359,245 @@ async def test_concede_skips_closure_and_debate_calls_are_cached() -> None:
     )
     assert closure_asked["n"] == 0
     assert all(c.status is ObjectionStatus.OPEN for c in round_.critiques)
-    assert keys
-    assert all(k for k in keys)
+@pytest.mark.asyncio
+async def test_c2_string_false_does_not_close_objection() -> None:
+    factions, round_ = await _two_faction_round(closure={"closed": "false"})
+    assert all(c.status is ObjectionStatus.OPEN for c in round_.critiques)
+    assert round_.parse_failures
+    assert any(f.stage == "closure" for f in round_.parse_failures)
+    assert factions[0].members == ["Response A"]
+
+
+@pytest.mark.asyncio
+async def test_c2_bool_false_stays_open_bool_true_closes() -> None:
+    _, open_round = await _two_faction_round(closure={"closed": False})
+    assert all(c.status is ObjectionStatus.OPEN for c in open_round.critiques)
+    _, closed_round = await _two_faction_round(closure={"closed": True})
+    assert closed_round.critiques
+    assert all(c.status is ObjectionStatus.CLOSED for c in closed_round.critiques)
+
+
+@pytest.mark.asyncio
+async def test_c3_string_false_does_not_apply_revision() -> None:
+    new_thesis = "Use PostgreSQL with a partitioning plan for write scaling"
+    factions, round_ = await _two_faction_round(
+        closure={"closed": False},
+        revise_pg={
+            "thesis": new_thesis,
+            "answer": new_thesis,
+            "changed": "false",
+            "change_note": "added partitioning",
+            "confidence": 0.8,
+        },
+    )
+    assert factions[0].platform is not None
+    assert factions[0].platform.thesis == "Use PostgreSQL (simple, sufficient)"
+    assert round_.revisions == []
+
+
+@pytest.mark.asyncio
+async def test_c3_bool_true_applies_revision() -> None:
+    new_thesis = "Use PostgreSQL with a partitioning plan for write scaling"
+    factions, round_ = await _two_faction_round(
+        closure={"closed": False},
+        revise_pg={
+            "thesis": new_thesis,
+            "answer": new_thesis,
+            "changed": True,
+            "change_note": "added partitioning",
+            "confidence": 0.8,
+        },
+        addressed={"addressed": False},
+    )
+    assert factions[0].platform is not None
+    assert factions[0].platform.thesis == new_thesis
+    assert round_.revisions
+
+
+@pytest.mark.asyncio
+async def test_c3_string_true_does_not_apply_revision() -> None:
+    """StrictBool: строка \"true\" — не переход."""
+    new_thesis = "Use PostgreSQL with a partitioning plan for write scaling"
+    factions, round_ = await _two_faction_round(
+        closure={"closed": False},
+        revise_pg={
+            "thesis": new_thesis,
+            "answer": new_thesis,
+            "changed": "true",
+            "change_note": "added partitioning",
+            "confidence": 0.8,
+        },
+    )
+    assert factions[0].platform is not None
+    assert factions[0].platform.thesis == "Use PostgreSQL (simple, sufficient)"
+    assert round_.revisions == []
+
+
+@pytest.mark.asyncio
+async def test_c4_string_false_does_not_supersede() -> None:
+    new_thesis = "Use PostgreSQL with a partitioning plan for write scaling"
+    factions, round_ = await _two_faction_round(
+        closure={"closed": False},
+        revise_pg={
+            "thesis": new_thesis,
+            "answer": new_thesis,
+            "changed": True,
+            "change_note": "added partitioning",
+            "confidence": 0.8,
+        },
+        withdraw={"withdraw": False},
+        addressed={"addressed": "false"},
+    )
+    assert factions[0].platform is not None
+    assert factions[0].platform.thesis == new_thesis
+    against = [c for c in round_.critiques if c.target_faction == "Pragmatists"]
+    assert against
+    assert all(c.status is ObjectionStatus.OPEN for c in against)
+
+
+@pytest.mark.asyncio
+async def test_c4_bool_true_supersedes_after_revision() -> None:
+    new_thesis = "Use PostgreSQL with a partitioning plan for write scaling"
+    _, round_ = await _two_faction_round(
+        closure={"closed": False},
+        revise_pg={
+            "thesis": new_thesis,
+            "answer": new_thesis,
+            "changed": True,
+            "change_note": "added partitioning",
+            "confidence": 0.8,
+        },
+        withdraw={"withdraw": False},
+        addressed={"addressed": True},
+    )
+    against = [c for c in round_.critiques if c.target_faction == "Pragmatists"]
+    assert against
+    assert all(c.status is ObjectionStatus.SUPERSEDED for c in against)
+
+
+@pytest.mark.asyncio
+async def test_c5_string_false_does_not_move_member() -> None:
+    factions, round_ = await _two_faction_round(
+        closure={"closed": False},
+        switch={
+            "switch": "false",
+            "convinced_by": "PostgreSQL handles 50k RPS writes on a single node",
+        },
+    )
+    assert factions[0].members == ["Response A"]
+    assert factions[1].members == ["Response B"]
+    assert round_.switches == []
+
+
+@pytest.mark.asyncio
+async def test_c5_bool_true_moves_member_bool_false_does_not() -> None:
+    claim = "PostgreSQL handles 50k RPS writes on a single node"
+    factions_stay, _ = await _two_faction_round(
+        closure={"closed": False},
+        switch={"switch": False, "convinced_by": claim},
+    )
+    assert factions_stay[0].members == ["Response A"]
+    factions_move, round_ = await _two_faction_round(
+        closure={"closed": False},
+        switch={"switch": True, "convinced_by": claim},
+    )
+    assert "Response A" in factions_move[1].members
+    assert "Response A" not in factions_move[0].members
+    assert round_.switches
+
+
+async def _two_faction_round(
+    *,
+    closure: dict | None = None,
+    revise_pg: dict | None = None,
+    revise_kf: dict | None = None,
+    withdraw: dict | None = None,
+    addressed: dict | None = None,
+    switch: dict | None = None,
+):
+    from zhoda_core.factions import Faction
+    from zhoda_core.judges import Judges
+    from zhoda_core.models import Position
+
+    closure = closure or {"closed": False}
+    revise_pg = revise_pg or {
+        "changed": False,
+        "thesis": "Use PostgreSQL (simple, sufficient)",
+        "answer": "pg",
+        "change_note": "",
+    }
+    revise_kf = revise_kf or {
+        "changed": False,
+        "thesis": "Use Kafka (built for throughput)",
+        "answer": "kf",
+        "change_note": "",
+    }
+    withdraw = withdraw or {"withdraw": False}
+    addressed = addressed or {"addressed": False}
+    switch = switch or {
+        "switch": False,
+        "convinced_by": "the objection overstates operational cost",
+    }
+
+    class Spy:
+        async def complete(self, model, prompt, *, cache_key=None, **kwargs):
+            del model, cache_key, kwargs
+            if "Rebut it concisely" in prompt:
+                return "Partitioning is a solved operational pattern."
+            raise AssertionError(prompt[:120])
+
+        async def ask_json(self, model, prompt, *, cache_key=None, **kwargs):
+            del model, cache_key, kwargs
+            if "Did the rebuttal" in prompt:
+                return closure
+            if "Produce ONE" in prompt:
+                if 'You represent faction "Pragmatists"' in prompt:
+                    return {
+                        "target_faction": "Throughputists",
+                        "flaw_type": "factual",
+                        "claim": "Kafka adds operational complexity the team cannot staff",
+                        "specifics": "",
+                        "evidence_url": None,
+                    }
+                return {
+                    "target_faction": "Pragmatists",
+                    "flaw_type": "factual",
+                    "claim": "PostgreSQL handles 50k RPS writes on a single node",
+                    "specifics": "",
+                    "evidence_url": None,
+                }
+            if "Revise your platform" in prompt:
+                if 'Your faction "Pragmatists"' in prompt:
+                    return revise_pg
+                return revise_kf
+            if "withdraw your objection" in prompt:
+                return withdraw
+            if "Does the revised platform" in prompt:
+                return addressed
+            if "Do you switch factions?" in prompt:
+                return switch
+            return {}
+
+    pg = Position(
+        model="Response A",
+        thesis="Use PostgreSQL (simple, sufficient)",
+        answer="pg",
+    )
+    kf = Position(
+        model="Response B",
+        thesis="Use Kafka (built for throughput)",
+        answer="kf",
+    )
+    factions = [
+        Faction(name="Pragmatists", members=["Response A"], platform=pg),
+        Faction(name="Throughputists", members=["Response B"], platform=kf),
+    ]
+    engine = DebateEngine(provider=Spy())  # type: ignore[arg-type]
+    round_ = await engine.run_round(
+        1,
+        factions,
+        speakers={"Response A": "m1", "Response B": "m2"},
+        judges=Judges(("j1", "j2"), {}),
+    )
+    return factions, round_
+

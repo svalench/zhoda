@@ -9,6 +9,7 @@ import asyncio
 
 from .models import Position, ValueMap, bind_user_context
 from .providers.openrouter import OpenRouterProvider, make_cache_key
+from .stage_dtos import position_from_model
 
 POSITION_PROMPT = """You are one member of a council. Give your independent structured stance.
 
@@ -57,7 +58,10 @@ async def extract_positions(
             prompt,
             cache_key=make_cache_key("pos", model, prompt),
         )
-        return Position(model=aliases[model], **data)
+        parsed = position_from_model(data, alias=aliases[model], prompt=prompt)
+        if parsed.value is None:
+            raise ValueError(parsed.error.error if parsed.error else "invalid position")
+        return parsed.value
 
     results = await asyncio.gather(*(one(m) for m in council), return_exceptions=True)
     positions = [r for r in results if isinstance(r, Position)]

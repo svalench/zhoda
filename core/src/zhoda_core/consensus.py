@@ -21,6 +21,7 @@ from .judges import Judges
 from .models import ConsensusStrength, bind_user_context
 from .providers.openrouter import OpenRouterProvider, make_cache_key
 from .actions import OptionCatalog, decision_fingerprint, fingerprints_stable
+from .stage_dtos import AgreeVote, ParseFailure, parse_stage
 
 AGREEMENT_PROMPT = """User question: {question}
 
@@ -48,6 +49,7 @@ class ConsensusChecker:
         self._unanimous_streak = 0
         self._majority_streak = 0
         self._last_fingerprint: tuple[tuple[str, tuple[str, ...]], ...] | None = None
+        self.parse_failures: list[ParseFailure] = []
 
     @property
     def majority_is_stable(self) -> bool:
@@ -75,6 +77,7 @@ class ConsensusChecker:
             ),
             self.user_context,
         )
+        self.parse_failures = []
         votes = await asyncio.gather(
             *(
                 self.provider.ask_json(
@@ -86,7 +89,21 @@ class ConsensusChecker:
             ),
             return_exceptions=True,
         )
-        unanimous = bool(votes) and all(isinstance(v, dict) and v.get("all_agree") for v in votes)
+        flags: list[bool] = []
+        for vote in votes:
+            parsed = parse_stage(
+                AgreeVote,
+                vote if isinstance(vote, dict) else None,
+                stage="agree",
+                prompt=prompt,
+            )
+            if parsed.error is not None:
+                self.parse_failures.append(parsed.error)
+                flags.append(False)
+                continue
+            flags.append(parsed.value.all_agree if parsed.value is not None else False)
+        # Невалидный JSON / "false" / 0 — не unanimity. Пара должна целиком согласиться.
+        unanimous = bool(pair) and bool(flags) and all(flags)
         if unanimous:
             return ConsensusStrength.UNANIMOUS
         if total and top / total >= 2 / 3:

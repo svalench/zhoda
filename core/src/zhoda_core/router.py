@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from .models import Protocol, TaskClass
 from .providers.openrouter import OpenRouterProvider, make_cache_key
+from .stage_dtos import ClassifyVote, parse_stage
 
 PROTOCOL_BY_CLASS: dict[TaskClass, Protocol] = {
     TaskClass.FACTUAL_LOOKUP: Protocol.VOTE,
@@ -62,18 +63,28 @@ class ProtocolRouter:
             self._classify(question, self.classifiers[0]),
             self._classify(question, self.classifiers[1]),
         )
-        if first == second:
+        if first is not None and first == second:
             return RouteDecision(
                 task_class=first, protocol=PROTOCOL_BY_CLASS[first], confidence=1.0,
             )
-        thorough = max((first, second), key=lambda c: THOROUGHNESS[PROTOCOL_BY_CLASS[c]])
+        valid = [item for item in (first, second) if item is not None]
+        if len(valid) >= 2:
+            thorough = max(valid, key=lambda c: THOROUGHNESS[PROTOCOL_BY_CLASS[c]])
+        elif valid:
+            thorough = valid[0]
+        else:
+            thorough = TaskClass.DECISION
         return RouteDecision(
             task_class=thorough, protocol=FALLBACK_PROTOCOL, confidence=0.0,
         )
 
-    async def _classify(self, question: str, model: str) -> TaskClass:
+    async def _classify(self, question: str, model: str) -> TaskClass | None:
+        prompt = CLASSIFY_PROMPT.format(question=question)
         data = await self.provider.ask_json(
-            model, CLASSIFY_PROMPT.format(question=question),
+            model, prompt,
             cache_key=make_cache_key("route", model, question),
         )
-        return TaskClass(data["task_class"])
+        parsed = parse_stage(ClassifyVote, data, stage="route", prompt=prompt)
+        if parsed.value is None:
+            return None
+        return parsed.value.task_class

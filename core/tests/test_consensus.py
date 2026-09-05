@@ -145,3 +145,37 @@ async def test_paraphrase_does_not_reset_xor_stability() -> None:
     zhoda, strength = await checker.check(paraphrased, judges=judges)
     assert strength is ConsensusStrength.UNANIMOUS
     assert zhoda is True
+
+
+@pytest.mark.asyncio
+async def test_c1_string_false_is_not_unanimous() -> None:
+    provider = StubProvider({"all_agree": "false"})
+    checker = ConsensusChecker(provider)  # type: ignore[arg-type]
+    strength = await checker.classify(
+        [
+            _faction("A", "Use PostgreSQL", "PG"),
+            _faction("B", "Use PostgreSQL", "PG"),
+        ],
+        judges=Judges(("j1", "j2"), {}),
+    )
+    assert strength is not ConsensusStrength.UNANIMOUS
+    assert checker.parse_failures
+
+
+@pytest.mark.asyncio
+async def test_c1_bool_controls_and_string_true_rejected() -> None:
+    factions = [
+        _faction("A", "Use PostgreSQL", "PG"),
+        _faction("B", "Use PostgreSQL", "PG"),
+    ]
+    judges = Judges(("j1", "j2"), {})
+    yes = ConsensusChecker(StubProvider({"all_agree": True}))  # type: ignore[arg-type]
+    no = ConsensusChecker(StubProvider({"all_agree": False}))  # type: ignore[arg-type]
+    stray = ConsensusChecker(StubProvider({"all_agree": "true"}))  # type: ignore[arg-type]
+    one = ConsensusChecker(StubProvider({"all_agree": 1}))  # type: ignore[arg-type]
+    assert await yes.classify(factions, judges=judges) is ConsensusStrength.UNANIMOUS
+    assert await no.classify(factions, judges=judges) is not ConsensusStrength.UNANIMOUS
+    assert await stray.classify(factions, judges=judges) is not ConsensusStrength.UNANIMOUS
+    assert await one.classify(factions, judges=judges) is not ConsensusStrength.UNANIMOUS
+    assert stray.parse_failures
+    assert one.parse_failures

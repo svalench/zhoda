@@ -79,3 +79,18 @@ async def test_judge_different_keeps_postgres_vs_kafka() -> None:
         speakers={"a1": "m1", "a2": "m2"},
     )
     assert len(factions) == 2
+
+
+@pytest.mark.asyncio
+async def test_c1_pairwise_string_false_does_not_merge() -> None:
+    provider = QueueProvider([{"same": "false", "divergence": "x"}])
+    clusterer = FactionClusterer(provider)  # type: ignore[arg-type]
+    factions = await clusterer.cluster(
+        [
+            _pos("a1", "Use PostgreSQL as the system of record for the ledger"),
+            _pos("a2", "Pick Postgres because ACID beats an event log"),
+        ],
+        judges=Judges(("j1", "j2"), {}),
+        speakers={"a1": "m1", "a2": "m2"},
+    )
+    assert len(factions) == 2

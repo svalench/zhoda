@@ -25,7 +25,7 @@ from .datasets import (
     BenchmarkCase,
     SeedAgent,
 )
-from .judge import BlindJudge
+from .judge import BlindJudge, GradeStatus
 
 MODE_ZHODA = "zhoda"
 MODE_MAJORITY = "majority"
@@ -141,6 +141,8 @@ class CaseResult:
     zhoda_reached: bool = False
     correct_heuristic: Optional[bool] = None
     judge_picked: Optional[str] = None
+    grade_status: Optional[str] = None
+    grade_error: Optional[str] = None
 
 
 def cost_kwargs(report: CostReport) -> dict[str, int | float]:
@@ -415,9 +417,15 @@ class ComparativeRunner:
         )
         result = self.judge.evaluate(case, outcome, mode, match=match)
         if self.blind_judge is not None:
-            ok, picked = await self.blind_judge.score(case, outcome.decision)
-            result.correct = ok
-            result.judge_picked = picked
+            grade = await self.blind_judge.score(case, outcome.decision)
+            result.grade_status = str(grade.status)
+            result.grade_error = grade.error
+            result.judge_picked = grade.picked_id
+            if grade.status is GradeStatus.GRADED:
+                result.correct = grade.correct
+            else:
+                # ungraded ≠ incorrect: coverage считает F
+                result.correct = None
         if callable(self.on_result):
             self.on_result(result)
         return result

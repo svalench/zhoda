@@ -723,17 +723,32 @@ def test_build_live_arms_shared_cache_reuses_one_file(tmp_path, monkeypatch) -> 
 
 
 def test_blind_judge_requires_committed_gold() -> None:
-    from zhoda_core.benchmarks.judge import apply_blind_verdict, gold_label
+    from zhoda_core.benchmarks.judge import apply_blind_verdict, gold_label, pick_matches_gold
 
     case = next(c for c in builtin_cases("decision") if c.id == "arch-pg-kafka")
     assert gold_label(case) == "PostgreSQL"
     assert apply_blind_verdict(True, "PostgreSQL", "PostgreSQL") is True
     assert apply_blind_verdict(False, "PostgreSQL", "PostgreSQL") is False
     assert apply_blind_verdict(True, "Kafka", "PostgreSQL") is False
+    assert pick_matches_gold("Not PostgreSQL", "PostgreSQL") is False
+    assert pick_matches_gold("PostgreSQL", "PostgreSQL") is True
+
+
+def test_c7_negated_pick_is_not_gold() -> None:
+    from zhoda_core.benchmarks.judge import pick_matches_gold, resolve_picked_id
+
+    assert pick_matches_gold("Not PostgreSQL", "PostgreSQL") is False
+    assert pick_matches_gold(
+        "Not PostgreSQL", "PostgreSQL", ("PostgreSQL", "Kafka"),
+    ) is False
+    assert resolve_picked_id("1", ("Monolith", "Microservices")) is None
+    assert resolve_picked_id("No", ("Monolith", "Microservices")) is None
+    assert resolve_picked_id("Нет", ("Monolith", "Microservices")) is None
+    assert resolve_picked_id("Monolith", ("Monolith", "Microservices")) == "Monolith"
 
 
 def test_blind_llm_judge_hides_arm_and_rejects_dissent() -> None:
-    from zhoda_core.benchmarks.judge import BlindLlmJudge
+    from zhoda_core.benchmarks.judge import BlindLlmJudge, GradeStatus
 
     prompts: list[str] = []
 
@@ -745,14 +760,60 @@ def test_blind_llm_judge_hides_arm_and_rejects_dissent() -> None:
 
     case = next(c for c in builtin_cases("decision") if c.id == "arch-pg-kafka")
     judge = BlindLlmJudge(Provider(), "judge-model")  # type: ignore[arg-type]
-    ok, picked = asyncio.run(
+    grade = asyncio.run(
         judge.score(case, "No zhoda (majority). PostgreSQL Advocates: … Kafka: …")
     )
-    assert ok is False
-    assert picked == ""
+    assert grade.status is GradeStatus.GRADED
+    assert grade.correct is False
+    assert grade.picked_id is None
     assert "mode=" not in prompts[0]
     assert "producing system is hidden" in prompts[0]
     assert "majority at cap" in prompts[0]
+
+
+def test_c6_string_false_committed_on_hedge_is_ungraded() -> None:
+    from zhoda_core.benchmarks.judge import BlindLlmJudge, GradeStatus
+
+    class Provider:
+        async def ask_json(self, model: str, prompt: str, cache_key: str | None = None) -> dict:
+            del model, prompt, cache_key
+            return {"committed": "false", "picked": "Monolith", "reason": "hedge"}
+
+    case = next(c for c in builtin_cases("decision") if c.id == "arch-monolith")
+    judge = BlindLlmJudge(Provider(), "judge-model")  # type: ignore[arg-type]
+    grade = asyncio.run(judge.score(case, "It depends."))
+    assert grade.status is GradeStatus.UNGRADED
+    assert grade.correct is None
+    assert grade.correct is not True
+
+
+def test_c6_bool_controls_committed_on_monolith() -> None:
+    from zhoda_core.benchmarks.judge import BlindLlmJudge, GradeStatus
+
+    class Provider:
+        def __init__(self, payload: dict) -> None:
+            self.payload = payload
+
+        async def ask_json(self, model: str, prompt: str, cache_key: str | None = None) -> dict:
+            del model, prompt, cache_key
+            return self.payload
+
+    case = next(c for c in builtin_cases("decision") if c.id == "arch-monolith")
+    miss = asyncio.run(
+        BlindLlmJudge(Provider({"committed": False, "picked": "Monolith", "reason": "hedge"}), "j").score(  # type: ignore[arg-type]
+            case, "It depends."
+        )
+    )
+    hit = asyncio.run(
+        BlindLlmJudge(Provider({"committed": True, "picked": "Monolith", "reason": "pick"}), "j").score(  # type: ignore[arg-type]
+            case, "Use a monolith."
+        )
+    )
+    assert miss.status is GradeStatus.GRADED
+    assert miss.correct is False
+    assert hit.status is GradeStatus.GRADED
+    assert hit.correct is True
+    assert hit.picked_id == "Monolith"
 
 
 def test_heuristic_scores_labeled_majority_recommendation() -> None:
@@ -782,12 +843,18 @@ def test_heuristic_scores_labeled_majority_recommendation() -> None:
 
 
 def test_blind_judge_overrides_heuristic() -> None:
+    from zhoda_core.benchmarks.judge import GradeResult, GradeStatus
     from zhoda_core.benchmarks.runner import MATCH_COMPUTE, MODE_ZHODA
 
     class RejectJudge:
-        async def score(self, case: object, decision: str) -> tuple[bool, str]:
+        async def score(self, case: object, decision: str) -> GradeResult:
             del case, decision
-            return False, "hedge"
+            return GradeResult(
+                status=GradeStatus.GRADED,
+                committed=False,
+                picked_id="hedge",
+                correct=False,
+            )
 
     runner = ComparativeRunner(
         compare_modes=(MODE_ZHODA,),
@@ -800,5 +867,27 @@ def test_blind_judge_overrides_heuristic() -> None:
     assert results[0].correct_heuristic is True
     assert results[0].correct is False
     assert results[0].judge_picked == "hedge"
+
+
+def test_ungraded_blind_judge_does_not_become_incorrect() -> None:
+    from zhoda_core.benchmarks.judge import GradeResult, GradeStatus
+    from zhoda_core.benchmarks.runner import MATCH_COMPUTE, MODE_ZHODA
+
+    class BrokenJudge:
+        async def score(self, case: object, decision: str) -> GradeResult:
+            del case, decision
+            return GradeResult(status=GradeStatus.UNGRADED, error="bool_type")
+
+    runner = ComparativeRunner(
+        compare_modes=(MODE_ZHODA,),
+        tables=(MATCH_COMPUTE,),
+        blind_judge=BrokenJudge(),  # type: ignore[arg-type]
+    )
+    case = next(c for c in builtin_cases("decision") if c.id == "arch-monolith")
+    results = asyncio.run(runner.run_suite([case], MODELS, mode="compare", rounds=2))
+    assert results[0].grade_status == "ungraded"
+    assert results[0].grade_error == "bool_type"
+    assert results[0].correct is None
+    assert results[0].correct_heuristic is not None
 
 

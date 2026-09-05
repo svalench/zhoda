@@ -75,7 +75,8 @@ driver sanitizes” ambiguities that wash findings out of `decision`.
 
 ```python
 Claim { claim, evidence_url?, confidence, verified }
-# label: "sourced" (verified or user-provided) |
+# verified is engine-owned. Model JSON cannot set it.
+# label: "sourced" (engine verifier or user-provided) |
 #        "unverified_claim" (URL named from memory) | "assumption" (no URL)
 # round-10 §1: a hallucinated link never gets institutional weight
 Position {
@@ -98,6 +99,37 @@ ambiguities) is prepended to every prompt that reasons about the question
 (positions, faction synthesis, critiques, rebuttals, revision, consensus,
 verdict, appeal). The cache key hashes the full prompt, so a new answer
 cannot replay a stale position.
+
+## Trust boundary — untrusted stage JSON
+
+Every `ask_json` object is parsed through a stage DTO in
+`zhoda_core.stage_dtos` before it can change protocol state. Boolean
+fields use Pydantic `StrictBool`: JSON `true`/`false` only. Strings
+`"true"`/`"false"`, `0`/`1`, `null`, and missing required flags are
+**parse failures**, not transitions. A parse failure is stored as
+`ParseFailure` (`stage`, `error`, `field`, redacted `raw_preview` /
+`prompt_preview`) on the round / consensus checker. It is **not**
+unanimous, **not** CLOSED, **not** SUPERSEDED, **not** a revision, **not**
+a switch, and **not** sourced trust.
+
+Engine-owned fields the model may not set: `verified`,
+`evidence_verified`, `status`, `action`, `id`, `rebuttal`,
+`zhoda_reached`, `consensus_strength`, `decision_origin`. A URL in a
+claim is `unverified_claim` until a verifier (package E) or a
+user-provided source marks it. `ActionContract` stays the B engine
+binder — model JSON cannot import an `action_id`.
+
+`ask_json` may repair **syntax** once (not a JSON object → retry
+“return ONLY valid JSON”). Repair does not invent `committed` /
+`closed` / `verified`. There is no semantic repair loop; retry
+accounting belongs to D.
+
+Public serialization additions (optional, default-empty):
+`Round.parse_failures`, `CaseResult.grade_status` / `grade_error`.
+Blind grader returns `GradeResult`: `graded|ungraded`, `committed`,
+`picked_id` (exact allowed label, no substring), `correct`,
+`reason`/`error`. Ungraded is **not** mapped to incorrect; coverage
+aggregation is package F.
 
 ## Stage 2 — Factions
 
@@ -296,7 +328,8 @@ is 51 tasks (XOR architecture, security, ops, plus sycophancy/minority
 seeds). `paths_rejected` on a reached zhoda is `dead_ends`; the report
 adds `avg_dead_ends` and `dead_ends_per_usd`. Headline accuracy is
 keyword-first; `--judge llm` overlays a blind committed-pick judge
-(arm name hidden; dissent map is a miss). Each compare arm gets its
+(arm name hidden; dissent map is a miss). Invalid judge JSON
+(`committed: "false"`) is `ungraded`, not a gold hit. Each compare arm gets its
 own sqlite (`cache-zhoda.db`, `cache-majority.db`, …) so vote does
 not reuse debate completions. `--shared-cache` restores the old leak.
 Live numbers: [docs/benchmarks-and-reputation.md](benchmarks-and-reputation.md)

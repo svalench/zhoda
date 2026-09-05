@@ -165,7 +165,12 @@ class OpenRouterProvider:
                 self._reserved_usd -= estimate
 
     async def ask_json(self, model: str, prompt: str, *, cache_key: str | None = None) -> dict:
-        """Strict JSON OBJECT with one repair retry (round-7: arrays rejected)."""
+        """Strict JSON OBJECT with one syntax-only repair retry.
+
+        Repair asks the model to return valid JSON; it does not invent
+        committed/closed/verified or treat ambiguous output as success.
+        Stage DTOs decide whether the object is a valid transition.
+        """
         text = await self.complete(
             model, prompt + "\n\nRespond with ONLY valid JSON. No markdown, no commentary.",
             cache_key=cache_key,

@@ -16,7 +16,7 @@ jobs:
         working-directory: core
       - run: uv run ruff check .
         working-directory: core
-      - run: uv run mypy src/zhoda_core/benchmarks src/zhoda_core/actions.py
+      - run: uv run mypy src/zhoda_core/benchmarks src/zhoda_core/actions.py src/zhoda_core/stage_dtos.py
         working-directory: core
       - run: uv run pytest -m "not live"
         working-directory: core

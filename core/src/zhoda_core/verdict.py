@@ -31,6 +31,7 @@ from .models import (
     bind_user_context,
 )
 from .providers.openrouter import OpenRouterProvider, make_cache_key
+from .stage_dtos import DecisionVote, parse_stage
 
 SYNTHETIC_LABEL = (
     "[synthetic opposition — no council model held this position]"
@@ -234,7 +235,10 @@ async def synthesize_decision(
         prompt,
         cache_key=make_cache_key("decision", chairman, prompt),
     )
-    decision = str(data.get("decision") or "").strip()
+    parsed = parse_stage(DecisionVote, data, stage="decision", prompt=prompt)
+    if parsed.value is None:
+        raise ValueError(parsed.error.error if parsed.error else "invalid decision")
+    decision = parsed.value.decision.strip()
     if not decision:
         raise ValueError("empty synthesized decision")
     thesis = leading.platform.thesis

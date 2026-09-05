@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from .models import ValueMap
 from .providers.openrouter import OpenRouterProvider, make_cache_key
+from .stage_dtos import DedupVote, ElicitVote, parse_stage
 
 ASK_BATCH = 3
 DEFAULT_MAX_ELICIT_TURNS = 4
@@ -139,14 +140,23 @@ class Elicitor:
             ),
             return_exceptions=True,
         )
-        payloads = [r for r in results if isinstance(r, dict)]
+        payloads = []
+        for raw in results:
+            parsed = parse_stage(
+                ElicitVote,
+                raw if isinstance(raw, dict) else None,
+                stage="elicit",
+            )
+            if parsed.value is None:
+                continue
+            payloads.append(parsed.value)
         if not payloads:
             raise RuntimeError("all council models failed at elicitation")
 
-        flagged = [p for p in payloads if p.get("ambiguities")]
+        flagged = [p for p in payloads if p.ambiguities]
         score = len(flagged) / len(payloads)
 
-        ambiguities = [a for p in flagged for a in p["ambiguities"]]
+        ambiguities = [a.model_dump() for p in flagged for a in p.ambiguities]
         questions = [q for a in ambiguities if (q := _as_question(a)) is not None]
         questions = await self._dedup_questions(questions, dedup_model=dedup_model)
         questions = _prefer_grounding(questions)
@@ -261,9 +271,10 @@ class Elicitor:
                 DEDUP_PROMPT.format(numbered=numbered),
                 cache_key=make_cache_key("dedup", numbered),
             )
-            groups = data.get("groups")
-            if not isinstance(groups, list):
+            parsed = parse_stage(DedupVote, data, stage="dedup")
+            if parsed.value is None:
                 return unique
+            groups = parsed.value.groups
             merged: list[ClarifyingQuestion] = []
             seen: set[int] = set()
             for group in groups:

@@ -30,6 +30,11 @@ Current mapping (keep updated):
 | Compare --arms/--tables slice skips unselected spend | tests/test_benchmarks.py::test_compare_arms_and_tables_slice |
 | Per-arm sqlite cache; vote does not reuse debate keys | tests/test_benchmarks.py::test_build_live_arms_uses_distinct_cache_files |
 | Blind LLM judge: committed gold, dissent is a miss | tests/test_benchmarks.py::test_blind_judge_requires_committed_gold + test_blind_llm_judge_hides_arm_and_rejects_dissent |
+| StrictBool stage DTOs; `"false"` is not a transition | tests/test_stage_dtos.py + tests/test_consensus.py::test_c1_string_false_is_not_unanimous + tests/test_debate.py::test_c2_string_false_does_not_close_objection |
+| String committed/picked hedge is ungraded, not correct | tests/test_benchmarks.py::test_c6_string_false_committed_on_hedge_is_ungraded |
+| pick_matches_gold is exact ID, not substring | tests/test_benchmarks.py::test_c7_negated_pick_is_not_gold |
+| Model verified=true does not mint sourced trust | tests/test_stage_dtos.py::test_c8_model_verified_does_not_grant_sourced_trust |
+| Ungraded grade does not become incorrect | tests/test_benchmarks.py::test_ungraded_blind_judge_does_not_become_incorrect |
 | SC majority on `answer` field, not full text | tests/test_benchmarks.py::test_self_consistency_votes_on_answer_not_full_text |
 | SC maps to `answer_options` | tests/test_benchmarks.py::test_self_consistency_maps_to_answer_options |
 | Open-ended SC clusters via blind judge | tests/test_benchmarks.py::test_self_consistency_open_ended_clusters_equivalent_answers |

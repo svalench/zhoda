@@ -33,7 +33,6 @@ from .models import (
     CostReport,
     Disagreement,
     ObjectionStatus,
-    Position,
     PremiseRole,
     Protocol,
     ValueMap,
@@ -48,6 +47,7 @@ from .router import ProtocolRouter
 from .transcripts import TranscriptStore
 from .tree import build_decision_tree
 from .verdict import VerdictBuilder, synthesize_decision
+from .stage_dtos import DecisionVote, parse_stage, position_from_model
 
 NAMING_PROMPT = """Name each faction descriptively (e.g. \"Pragmatists\", \"Maximalists\").
 Factions:
@@ -446,7 +446,14 @@ class ZhodaEngine:
                         zhoda = True
                     self.transcripts.append(
                         tid,
-                        {"stage": "consensus", "zhoda": zhoda, "strength": str(strength)},
+                        {
+                            "stage": "consensus",
+                            "zhoda": zhoda,
+                            "strength": str(strength),
+                            "parse_failures": [
+                                f.model_dump() for f in consensus.parse_failures
+                            ],
+                        },
                     )
                     emit("consensus", f"zhoda={zhoda} {strength}", done=True)
                     if zhoda:
@@ -481,7 +488,12 @@ class ZhodaEngine:
                 appeal_prompt,
                 cache_key=make_cache_key("appeal", self.escalation_model, appeal_prompt),
             )
-            appeal_decision = appeal.get("decision")
+            parsed_appeal = parse_stage(
+                DecisionVote, appeal, stage="appeal", prompt=appeal_prompt,
+            )
+            appeal_decision = (
+                parsed_appeal.value.decision if parsed_appeal.value is not None else None
+            )
             self.transcripts.append(
                 tid,
                 {"stage": "appeal", "model": self.escalation_model, **appeal},
@@ -619,11 +631,13 @@ class ZhodaEngine:
                 opp_prompt,
                 cache_key=make_cache_key("opp", actor, opp_prompt),
             )
-            platform = Position(model=ADVOCATE_ALIAS, **data)
-            platform = platform.model_copy(
+            parsed = position_from_model(data, alias=ADVOCATE_ALIAS, prompt=opp_prompt)
+            if parsed.value is None:
+                return None
+            platform = parsed.value.model_copy(
                 update={
                     "action": attach_action(
-                        platform.thesis, platform.answer, option_catalog(question)
+                        parsed.value.thesis, parsed.value.answer, option_catalog(question)
                     )
                 }
             )

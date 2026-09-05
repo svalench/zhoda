@@ -19,6 +19,7 @@ from .models import (
     bind_user_context,
 )
 from .providers.openrouter import OpenRouterProvider, make_cache_key
+from .stage_dtos import plan_from_model
 
 PLAN_PROMPT = """Render this deliberation outcome as a PLAN CONTRACT for a cheaper
 executor model. The executor is dumber than the council: every step needs its
@@ -113,7 +114,8 @@ async def render_plan_contract(
         prompt,
         cache_key=make_cache_key("plan", chairman, prompt),
     )
-    contract = PlanContract(**data)
+    parsed = plan_from_model(data, prompt=prompt)
+    contract = parsed.value if parsed.value is not None else PlanContract(goal=verdict.decision)
     contract.rejected_paths = verdict.paths_rejected
     contract.open_ambiguities = verdict.value_map.open_ambiguities
     return contract
