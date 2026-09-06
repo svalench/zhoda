@@ -28,13 +28,18 @@ from .guards import (
     loaded_premise_ambiguities,
 )
 from .judges import Judges
+from .claims import collect_ledger, stamp_position
+from .evidence import bind_evidence, bundle_from_context
 from .models import (
     ConsensusStrength,
     CostReport,
     Disagreement,
+    EventType,
+    EvidenceBundle,
     ObjectionStatus,
     PremiseRole,
     Protocol,
+    ProtocolEvent,
     RunCompleteness,
     RunContext,
     ValueMap,
@@ -45,6 +50,7 @@ from .plan import collect_rejected_paths, render_plan_contract
 from .positions import extract_positions
 from .progress import ProgressEvent
 from .providers.openrouter import OpenRouterProvider, make_cache_key
+from .replay import EventLog
 from .router import ProtocolRouter
 from .transcripts import TranscriptStore
 from .tree import build_decision_tree
@@ -244,6 +250,27 @@ class ZhodaEngine:
         debate.catalog = catalog
         clusterer.catalog = catalog
         consensus.catalog = catalog
+        evidence = bundle_from_context(context)
+        debate.evidence = evidence
+        clusterer.evidence = evidence
+
+        def _sink(event: ProtocolEvent) -> None:
+            self.transcripts.append(
+                tid, {"stage": "protocol_event", "event": event.model_dump(mode="json")}
+            )
+
+        log = EventLog(run_id=run_id, transcript_id=tid, sink=_sink)
+        debate.events = log
+        log.emit(
+            EventType.RUN_STARTED,
+            {
+                "question": question,
+                "protocol": str(force_protocol or ""),
+                "council": list(self.council),
+            },
+        )
+        if evidence is not None:
+            log.emit(EventType.EVIDENCE_ATTACHED, evidence.manifest())
         seed = (
             self.alias_seed
             if self.alias_seed is not None
@@ -385,10 +412,15 @@ class ZhodaEngine:
             aliases,
             context=context,
             completeness=completeness,
+            evidence=evidence,
         )
+        evidence_id = evidence.source_id if evidence is not None else None
         positions = [
-            pos.model_copy(
-                update={"action": attach_action(pos.thesis, pos.answer, catalog)}
+            stamp_position(
+                pos.model_copy(
+                    update={"action": attach_action(pos.thesis, pos.answer, catalog)}
+                ),
+                evidence_id=evidence_id,
             )
             for pos in positions
         ]
@@ -424,7 +456,7 @@ class ZhodaEngine:
                 completeness.skip("opposition", "synthetic", "da_disabled")
             else:
                 opposition = await self._spawn_opposition(
-                    question, factions[0], speakers, user_context,
+                    question, factions[0], speakers, user_context, evidence=evidence,
                 )
                 if opposition is not None:
                     completeness.succeed("opposition", "synthetic")
@@ -438,6 +470,23 @@ class ZhodaEngine:
                     )
                 else:
                     completeness.fail("opposition", "synthetic", "spawn_failed")
+        # Только платформы: position-level id не пишется в лог, иначе
+        # совпадение owner+текст глушит CLAIM_CREATED и replay теряет findings.
+        emitted_ids: set[str] = set()
+        for faction in factions:
+            if faction.platform is None:
+                continue
+            faction.platform = stamp_position(
+                faction.platform, evidence_id=evidence_id, provenance="faction",
+            )
+            for claim in faction.platform.claims:
+                if claim.claim_id and claim.claim_id not in emitted_ids:
+                    log.emit(
+                        EventType.CLAIM_CREATED,
+                        claim.model_dump(mode="json"),
+                        attribution=faction.name,
+                    )
+                    emitted_ids.add(claim.claim_id)
         await self._name_factions(factions)
         self.transcripts.append(
             tid,
@@ -625,6 +674,7 @@ class ZhodaEngine:
                     leading=leading,
                     objections=debate.objections,
                     value_map=value_map,
+                    evidence=evidence,
                 )
             except (ValueError, TypeError, KeyError, RuntimeError):
                 verdict.decision = leading.platform.thesis
@@ -649,6 +699,30 @@ class ZhodaEngine:
             debate.switches,
             verdict.decision,
         ).model_dump()
+        verdict.evidence = evidence
+        verdict.claim_ledger = collect_ledger(
+            [f.platform for f in factions if f.platform is not None]
+        )
+        verdict.replay_limited = bool(evidence is not None and evidence.replay_limited)
+        if leading.platform is not None and leading.platform.action is not None:
+            log.emit(
+                EventType.ACTION_SET,
+                leading.platform.action.model_dump(mode="json"),
+                attribution=leading.name,
+            )
+        log.emit(
+            EventType.DISSENT_SET,
+            {"dissent": [d.model_dump(mode="json") for d in verdict.dissent_map]},
+        )
+        log.emit(
+            EventType.CONSENSUS_SET,
+            {
+                "consensus_strength": str(verdict.consensus_strength),
+                "zhoda_reached": verdict.zhoda_reached,
+            },
+        )
+        log.emit(EventType.COMPLETENESS_SET, completeness.model_dump(mode="json"))
+        log.emit(EventType.RENDERING, {"decision": verdict.decision})
         mark("render")
         cost = self.provider.question_report()
         cost.breakdown = breakdown
@@ -686,6 +760,7 @@ class ZhodaEngine:
         leading: Faction,
         speakers: dict[str, str],
         user_context: str,
+        evidence: EvidenceBundle | None = None,
     ) -> Faction | None:
         """Адвокат порождает вторую фракцию с другим primary action."""
         if leading.platform is None:
@@ -693,13 +768,16 @@ class ZhodaEngine:
         actor = self.council[0]
         speakers[ADVOCATE_ALIAS] = actor
         try:
-            opp_prompt = bind_user_context(
-                OPPOSITION_PROMPT.format(
-                    question=question,
-                    thesis=leading.platform.thesis,
-                    answer=leading.platform.answer,
+            opp_prompt = bind_evidence(
+                bind_user_context(
+                    OPPOSITION_PROMPT.format(
+                        question=question,
+                        thesis=leading.platform.thesis,
+                        answer=leading.platform.answer,
+                    ),
+                    user_context,
                 ),
-                user_context,
+                evidence,
             )
             data = await self.provider.ask_json(
                 actor,

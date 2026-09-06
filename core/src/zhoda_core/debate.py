@@ -14,13 +14,16 @@ from pydantic import BaseModel, Field
 from .factions import ADVOCATE_ALIAS, Faction
 from .guards import (
     blocks_loaded_premise_switch,
-    claims_reflected_in_decision,
     should_apply_revision,
 )
 from .actions import OptionCatalog, attach_action
+from .claims import merge_revision_claims
+from .evidence import bind_evidence, quote_span_matches
 from .judges import Judges
 from .models import (
     Critique,
+    EvidenceBundle,
+    EventType,
     FactionSwitch,
     FlawType,
     ObjectionStatus,
@@ -28,6 +31,7 @@ from .models import (
     bind_user_context,
 )
 from .providers.openrouter import OpenRouterProvider, make_cache_key
+from .replay import EventLog
 from .stage_dtos import (
     AddressedVote,
     ClosedVote,
@@ -36,6 +40,7 @@ from .stage_dtos import (
     SwitchVote,
     WithdrawVote,
     critique_from_model,
+    engine_claims,
     parse_stage,
 )
 
@@ -91,6 +96,8 @@ Rebuttal: {rebuttal}
 Did the rebuttal substantively REFUTE the specific objection claim?
 closed=true only if the rebuttal contradicts that claim with a reason.
 Acknowledgment, CONCEDE, "we accept", or restating the platform is closed=false.
+If the evidence block is incomplete/truncated/redacted, closed=true does NOT
+verify the source — CONCEDE never proves the objection claim false.
 ONLY valid JSON:
 {{"closed": true}} or {{"closed": false}}"""
 
@@ -127,7 +134,10 @@ ONLY valid JSON:
 {{"thesis": "...", "answer": "...",
   "claims": [{{"claim": "...", "evidence_url": null, "confidence": 0.0}}],
   "falsifiability": "...", "confidence": 0.0,
-  "changed": true, "change_note": "what changed and why (or why not)"}}"""
+  "changed": true, "change_note": "what changed and why (or why not)"}}
+claims is the new platform's supporting findings: keep only claims you still
+assert. Do not copy a finding you no longer stand by. Refuted claims stay in
+history, not in supporting findings."""
 
 WITHDRAW_PROMPT = """Your faction raised this objection ({flaw_type}): {claim} {specifics}
 The opposing faction revised its platform. New thesis: {thesis}
@@ -160,10 +170,8 @@ def is_concede_rebuttal(text: str) -> bool:
 
 
 def citation_quotes_objection(convinced_by: str, claim: str) -> bool:
-    """Цитата перехода должна узнавать claim возражения, не thesis оппонента."""
-    return bool((convinced_by or "").strip()) and claims_reflected_in_decision(
-        [claim], convinced_by,
-    )
+    """Точный Unicode-span claim, не token overlap ('PostgreSQL is my favorite')."""
+    return quote_span_matches(convinced_by, claim)
 
 
 class Round(BaseModel):
@@ -192,12 +200,27 @@ class DebateEngine:
         self.user_context: str = ""
         self.question: str = ""
         self.catalog: OptionCatalog | None = None
+        self.evidence: EvidenceBundle | None = None
+        self.events: EventLog | None = None
         self.objections: list[Critique] = []
         self.switches: list[FactionSwitch] = []
         self.parse_failures: list[ParseFailure] = []
 
     def _bind(self, prompt: str) -> str:
-        return bind_user_context(prompt, self.user_context)
+        return bind_evidence(
+            bind_user_context(prompt, self.user_context),
+            self.evidence,
+        )
+
+    def _emit(
+        self,
+        event_type: EventType,
+        payload: dict[str, object],
+        *,
+        attribution: str = "",
+    ) -> None:
+        if self.events is not None:
+            self.events.emit(event_type, payload, attribution=attribution)
 
     async def _ask(self, model: str, prompt: str) -> dict[str, object]:
         return await self.provider.ask_json(
@@ -224,6 +247,16 @@ class DebateEngine:
             raise ValueError("scope/values critique needs specifics: what exactly is missing")
         critique.id = uuid4().hex[:8]
         self.objections.append(critique)
+        self._emit(
+            EventType.OBJECTION_REGISTERED,
+            {
+                "objection_id": critique.id,
+                "claim": critique.claim,
+                "target_faction": critique.target_faction,
+                "author_faction": critique.author_faction,
+            },
+            attribution=critique.author_faction,
+        )
         return critique
 
     def admit(self, critique: Critique, round_: Round) -> bool:
@@ -247,6 +280,15 @@ class DebateEngine:
                 if url:
                     item.rebuttal_evidence_url = url
                 item.status = ObjectionStatus.CLOSED
+                self._emit(
+                    EventType.OBJECTION_TRANSITION,
+                    {
+                        "objection_id": item.id,
+                        "from_status": "open",
+                        "to_status": "closed",
+                    },
+                    attribution=rebuttal_by,
+                )
                 return True
         return False
 
@@ -255,6 +297,14 @@ class DebateEngine:
         for item in self.objections:
             if item.id == objection_id and item.status == ObjectionStatus.OPEN:
                 item.status = ObjectionStatus.SUPERSEDED
+                self._emit(
+                    EventType.OBJECTION_TRANSITION,
+                    {
+                        "objection_id": item.id,
+                        "from_status": "open",
+                        "to_status": "superseded",
+                    },
+                )
                 return True
         return False
 
@@ -270,7 +320,8 @@ class DebateEngine:
             return False
         if objection.author_faction and objection.author_faction != switch.to_faction:
             return False
-        return citation_quotes_objection(switch.convinced_by, objection.claim)
+        quote = (switch.quote_span or switch.convinced_by).strip()
+        return citation_quotes_objection(quote, objection.claim)
 
     def active_objections(self) -> list[Critique]:
         """Top-priority open objections within the active cap."""
@@ -464,20 +515,50 @@ class DebateEngine:
                 change_note=change_note,
             ):
                 continue
-            prior = faction.platform.action
+            prior_action = faction.platform.action
             new_answer = vote.answer or faction.platform.answer
+            prior_claims = list(faction.platform.claims)
+            incoming = engine_claims(vote.claims)
+            merged = merge_revision_claims(
+                prior_claims,
+                incoming,
+                owner=alias_of.get(speaker, faction.platform.model),
+                evidence_id=(
+                    self.evidence.source_id if self.evidence is not None else None
+                ),
+            )
+            prior_by_id = {c.claim_id: c for c in prior_claims if c.claim_id}
+            for rec in merged:
+                old = prior_by_id.get(rec.claim_id)
+                if old is None:
+                    self._emit(
+                        EventType.CLAIM_CREATED,
+                        rec.model_dump(mode="json"),
+                        attribution=faction.name,
+                    )
+                elif rec.state is not old.state:
+                    self._emit(
+                        EventType.CLAIM_TRANSITION,
+                        {
+                            "claim_id": rec.claim_id,
+                            "from_state": old.state.value,
+                            "to_state": rec.state.value,
+                            "version": rec.version,
+                        },
+                        attribution=faction.name,
+                    )
             faction.platform = Position(
                 model=alias_of.get(speaker, faction.platform.model),
                 thesis=new_thesis,
                 answer=new_answer,
-                claims=faction.platform.claims,
+                claims=merged,
                 falsifiability=vote.falsifiability or faction.platform.falsifiability,
                 confidence=vote.confidence,
                 action=attach_action(
                     new_thesis,
                     new_answer,
                     self.catalog,
-                    prior=prior,
+                    prior=prior_action,
                     provenance=change_note or "revision",
                 ),
             )
@@ -570,6 +651,8 @@ class DebateEngine:
                     model=member, from_faction=faction.name, to_faction=target.name,
                     convinced_by=parsed_s.value.convinced_by,
                     objection_id=objection.id,
+                    quote_span=parsed_s.value.convinced_by,
+                    reason=parsed_s.value.convinced_by,
                     action_id=(
                         target.platform.action.action_id
                         if target.platform is not None and target.platform.action is not None
@@ -581,6 +664,11 @@ class DebateEngine:
                     target.members.append(member)
                     round_.switches.append(switch)
                     self.switches.append(switch)
+                    self._emit(
+                        EventType.SWITCH_RECORDED,
+                        switch.model_dump(mode="json"),
+                        attribution=member,
+                    )
         return round_
 
     def _open_against(self, faction: Faction) -> list[Critique]:

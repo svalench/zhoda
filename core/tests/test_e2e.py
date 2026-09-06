@@ -1530,3 +1530,222 @@ async def test_d2_invalid_required_json_is_degraded(tmp_path) -> None:
     assert "opposition:synthetic" not in by_id
 
 
+MARKER = "ATTACHED_SOURCE_sql = user_input_UNIQUE"
+NO_SQL = "There is no SQL injection."
+
+
+class RecordingProvider(ScriptedProvider):
+    """Пишет фактические prompts — E1 проверяет их, не fake-ответ."""
+
+    def __init__(self, script: list) -> None:
+        super().__init__(script)
+        self.prompts: list[tuple[str, str]] = []
+
+    async def complete(self, model, prompt, **kwargs):
+        self.prompts.append((model, prompt))
+        return await super().complete(model, prompt, **kwargs)
+
+
+def _login_position(thesis: str, finding: str) -> dict:
+    return {
+        "thesis": thesis,
+        "answer": f"Answer: {thesis}",
+        "claims": [{"claim": finding, "evidence_url": None, "confidence": 0.9}],
+        "falsifiability": "if the query is parameterized",
+        "confidence": 0.9,
+    }
+
+
+@pytest.mark.asyncio
+async def test_e1_source_span_reaches_closure_and_revision(tmp_path) -> None:
+    """E1: маркер из initial context есть в prompts обеих closure-моделей и revision."""
+    aliases = make_aliases(COUNCIL, seed=42)
+    a1 = aliases["m1"]
+    approve = _login_position("Approve login", "Helper looks fine")
+    script = [
+        ("m1", ("independent structured stance",), approve),
+        ("m2", ("independent structured stance",), approve),
+        ("m3", ("independent structured stance",), approve),
+        (None, ("Synthesize the shared platform",), approve),
+        (None, ("Name each faction",), {}),
+        (
+            None,
+            ("devil's advocate",),
+            {
+                "target_faction": a1,
+                "flaw_type": "factual",
+                "claim": "user_input is interpolated into the SQL query string",
+                "specifics": "",
+                "evidence_url": None,
+            },
+        ),
+        (None, ("Rebut it concisely",), "The helper uses a constant query template."),
+        (None, ("Did the rebuttal",), {"closed": False}),
+        (None, ("Did the rebuttal",), {"closed": False}),
+        (
+            None,
+            ("Revise your platform",),
+            {
+                "thesis": "Approve login",
+                "answer": "Answer: Approve login",
+                "claims": [{"claim": "Helper looks fine", "evidence_url": None, "confidence": 0.9}],
+                "changed": False,
+                "change_note": "stand",
+            },
+        ),
+        (None, ("Do you switch factions?",), {"switch": False, "convinced_by": ""}),
+        (None, ("Do you switch factions?",), {"switch": False, "convinced_by": ""}),
+        (None, ("Do you switch factions?",), {"switch": False, "convinced_by": ""}),
+        (None, ("SYNTHESIZE THE COUNCIL DECISION",), {"decision": "Approve login"}),
+        (None, ("PLAN CONTRACT",), PLAN),
+    ]
+    provider = RecordingProvider(script)
+    engine = make_engine(provider, tmp_path)
+    await engine.deliberate(
+        "Review this login helper for production use.",
+        force_protocol=Protocol.RED_TEAM,
+        clarify_mode="no-clarify",
+        context=f"def login(u, p): cur.execute('SELECT * FROM u WHERE id=' + {MARKER})",
+    )
+    closure = [p for _, p in provider.prompts if "Did the rebuttal" in p]
+    revision = [p for _, p in provider.prompts if "Revise your platform" in p]
+    assert len(closure) == 2
+    assert all(MARKER in p for p in closure)
+    assert revision and all(MARKER in p for p in revision)
+    assert all("CONCEDE" not in p.split("Rebuttal:", 1)[-1][:80] for p in closure)
+
+
+@pytest.mark.asyncio
+async def test_e2_revision_does_not_inherit_false_finding(tmp_path) -> None:
+    """Approve → Reject: 'There is no SQL injection' не остаётся active finding."""
+    aliases = make_aliases(COUNCIL, seed=42)
+    a1 = aliases["m1"]
+    approve = _login_position("Approve login", NO_SQL)
+    reject = _login_position(
+        "Reject login",
+        "SQL injection from interpolating user input into the query",
+    )
+    script = [
+        ("m1", ("independent structured stance",), approve),
+        ("m2", ("independent structured stance",), approve),
+        ("m3", ("independent structured stance",), approve),
+        (None, ("Synthesize the shared platform",), approve),
+        (None, ("Name each faction",), {}),
+        (
+            None,
+            ("devil's advocate",),
+            {
+                "target_faction": a1,
+                "flaw_type": "factual",
+                "claim": "user_input is interpolated into the SQL query string",
+                "specifics": "",
+                "evidence_url": None,
+            },
+        ),
+        (None, ("Rebut it concisely",), "The helper uses a constant query template."),
+        (None, ("Did the rebuttal",), {"closed": False}),
+        (None, ("Did the rebuttal",), {"closed": False}),
+        (
+            None,
+            ("Revise your platform",),
+            {
+                **reject,
+                "changed": True,
+                "change_note": "the helper interpolates user input",
+            },
+        ),
+        (None, ("Do you switch factions?",), {"switch": False, "convinced_by": ""}),
+        (None, ("Do you switch factions?",), {"switch": False, "convinced_by": ""}),
+        (None, ("Do you switch factions?",), {"switch": False, "convinced_by": ""}),
+        (None, ("SYNTHESIZE THE COUNCIL DECISION",), {"decision": "Reject login"}),
+        (None, ("PLAN CONTRACT",), PLAN),
+    ]
+    engine = make_engine(ScriptedProvider(script), tmp_path)
+    verdict = await engine.deliberate(
+        "Review this login helper for production use.",
+        force_protocol=Protocol.RED_TEAM,
+        clarify_mode="no-clarify",
+        context="def login(u, p): cur.execute('SELECT * FROM u WHERE id=' + u)",
+    )
+    from zhoda_core.models import ClaimState
+
+    active = [c.claim for c in verdict.claim_ledger if c.state is ClaimState.ACTIVE]
+    history = [c.claim for c in verdict.claim_ledger if c.state is ClaimState.SUPERSEDED]
+    assert NO_SQL not in active
+    assert any("There is no SQL injection" in c for c in history)
+    assert any("SQL injection from interpolating" in c for c in active)
+    assert NO_SQL not in verdict.decision
+
+
+@pytest.mark.asyncio
+async def test_e6_replay_restores_structure_without_provider(tmp_path) -> None:
+    """E6: reducer без cache/network; не копирует final Verdict event."""
+    from unittest.mock import patch
+
+    from zhoda_core.models import ClaimState
+    from zhoda_core.replay import reduce_transcript
+
+    f1 = "SQL injection from interpolating user input into the query"
+    f2 = "Session cookies lack the Secure flag"
+    pos = {
+        "thesis": "Reject login",
+        "answer": "Do not approve.",
+        "claims": [
+            {"claim": f1, "evidence_url": None, "confidence": 0.9},
+            {"claim": f2, "evidence_url": None, "confidence": 0.9},
+        ],
+        "falsifiability": "if parameterized",
+        "confidence": 0.9,
+    }
+    script = [
+        ("m1", ("independent structured stance",), pos),
+        ("m2", ("independent structured stance",), pos),
+        ("m3", ("independent structured stance",), pos),
+        (None, ("Synthesize the shared platform",), pos),
+        (None, ("Name each faction",), {}),
+        (None, ("SYNTHESIZE THE COUNCIL DECISION",), {"decision": "Reject login"}),
+        (None, ("PLAN CONTRACT",), PLAN),
+    ]
+    cache = tmp_path / "e6.db"
+    engine = make_engine(
+        ScriptedProvider(script), tmp_path, devils_advocate=False,
+    )
+    engine.provider._db = None
+    verdict = await engine.deliberate(
+        "Review this login helper for production use.",
+        force_protocol=Protocol.VOTE,
+        clarify_mode="no-clarify",
+    )
+    if cache.exists():
+        cache.unlink()
+    events = engine.transcripts.read(verdict.transcript_id)
+    without_verdict = [e for e in events if e.get("stage") != "verdict"]
+    assert any(e.get("stage") == "verdict" for e in events)
+    with patch(
+        "zhoda_core.providers.openrouter.OpenRouterProvider.complete",
+        side_effect=AssertionError("provider must not be called during replay"),
+    ), patch(
+        "zhoda_core.providers.openrouter.OpenRouterProvider.ask_json",
+        side_effect=AssertionError("provider must not be called during replay"),
+    ):
+        replayed = reduce_transcript(without_verdict)
+    assert replayed.zhoda_reached is verdict.zhoda_reached
+    assert replayed.consensus_strength is verdict.consensus_strength
+    assert replayed.completeness is not None
+    assert replayed.completeness.trusted is verdict.completeness.trusted
+    live_active = {c.claim for c in verdict.claim_ledger if c.state is ClaimState.ACTIVE}
+    replay_active = {c.claim for c in replayed.current_claims()}
+    assert f1 in live_active and f2 in live_active
+    assert live_active == replay_active
+    created = [
+        e for e in without_verdict
+        if e.get("stage") == "protocol_event"
+        and (e.get("event") or {}).get("type") == "claim_created"
+    ]
+    assert len(created) >= 2
+    assert replayed.decision == verdict.decision
+    assert replayed.action is not None
+    assert replayed.switches == []
+
+
+

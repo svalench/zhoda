@@ -38,6 +38,8 @@ def build_decision_tree(
                 "claims": [
                     {
                         "claim": c.claim,
+                        "claim_id": c.claim_id,
+                        "state": c.state.value if hasattr(c.state, "value") else str(c.state),
                         "evidence_url": c.evidence_url,
                         "label": c.label,  # sourced | unverified_claim | assumption
                     }

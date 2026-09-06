@@ -140,6 +140,64 @@ class PremiseProbe(BaseModel):
     text: str = ""
 
 
+class ClaimState(StrEnum):
+    """Validity of a claim — orthogonal to objection OPEN/CLOSED/SUPERSEDED."""
+
+    ACTIVE = "active"
+    REFUTED = "refuted"
+    SUPERSEDED = "superseded"
+
+
+class EvidenceOrigin(StrEnum):
+    USER_CONTEXT = "user_context"
+    USER_ATTACHMENT = "user_attachment"
+    INLINE = "inline"
+    UNVERIFIED_URL = "unverified_url"
+
+
+class AccessStatus(StrEnum):
+    COMPLETE = "complete"
+    TRUNCATED = "truncated"
+    UNAVAILABLE = "unavailable"
+    REDACTED = "redacted"
+
+
+class EvidenceSpan(BaseModel):
+    """Inclusive-exclusive byte/char span of a bounded source."""
+
+    start: int
+    end: int
+    text: str
+
+
+class EvidenceBundle(BaseModel):
+    """Immutable bounded source. URL alone is not enough for offline replay."""
+
+    source_id: str
+    content_hash: str
+    origin: EvidenceOrigin = EvidenceOrigin.USER_ATTACHMENT
+    access: AccessStatus = AccessStatus.COMPLETE
+    spans: list[EvidenceSpan] = Field(default_factory=list)
+    content: str | None = None
+    attachment_id: str | None = None
+    truncated: bool = False
+    sensitivity: str = "normal"  # normal | redacted | omitted
+    replay_limited: bool = False
+
+    def manifest(self) -> dict[str, object]:
+        """Что можно писать в лог: hash, не секреты и не весь filesystem."""
+        return {
+            "source_id": self.source_id,
+            "content_hash": self.content_hash,
+            "origin": self.origin.value,
+            "access": self.access.value,
+            "truncated": self.truncated,
+            "sensitivity": self.sensitivity,
+            "replay_limited": self.replay_limited,
+            "span_chars": sum(s.end - s.start for s in self.spans),
+        }
+
+
 class Claim(BaseModel):
     """An argument with evidence discipline (values №1, fixed in round-10 §1):
     THREE labels, not two. A URL a model names from its head is an
@@ -147,12 +205,23 @@ class Claim(BaseModel):
     `sourced` is reserved for user-provided or actually fetched+verified
     sources (`verified=True`). Otherwise the protocol would lend
     hallucinated links institutional weight — the exact false confidence
-    this project is built against."""
+    this project is built against.
+
+    claim_id/version/owner/state — engine-owned. Model JSON cannot mint them.
+    Claim validity (active/refuted/superseded) ≠ objection resolution.
+    """
 
     claim: str
     evidence_url: str | None = None
     confidence: float = 0.5
     verified: bool = False  # engine-owned: verifier or user source, never model JSON
+    claim_id: str = ""
+    version: int = 1
+    owner: str = ""
+    provenance: str = ""
+    state: ClaimState = ClaimState.ACTIVE
+    replaced_by: str | None = None
+    evidence_id: str | None = None
 
     @field_validator("evidence_url", mode="before")
     @classmethod
@@ -214,7 +283,11 @@ class Critique(BaseModel):
 
 class FactionSwitch(BaseModel):
     """Public faction change: open objection by ID + citation quoting the
-    objection claim + target IS the objection's author faction."""
+    objection claim + target IS the objection's author faction.
+
+    quote_span — проверяемый фрагмент (Unicode-normalized exact span).
+    convinced_by может содержать reasoning; F оценивает beneficial-switch.
+    """
 
     model: str
     from_faction: str
@@ -223,6 +296,9 @@ class FactionSwitch(BaseModel):
     objection_id: str
     action_id: str = ""
     relation: ActionRelation = ActionRelation.CHANGED
+    quote_span: str = ""
+    reason: str = ""
+    claim_id: str = ""
 
 
 class Disagreement(BaseModel):
@@ -351,6 +427,57 @@ class RunContext(BaseModel):
     failures: list[str] = Field(default_factory=list)
 
 
+class EventType(StrEnum):
+    RUN_STARTED = "run_started"
+    EVIDENCE_ATTACHED = "evidence_attached"
+    CLAIM_CREATED = "claim_created"
+    CLAIM_TRANSITION = "claim_transition"
+    ACTION_SET = "action_set"
+    OBJECTION_REGISTERED = "objection_registered"
+    OBJECTION_TRANSITION = "objection_transition"
+    SWITCH_RECORDED = "switch_recorded"
+    DISSENT_SET = "dissent_set"
+    CONSENSUS_SET = "consensus_set"
+    COMPLETENESS_SET = "completeness_set"
+    RENDERING = "rendering"
+
+
+EVENT_SCHEMA_VERSION = "zhoda.events.v1"
+
+
+class ProtocolEvent(BaseModel):
+    """Versioned validated transition. Raw LLM output is not reducer input."""
+
+    schema_version: str = EVENT_SCHEMA_VERSION
+    event_id: str
+    seq: int
+    run_id: str
+    transcript_id: str
+    type: EventType
+    prev_event_id: str | None = None
+    attribution: str = ""
+    payload: dict[str, object] = Field(default_factory=dict)
+
+
+class ReplayState(BaseModel):
+    """Структурный state после reducer. Prose — только из rendering event."""
+
+    run_id: str = ""
+    action: ActionContract | None = None
+    claims: list[Claim] = Field(default_factory=list)
+    dissent: list[Disagreement] = Field(default_factory=list)
+    switches: list[FactionSwitch] = Field(default_factory=list)
+    consensus_strength: ConsensusStrength | None = None
+    zhoda_reached: bool | None = None
+    completeness: RunCompleteness | None = None
+    decision: str = ""
+    replay_limited: bool = False
+    last_seq: int = 0
+
+    def current_claims(self) -> list[Claim]:
+        return [c for c in self.claims if c.state is ClaimState.ACTIVE]
+
+
 class CostReport(BaseModel):
     requests: int = 0
     tokens_in: int = 0
@@ -434,3 +561,6 @@ class Verdict(BaseModel):
     run_id: str = ""
     completeness: RunCompleteness = Field(default_factory=RunCompleteness)
     degraded: bool = False  # advisory: не zhoda и не approved plan
+    evidence: EvidenceBundle | None = None
+    claim_ledger: list[Claim] = Field(default_factory=list)
+    replay_limited: bool = False

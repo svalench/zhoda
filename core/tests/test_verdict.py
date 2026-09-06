@@ -338,6 +338,39 @@ async def test_synthesize_appends_dropped_claims() -> None:
     assert "Findings:" in decision
 
 
+@pytest.mark.asyncio
+async def test_e3_two_findings_survive_partial_overlap() -> None:
+    """Часть текста первого finding в decision не стирает второй."""
+
+    class _Stub:
+        async def ask_json(self, model: str, prompt: str, **kwargs: object) -> dict:
+            del model, prompt, kwargs
+            return {"decision": "Do not approve: SQL injection in the query string."}
+
+    f1 = "SQL injection from interpolating user input into the query"
+    f2 = "Session cookies lack the Secure flag"
+    leading = _faction("Security", "Reject login", "Do not approve.")
+    assert leading.platform is not None
+    leading.platform.claims = [
+        Claim(claim=f1, confidence=1.0, claim_id="clm_1", state="active"),
+        Claim(claim=f2, confidence=1.0, claim_id="clm_2", state="active"),
+    ]
+    decision = await synthesize_decision(
+        _Stub(),  # type: ignore[arg-type]
+        "chairman",
+        question="Review this login helper for production use.",
+        leading=leading,
+        objections=[],
+        value_map=ValueMap(),
+    )
+    assert "SQL injection" in decision
+    assert "Secure flag" in decision
+    from zhoda_core.claims import supporting_claims
+
+    active = supporting_claims(leading.platform.claims)
+    assert {c.claim for c in active} == {f1, f2}
+
+
 def test_majority_without_zhoda_lists_all_theses() -> None:
     factions = [
         _faction("Pragmatists", "Use PostgreSQL", "PG raw"),

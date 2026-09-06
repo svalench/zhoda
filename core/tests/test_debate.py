@@ -260,6 +260,44 @@ def test_generic_insecure_decision_does_not_cover_sqli_claim() -> None:
     assert ensure_claims_in_decision(named, [finding]) == named
 
 
+def test_e4_favorite_is_not_an_exact_quote() -> None:
+    claim = "PostgreSQL handles 50k RPS writes on a single node"
+    assert citation_quotes_objection(claim, claim)
+    assert citation_quotes_objection(f"{claim} is false", claim)
+    assert citation_quotes_objection("PostgreSQL  handles 50k RPS writes on a single node", claim)
+    assert not citation_quotes_objection("PostgreSQL is my favorite.", claim)
+    assert not citation_quotes_objection("PostgreSQL is my favorite", claim)
+
+
+def test_e5_russian_exact_quote_passes_unicode_variants() -> None:
+    import unicodedata
+
+    claim = "Пароли сохраняются открытым текстом."
+    assert citation_quotes_objection(claim, claim)
+    nfd = unicodedata.normalize("NFD", claim)
+    assert citation_quotes_objection(nfd, claim)
+    assert citation_quotes_objection(unicodedata.normalize("NFKC", claim), claim)
+    spaced = "Пароли  сохраняются   открытым текстом."
+    assert citation_quotes_objection(spaced, claim)
+
+
+def test_revision_does_not_copy_dropped_finding() -> None:
+    from zhoda_core.claims import merge_revision_claims, supporting_claims
+    from zhoda_core.models import Claim, ClaimState
+
+    old = [
+        Claim(claim="There is no SQL injection", claim_id="clm_a", owner="A"),
+        Claim(claim="Login should be approved", claim_id="clm_b", owner="A"),
+    ]
+    incoming = [Claim(claim="SQL injection from interpolating user input")]
+    merged = merge_revision_claims(old, incoming, owner="A")
+    active = supporting_claims(merged)
+    assert all("no SQL injection" not in c.claim for c in active)
+    history = [c for c in merged if c.state is ClaimState.SUPERSEDED]
+    assert any("no SQL injection" in c.claim for c in history)
+    assert any("SQL injection from interpolating" in c.claim for c in active)
+
+
 def test_supersede_prompt_rejects_caveat_only() -> None:
     from zhoda_core.debate import SUPERSEDE_PROMPT
 

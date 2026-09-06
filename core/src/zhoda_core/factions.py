@@ -17,7 +17,8 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from .actions import OptionCatalog, actions_equivalent, bind_action
-from .models import Disagreement, Position, bind_user_context
+from .models import Disagreement, EvidenceBundle, Position, bind_user_context
+from .evidence import bind_evidence
 from .providers.openrouter import OpenRouterProvider, make_cache_key
 from .stage_dtos import SameVote, parse_stage, position_from_model
 
@@ -83,6 +84,7 @@ class FactionClusterer:
     def __init__(self, provider: OpenRouterProvider) -> None:
         self.provider = provider
         self.user_context: str = ""
+        self.evidence: EvidenceBundle | None = None
         self.catalog: OptionCatalog | None = None
         self.divergences: list[Disagreement] = []
         self.prefilter_merges: list[dict[str, str]] = []
@@ -187,9 +189,12 @@ class FactionClusterer:
         if speaker is None:
             return members[0]
         answers = "\n\n".join(f"- {p.thesis}: {p.answer}" for p in members)
-        prompt = bind_user_context(
-            SYNTHESIS_PROMPT.format(answers=answers),
-            self.user_context,
+        prompt = bind_evidence(
+            bind_user_context(
+                SYNTHESIS_PROMPT.format(answers=answers),
+                self.user_context,
+            ),
+            self.evidence,
         )
         data = await self.provider.ask_json(
             speaker,

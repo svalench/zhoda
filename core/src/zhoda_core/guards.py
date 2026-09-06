@@ -236,23 +236,31 @@ def _claim_tokens(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]{5,}", (text or "").casefold())) - _CLAIM_STOP
 
 
+def claim_reflected_in_decision(claim: str, decision: str) -> bool:
+    """Один finding: точная цитата или token overlap. Не short-circuit всего списка."""
+    from .evidence import normalize_quote
+
+    if not (claim or "").strip():
+        return True
+    if normalize_quote(claim) in normalize_quote(decision):
+        return True
+    return bool(_claim_tokens(claim) & _claim_tokens(decision))
+
+
 def claims_reflected_in_decision(claims: list[str], decision: str) -> bool:
-    """Хотя бы один claim узнаваем в тексте — иначе председатель стёр находку."""
+    """Все named claims узнаваемы. Пустой список — vacuously true."""
     named = [c.strip() for c in claims if c.strip()]
     if not named:
         return True
-    body = _claim_tokens(decision)
-    for claim in named:
-        if _claim_tokens(claim) & body:
-            return True
-    return False
+    return all(claim_reflected_in_decision(c, decision) for c in named)
 
 
 def ensure_claims_in_decision(decision: str, claims: list[str]) -> str:
-    """Live login: generic 'inherently insecure' без SQL injection — дописать Findings."""
+    """Каждый missing claim дописывается. Частичное совпадение первого не глушит второй."""
     named = [c.strip() for c in claims if c.strip()]
-    if not named or claims_reflected_in_decision(named, decision):
+    missing = [c for c in named if not claim_reflected_in_decision(c, decision)]
+    if not missing:
         return decision
     lines = [decision.rstrip(), "", "Findings:"]
-    lines.extend(f"- {c}" for c in named)
+    lines.extend(f"- {c}" for c in missing)
     return "\n".join(lines)

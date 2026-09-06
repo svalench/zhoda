@@ -17,12 +17,15 @@ from .guards import (
     looks_like_xor_question,
 )
 from .actions import bind_action, option_catalog
+from .claims import supporting_claims
+from .evidence import bind_evidence
 from .models import (
     Condition,
     ConsensusStrength,
     CostReport,
     Critique,
     Disagreement,
+    EvidenceBundle,
     FactionSwitch,
     ObjectionStatus,
     Protocol,
@@ -207,6 +210,7 @@ async def synthesize_decision(
     leading: Faction,
     objections: list[Critique],
     value_map: ValueMap,
+    evidence: EvidenceBundle | None = None,
 ) -> str:
     """Председатель пишет решение пользователю. Сбой парсинга — на стороне engine."""
     if leading.platform is None:
@@ -214,21 +218,24 @@ async def synthesize_decision(
     closed, revised, open_against = partition_objections_for_decision(
         objections, leading.name
     )
-    claims = "; ".join(c.claim for c in leading.platform.claims) or "(none)"
-    prompt = bind_user_context(
-        DECISION_PROMPT.format(
-            question=question,
-            thesis=leading.platform.thesis,
-            claims=claims,
-            answer=leading.platform.answer,
-            closed="; ".join(closed) or "(none)",
-            revised="; ".join(revised) or "(none)",
-            open_objections="; ".join(open_against) or "(none)",
-            falsifiability=leading.platform.falsifiability,
-            constraints="; ".join(value_map.constraints) or "(none)",
-            open_ambiguities="; ".join(value_map.open_ambiguities) or "(none)",
+    claims = "; ".join(c.claim for c in supporting_claims(leading.platform.claims)) or "(none)"
+    prompt = bind_evidence(
+        bind_user_context(
+            DECISION_PROMPT.format(
+                question=question,
+                thesis=leading.platform.thesis,
+                claims=claims,
+                answer=leading.platform.answer,
+                closed="; ".join(closed) or "(none)",
+                revised="; ".join(revised) or "(none)",
+                open_objections="; ".join(open_against) or "(none)",
+                falsifiability=leading.platform.falsifiability,
+                constraints="; ".join(value_map.constraints) or "(none)",
+                open_ambiguities="; ".join(value_map.open_ambiguities) or "(none)",
+            ),
+            value_map.as_prompt_block(),
         ),
-        value_map.as_prompt_block(),
+        evidence,
     )
     data = await provider.ask_json(
         chairman,
@@ -256,5 +263,5 @@ async def synthesize_decision(
             decision = thesis
         else:
             decision = ensure_loaded_premise_not_adopted(question, decision)
-    claim_texts = [c.claim for c in leading.platform.claims]
+    claim_texts = [c.claim for c in supporting_claims(leading.platform.claims)]
     return ensure_claims_in_decision(decision, claim_texts)

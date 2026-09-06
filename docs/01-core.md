@@ -9,12 +9,20 @@ models.py and this file in the same commit (Cursor rule 10-python-core).
 2. **Argue in factions** — deliberation between groups, not isolated reviewers.
 3. **Zhoda or honest dissent** — consensus or a structured disagreement map.
 4. **Auditability** — every verdict is reproducible from its transcript.
-   The хроніка opens with a `start` event at create (never an empty file).
-   A successful run then records `route`, any intermediate stages
-   (`positions`, `round`, …), and `verdict`. Extra events are allowed;
-   the contract is order (`start` before `route` before `verdict`), not a
-   three-event list. A provider crash appends `error` (no `verdict`) and
-   re-raises; the id is still printed.
+  The хроніка opens with a `start` event at create (never an empty file).
+  A successful run then records `route`, any intermediate stages
+  (`positions`, `round`, …), and `verdict`. Extra events are allowed;
+  the contract is order (`start` before `route` before `verdict`), not a
+  three-event list. Versioned `protocol_event` rows (`zhoda.events.v1`)
+  are the reducer input: run id, monotonic seq, prev_event_id, validated
+  transitions (claims, action, dissent, switches, consensus, completeness)
+  and a `rendering` event for final prose. The `verdict` JSONL row is
+  **not** trusted replay input — copying it is not a structural restore.
+  Unknown schema, seq gap, cross-run id, duplicate `event_id` with a
+  conflicting payload, or a corrupted event is `ReplayError`, not a
+  partial success. Same `event_id` + same payload is an idempotent no-op.
+  A provider crash appends `error` (no `verdict`) and
+  re-raises; the id is still printed.
 5. **Cost honesty** — free models first, explicit budget caps, no hidden spend.
 
 ## Protocols
@@ -74,11 +82,18 @@ driver sanitizes” ambiguities that wash findings out of `decision`.
 ## Stage 1 — Positions
 
 ```python
-Claim { claim, evidence_url?, confidence, verified }
+Claim {
+  claim, evidence_url?, confidence, verified,
+  claim_id, version, owner, provenance,   # engine-owned
+  state, replaced_by?, evidence_id?,      # active | refuted | superseded
+}
 # verified is engine-owned. Model JSON cannot set it.
 # label: "sourced" (engine verifier or user-provided) |
 #        "unverified_claim" (URL named from memory) | "assumption" (no URL)
 # round-10 §1: a hallucinated link never gets institutional weight
+# Claim validity ≠ objection OPEN/CLOSED/SUPERSEDED.
+# A revision lists retained/replaced/new claims; refuted/superseded stay
+# in history and are not copied into supporting findings.
 Position {
   model, thesis, answer, claims[], falsifiability, confidence,
   action?  # ActionContract: action_id from the option list (opt:N) or
@@ -89,6 +104,17 @@ Position {
 # Unknown equivalence does not merge factions and does not hold a
 # stability streak. First-occurrence of a token is not the pick.
 ```
+
+`--context` is snapshotted as an immutable `EvidenceBundle` (`source_id`,
+content hash, bounded spans, origin, `complete|truncated|unavailable|redacted`).
+A URL is not enough for offline replay. Secrets are redacted (`replay_limited`);
+the full user filesystem is never written. Truncated or unavailable context
+stays explicitly incomplete and is never treated as verified. Source text is
+**data**, not agent instructions: evidence-sensitive stages (positions,
+critique, rebuttal, closure, revision, supersede, synthesis) receive the
+claim-relevant span in a delimited block. Delimiters are not claimed as
+absolute prompt-injection proof — state transitions still go only through
+stage DTOs.
 
 Positions are anonymized from the start (`model` holds the alias).
 Aliases are shuffled per deliberation; the default seed is
@@ -114,9 +140,10 @@ a switch, and **not** sourced trust.
 
 Engine-owned fields the model may not set: `verified`,
 `evidence_verified`, `status`, `action`, `id`, `rebuttal`,
-`zhoda_reached`, `consensus_strength`, `decision_origin`. A URL in a
-claim is `unverified_claim` until a verifier (package E) or a
-user-provided source marks it. `ActionContract` stays the B engine
+`zhoda_reached`, `consensus_strength`, `decision_origin`,
+`claim_id`, `state`, `version`, `owner`, `evidence_id`. A URL in a
+claim is `unverified_claim` until an engine verifier or a
+user-provided `EvidenceBundle` marks it. `ActionContract` stays the B engine
 binder — model JSON cannot import an `action_id`.
 
 `ask_json` may repair **syntax** once (not a JSON object → retry
@@ -172,8 +199,10 @@ anyone is asked to defect).
 - **Rebuttal `SOURCE:`** lines are parsed into `rebuttal_evidence_url` and
   stripped from prose; a URL named from memory is `unverified_claim`.
 - **Closure**: both judges (outside the council, no silent fallback —
-  round-9 §2) must agree the rebuttal **refutes** the specific claim.
-  Acknowledgment and `CONCEDE` never close — the objection stays `OPEN`
+  round-9 §2) must agree the rebuttal **refutes** the specific claim
+  against the attached evidence span. Incomplete/truncated/redacted
+  evidence is not verified. Acknowledgment and `CONCEDE` never close
+  and never prove the claim false — the objection stays `OPEN`
   so revision/switch can fire (live 2026-09-05: easy closures → switch ≈ 0).
 - **Superseded**: the author withdraws, or both judges agree the revision
   addressed the objection (round-7 §1).
@@ -187,11 +216,14 @@ anyone is asked to defect).
   signal: unknown does not become false and does not replace the asked
   action with a fabricated rebuttal.
 - **Switches**: open objection by ID + citation that **quotes the objection
-  claim** (not a restatement of the destination thesis) + the target IS
-  the objection's author faction. Critiques must quote the opponent thesis
-  (cross-examination, not parallel essays). A switch from a thesis that
-  already challenges a loaded premise toward one that adopts it is
-  refused.
+  claim** as a Unicode-normalized exact span (NFKC, casefold, collapsed
+  whitespace; token overlap such as “PostgreSQL is my favorite” is not
+  enough) + the target IS the objection's author faction. Exact quote ≠
+  a sufficient argument: `quote_span` and `reason` are stored separately;
+  beneficial-switch evaluation is package F. Critiques must quote the
+  opponent thesis (cross-examination, not parallel essays). A switch from
+  a thesis that already challenges a loaded premise toward one that adopts
+  it is refused.
 - **Cache**: every debate/consensus/verdict LLM call is keyed by
   `(stage, model, prompt)`. Aliases are seeded from
   `hash(question + council + context)` when `alias_seed` is unset, so a
@@ -248,6 +280,7 @@ Verdict {
   insufficient_context,  # True → no debate; object of evaluation missing
   run_id, completeness,  # requested/succeeded/failed/skipped checks
   degraded,              # advisory rec; not zhoda and not an approved plan
+  evidence?, claim_ledger[], replay_limited,
 }
 ```
 

@@ -7,7 +7,8 @@ institutional weight.
 
 import asyncio
 
-from .models import Position, RunCompleteness, ValueMap, bind_user_context
+from .models import EvidenceBundle, Position, RunCompleteness, ValueMap, bind_user_context
+from .evidence import bind_evidence
 from .providers.openrouter import OpenRouterProvider, make_cache_key
 from .stage_dtos import position_from_model
 
@@ -45,6 +46,7 @@ async def extract_positions(
     *,
     context: str = "",
     completeness: RunCompleteness | None = None,
+    evidence: EvidenceBundle | None = None,
 ) -> list[Position]:
     """Requested roster фиксируется до первого вызова. Ответившие ≠ знаменатель."""
     if completeness is not None:
@@ -54,12 +56,15 @@ async def extract_positions(
 
     async def one(model: str) -> Position:
         try:
-            prompt = bind_user_context(
-                POSITION_PROMPT.format(
-                    question=question,
-                    context=context.strip() or "(none)",
+            prompt = bind_evidence(
+                bind_user_context(
+                    POSITION_PROMPT.format(
+                        question=question,
+                        context=context.strip() or "(none)",
+                    ),
+                    value_map.as_prompt_block(),
                 ),
-                value_map.as_prompt_block(),
+                evidence,
             )
             data = await provider.ask_json(
                 model,

@@ -67,6 +67,11 @@ ENGINE_OWNED_FIELDS = frozenset(
         "decision_origin",
         "rebuttal",
         "id",
+        "claim_id",
+        "state",
+        "version",
+        "owner",
+        "evidence_id",
     }
 )
 
