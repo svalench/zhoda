@@ -1,4 +1,6 @@
-READY_FOR_APPROVAL
-live=false
+LIVE_RUNNING
+live=true
 independent_validation=false
-# No OpenRouter / no sanity live run without owner approval.
+spend_cap_usd=8.0
+# Owner approved Live G. Driver: docs/live-runs/2026-09-06-g-pilot/run_live_g.py
+# Do not run freeze-manifest during this study.
