@@ -30,8 +30,9 @@ models.py and this file in the same commit (Cursor rule 10-python-core).
 | Protocol | When | Rounds |
 |---|---|---|
 | `vote` | factual_lookup, creative | 0 |
-| `debate` | decision, reasoning | up to `rounds_cap` (default 4) |
+| `debate` | decision, reasoning (**default**) | up to `rounds_cap` (default 4) |
 | `red_team` | code_review | 1 |
+| `short_review` | **force only** — not a router class. Independent positions → one evidence-focused critique → revision → verdict. Not single-pass synthesis. Product default stays `debate`. | 1 |
 
 ## Router
 

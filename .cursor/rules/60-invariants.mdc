@@ -65,6 +65,9 @@ Current mapping (keep updated):
 | Closure only by target faction; supersede leaves ledger | tests/test_debate.py |
 | CLI imports without factions↔judges cycle | tests/test_imports.py |
 | CLI --auto-clarify / --no-clarify flags (ANSI/width-safe help) | tests/test_cli.py |
+| short_review is force-only; not a router class; not default debate | tests/test_cli.py::test_cli_protocol_line_is_eval_stable + tests/test_e2e.py::test_router_does_not_select_short_review |
+| short_review is critique+revision, not synthesis; no rebut/switch | tests/test_debate.py::test_short_review_skips_rebuttal_and_switch + tests/test_e2e.py::test_short_review_is_critique_revision_not_synthesis |
+| short_review factual critique without evidence span is discarded | tests/test_debate.py::test_short_critique_requires_evidence_span |
 | Successful хроніка: start before route before verdict; extra stages OK | tests/test_transcripts.py::test_successful_run_orders_start_route_verdict |
 | Nearest .env up to git root, no override | tests/test_env.py |
 | Progress callback optional; stages emitted | tests/test_e2e.py::test_progress_emits_protocol_stages |

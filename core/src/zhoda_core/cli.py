@@ -105,7 +105,10 @@ def ask_user(questions: list[ClarifyingQuestion]) -> list[str]:
 @app.command()
 def deliberate(
     question: str,
-    protocol: str | None = typer.Option(None, help="Force: vote | debate | red_team"),
+    protocol: str | None = typer.Option(
+        None,
+        help="Force: vote | debate | red_team | short_review (experimental, not default)",
+    ),
     clarify: str | None = typer.Option(
         None,
         "--clarify",

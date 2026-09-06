@@ -1748,4 +1748,105 @@ async def test_e6_replay_restores_structure_without_provider(tmp_path) -> None:
     assert replayed.switches == []
 
 
+SOURCE_FRIDAY = (
+    "On-call coverage ends at 18:00 on Fridays with no rollback owner."
+)
+
+
+@pytest.mark.asyncio
+async def test_short_review_is_critique_revision_not_synthesis(tmp_path) -> None:
+    """Force short_review: 1 раунд, не vote и не chairman-only synthesis."""
+    aliases = make_aliases(COUNCIL, seed=42)
+    quote = {
+        "target_faction": "Throughputists",
+        "flaw_type": "factual",
+        "claim": (
+            "On-call coverage ends at 18:00 on Fridays with no rollback owner "
+            "so Kafka ops are unstaffed"
+        ),
+        "specifics": SOURCE_FRIDAY,
+        "evidence_url": None,
+    }
+    quote_kf = {
+        **quote,
+        "target_faction": "Pragmatists",
+        "claim": (
+            "On-call coverage ends at 18:00 on Fridays with no rollback owner "
+            "so a Friday deploy is the asked risk"
+        ),
+    }
+    script = opening_script(aliases) + [
+        (None, ("evidence-focused critique",), quote),
+        (None, ("evidence-focused critique",), quote_kf),
+        (
+            None,
+            ("Revise your platform",),
+            {
+                "thesis": PG,
+                "answer": f"Answer: {PG}",
+                "claims": [],
+                "falsifiability": "if load grows",
+                "confidence": 0.7,
+                "changed": False,
+                "change_note": "kept",
+            },
+        ),
+        (
+            None,
+            ("Revise your platform",),
+            {
+                "thesis": KF,
+                "answer": f"Answer: {KF}",
+                "claims": [],
+                "falsifiability": "if load grows",
+                "confidence": 0.7,
+                "changed": False,
+                "change_note": "kept",
+            },
+        ),
+        (None, ("theses of all factions",), {"all_agree": False}),
+        (None, ("theses of all factions",), {"all_agree": False}),
+        (None, ("SYNTHESIZE THE COUNCIL DECISION",), DECISION),
+    ]
+    engine = make_engine(ScriptedProvider(script), tmp_path, rounds_cap=4)
+    verdict = await engine.deliberate(
+        "Is a Friday 22:00 payment deploy acceptable given the attached memo?",
+        force_protocol=Protocol.SHORT_REVIEW,
+        clarify_mode="no-clarify",
+        context=SOURCE_FRIDAY,
+    )
+    assert verdict.protocol is Protocol.SHORT_REVIEW
+    assert verdict.rounds_taken == 1
+    assert verdict.switches == []
+    assert verdict.zhoda_reached is False
+    assert verdict.decision_origin == "majority_at_cap"
+    rows = engine.transcripts.read(verdict.transcript_id)
+    stages = [r.get("stage") for r in rows]
+    assert "round" in stages
+    assert "positions" in stages
+    leftover = engine.provider.script
+    assert not any("evidence-focused" in str(step) for step in leftover)
+    assert not any("Rebut it concisely" in str(step) for step in leftover)
+
+
+@pytest.mark.asyncio
+async def test_router_does_not_select_short_review() -> None:
+    """Default product path: decision → debate, never short_review."""
+    from zhoda_core.router import PROTOCOL_BY_CLASS, ProtocolRouter, TaskClass
+
+    assert PROTOCOL_BY_CLASS[TaskClass.DECISION] is Protocol.DEBATE
+    assert Protocol.SHORT_REVIEW not in PROTOCOL_BY_CLASS.values()
+
+    class Prov:
+        async def ask_json(self, model: str, prompt: str, **kwargs: object) -> dict:
+            del model, prompt, kwargs
+            return {"task_class": "decision"}
+
+    route = await ProtocolRouter(Prov(), ("c1", "c2")).route(  # type: ignore[arg-type]
+        "PostgreSQL or Kafka for a 50k RPS ledger?",
+    )
+    assert route.protocol is Protocol.DEBATE
+    assert route.overridden is False
+
+
 

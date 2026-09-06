@@ -26,6 +26,13 @@ def test_vote_is_cheaper_than_debate() -> None:
     assert vote["latency_s_max"] < debate["latency_s_max"]
 
 
+def test_short_review_is_cheaper_than_debate_not_vote() -> None:
+    vote = estimate_cost(CFG, "vote")
+    short = estimate_cost(CFG, "short_review")
+    debate = estimate_cost(CFG, "debate")
+    assert vote["requests_max"] < short["requests_max"] < debate["requests_max"]
+
+
 def test_zero_budget_note() -> None:
     cfg = {**CFG, "budget_per_question_usd": 0.0}
     assert "free" in estimate_cost(cfg)["note"]

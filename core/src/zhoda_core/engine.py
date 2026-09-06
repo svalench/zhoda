@@ -318,7 +318,7 @@ class ZhodaEngine:
             value_map = ValueMap()
             emit("elicit", "elicit skipped — object missing", done=True)
         elif (
-            route.protocol in (Protocol.VOTE, Protocol.RED_TEAM)
+            route.protocol in (Protocol.VOTE, Protocol.RED_TEAM, Protocol.SHORT_REVIEW)
             and clarify_mode == "auto-clarify"
         ):
             # Однопроход: интервью не меняет NULL≠TRUE и не должно мыть находки
@@ -533,6 +533,22 @@ class ZhodaEngine:
             emit("consensus", "classifying agreement…")
             strength = await consensus.classify(factions, judges=judges)
             zhoda = strength in (ConsensusStrength.UNANIMOUS, ConsensusStrength.MAJORITY)
+            emit("consensus", f"zhoda={zhoda} {strength}", done=True)
+            mark("debate")
+        elif route.protocol == Protocol.SHORT_REVIEW:
+            emit("round", "round 1/1 (short_review)…")
+            round_ = await debate.run_round(
+                1, factions, speakers=speakers, judges=judges, mode="short_review",
+            )
+            self.transcripts.append(tid, {"stage": "round", **round_.model_dump()})
+            rounds_taken = 1
+            emit("round", "round 1/1 done", done=True)
+            emit("consensus", "classifying agreement…")
+            strength = await consensus.classify(factions, judges=judges)
+            # Majority здесь — не згода: сравнимо с Oxford majority_at_cap, не с vote.
+            zhoda = strength is ConsensusStrength.UNANIMOUS
+            if not zhoda and strength is ConsensusStrength.MAJORITY:
+                majority_at_cap = True
             emit("consensus", f"zhoda={zhoda} {strength}", done=True)
             mark("debate")
         else:

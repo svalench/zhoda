@@ -35,6 +35,8 @@ class Protocol(StrEnum):
     VOTE = "vote"
     DEBATE = "debate"
     RED_TEAM = "red_team"
+    # Только force/эксперимент. Роутер сюда не мапит — default остаётся debate.
+    SHORT_REVIEW = "short_review"
 
 
 class ConsensusStrength(StrEnum):

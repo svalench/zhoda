@@ -73,6 +73,19 @@ ONLY valid JSON:
 A URL you name from memory will be labeled UNVERIFIED, not sourced —
 null is more honest. Never invent URLs."""
 
+EVIDENCE_CRITIQUE_PROMPT = """You represent faction \"{name}\". Platform thesis: {platform}
+Opposing faction \"{opponent}\": {opponent_thesis}
+
+Produce ONE evidence-focused critique of the opposing position.
+If an EVIDENCE block is attached, quote an exact span from it (not from memory
+and not a paraphrase). Do not write a parallel essay that ignores the source.
+ONLY valid JSON:
+{{"target_faction": "{opponent}", "flaw_type": "factual|logical|scope|values_mismatch",
+  "claim": "the specific statement you dispute",
+  "specifics": "exact evidence span and what it implies",
+  "evidence_url": null}}
+Do not invent URLs. A critique that ignores attached evidence is discarded."""
+
 DEVILS_ADVOCATE_PROMPT = """You are the rotating devil's advocate. Attack the leading
 position regardless of your own stance. Position of faction \"{opponent}\": {opponent_thesis}
 
@@ -336,11 +349,16 @@ class DebateEngine:
         *,
         speakers: dict[str, str],
         judges: Judges,
+        mode: str = "oxford",
     ) -> Round:
+        """oxford = полный раунд; short_review = critique+revision, без DA/rebut/switch."""
         round_ = Round(number=number)
         if not factions:
             return round_
 
+        critique_prompt = (
+            EVIDENCE_CRITIQUE_PROMPT if mode == "short_review" else CRITIQUE_PROMPT
+        )
         raw: list[tuple[str, object]] = []
         if len(factions) >= 2:
             ordered = sorted(factions, key=lambda f: len(f.members), reverse=True)
@@ -350,7 +368,10 @@ class DebateEngine:
                 zip(
                     [f.name for f, _ in pairs],
                     await asyncio.gather(
-                        *(self._critique(f, t, speakers, CRITIQUE_PROMPT, number) for f, t in pairs),
+                        *(
+                            self._critique(f, t, speakers, critique_prompt, number)
+                            for f, t in pairs
+                        ),
                         return_exceptions=True,
                     ),
                     strict=True,
@@ -363,10 +384,9 @@ class DebateEngine:
                 f for f in factions
                 if not f.synthetic and f.members != [ADVOCATE_ALIAS]
             ]
-            # Вращающийся DA нужен при одной реальной фракции (red_team /
-            # ещё не заспавнена оппозиция). Две council-фракции уже спорят.
             if (
-                self.devils_advocate
+                mode != "short_review"
+                and self.devils_advocate
                 and leading.platform is not None
                 and not synthetic_opposition
                 and len(real_factions) < 2
@@ -379,6 +399,15 @@ class DebateEngine:
                     leading, speakers, DEVILS_ADVOCATE_PROMPT, number,
                 )
                 raw.append((ADVOCATE_ALIAS, da))
+        elif mode == "short_review" and factions[0].platform is not None:
+            only = factions[0]
+            candidates = sorted(a for a in speakers if a not in only.members) or sorted(speakers)
+            reviewer = candidates[(number - 1) % len(candidates)]
+            review = await self._critique(
+                Faction(name="reviewer", members=[reviewer]),
+                only, speakers, EVIDENCE_CRITIQUE_PROMPT, number,
+            )
+            raw.append(("reviewer", review))
         elif self.devils_advocate and factions[0].platform is not None:
             # red_team on unanimity: attack the only platform directly
             only = factions[0]
@@ -402,72 +431,78 @@ class DebateEngine:
             if parsed.value is None:
                 self._record_parse(parsed.error, round_)
                 continue
+            if mode == "short_review" and not self._short_critique_has_evidence(parsed.value):
+                round_.deferred.append(
+                    {"claim": parsed.value.claim, "reason": "missing_evidence_span"}
+                )
+                continue
             try:
                 self.admit(parsed.value, round_)
             except (ValueError, TypeError):
                 continue
 
-        async def rebut(critique: Critique) -> tuple[Critique, str] | None:
-            target = next((f for f in factions if f.name == critique.target_faction), None)
-            if target is None or target.platform is None:
-                return None
-            speaker = speakers.get(target.members[(number - 1) % len(target.members)])
-            if speaker is None:
-                return None
-            text = await self._say(
-                speaker,
-                self._bind(REBUTTAL_PROMPT.format(
-                    name=target.name, platform=target.platform.thesis,
-                    flaw_type=critique.flaw_type, claim=critique.claim,
-                    specifics=critique.specifics,
-                )),
-            )
-            return critique, text
-
-        rebuttals = await asyncio.gather(
-            *(rebut(c) for c in self.active_objections()), return_exceptions=True,
-        )
-
-        async def judge_closure(item: tuple[Critique, str]) -> None:
-            critique, rebuttal = item
-            target = next(f for f in factions if f.name == critique.target_faction)
-            if is_concede_rebuttal(rebuttal):
-                prose, url = extract_source(rebuttal)
-                critique.rebuttal = prose
-                if url:
-                    critique.rebuttal_evidence_url = url
-                return
-            votes = await asyncio.gather(
-                *(self._ask(
-                    judge,
-                    self._bind(CLOSURE_PROMPT.format(
+        if mode != "short_review":
+            async def rebut(critique: Critique) -> tuple[Critique, str] | None:
+                target = next((f for f in factions if f.name == critique.target_faction), None)
+                if target is None or target.platform is None:
+                    return None
+                speaker = speakers.get(target.members[(number - 1) % len(target.members)])
+                if speaker is None:
+                    return None
+                text = await self._say(
+                    speaker,
+                    self._bind(REBUTTAL_PROMPT.format(
+                        name=target.name, platform=target.platform.thesis,
                         flaw_type=critique.flaw_type, claim=critique.claim,
-                        specifics=critique.specifics, rebuttal=rebuttal,
+                        specifics=critique.specifics,
                     )),
-                ) for judge in judges.pair_for(target)),
+                )
+                return critique, text
+
+            rebuttals = await asyncio.gather(
+                *(rebut(c) for c in self.active_objections()), return_exceptions=True,
+            )
+
+            async def judge_closure(item: tuple[Critique, str]) -> None:
+                critique, rebuttal = item
+                target = next(f for f in factions if f.name == critique.target_faction)
+                if is_concede_rebuttal(rebuttal):
+                    prose, url = extract_source(rebuttal)
+                    critique.rebuttal = prose
+                    if url:
+                        critique.rebuttal_evidence_url = url
+                    return
+                votes = await asyncio.gather(
+                    *(self._ask(
+                        judge,
+                        self._bind(CLOSURE_PROMPT.format(
+                            flaw_type=critique.flaw_type, claim=critique.claim,
+                            specifics=critique.specifics, rebuttal=rebuttal,
+                        )),
+                    ) for judge in judges.pair_for(target)),
+                    return_exceptions=True,
+                )
+                flags: list[bool] = []
+                for vote in votes:
+                    parsed = parse_stage(
+                        ClosedVote,
+                        vote if isinstance(vote, dict) else None,
+                        stage="closure",
+                    )
+                    self._record_parse(parsed.error, round_)
+                    flags.append(parsed.value.closed if parsed.value is not None else False)
+                if flags and all(flags):
+                    self.close_objection(critique.id, rebuttal, rebuttal_by=target.name)
+                else:
+                    prose, url = extract_source(rebuttal)
+                    critique.rebuttal = prose
+                    if url:
+                        critique.rebuttal_evidence_url = url
+
+            await asyncio.gather(
+                *(judge_closure(item) for item in rebuttals if isinstance(item, tuple)),
                 return_exceptions=True,
             )
-            flags: list[bool] = []
-            for vote in votes:
-                parsed = parse_stage(
-                    ClosedVote,
-                    vote if isinstance(vote, dict) else None,
-                    stage="closure",
-                )
-                self._record_parse(parsed.error, round_)
-                flags.append(parsed.value.closed if parsed.value is not None else False)
-            if flags and all(flags):
-                self.close_objection(critique.id, rebuttal, rebuttal_by=target.name)
-            else:
-                prose, url = extract_source(rebuttal)
-                critique.rebuttal = prose
-                if url:
-                    critique.rebuttal_evidence_url = url
-
-        await asyncio.gather(
-            *(judge_closure(item) for item in rebuttals if isinstance(item, tuple)),
-            return_exceptions=True,
-        )
 
         alias_of = {v: k for k, v in speakers.items()}
 
@@ -566,6 +601,8 @@ class DebateEngine:
                 "faction": faction.name,
                 "change_note": change_note,
             })
+            if mode == "short_review":
+                continue
             for critique in self._open_against(faction):
                 author_faction = next(
                     (f for f in factions if f.name == critique.author_faction), None,
@@ -613,6 +650,9 @@ class DebateEngine:
                     if not (flags and all(flags)):
                         continue
                 self.supersede_objection(critique.id)
+
+        if mode == "short_review":
+            return round_
 
         for faction in factions:
             open_against = self._open_against(faction)
@@ -670,6 +710,14 @@ class DebateEngine:
                         attribution=member,
                     )
         return round_
+
+    def _short_critique_has_evidence(self, critique: Critique) -> bool:
+        """При приложенном источнике factual/logical критика должна цитировать span."""
+        bundle = self.evidence
+        if bundle is None or not bundle.content:
+            return True
+        blob = f"{critique.claim} {critique.specifics}"
+        return quote_span_matches(blob, bundle.content)
 
     def _open_against(self, faction: Faction) -> list[Critique]:
         return [

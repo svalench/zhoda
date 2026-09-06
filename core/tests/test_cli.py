@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from zhoda_core.cli import app, apply_progress, format_cost_breakdown, resolve_clarify_mode
 from zhoda_core.models import CostReport, Protocol
+from zhoda_core.router import PROTOCOL_BY_CLASS
 from zhoda_core.progress import ProgressEvent
 
 # Rich красит каждый дефис отдельно: `\x1b[1;36m-\x1b[0m\x1b[1;36m-auto\x1b[0m…`
@@ -67,6 +68,8 @@ def test_cli_protocol_line_is_eval_stable() -> None:
     assert str(Protocol.VOTE) == "vote"
     assert str(Protocol.DEBATE) == "debate"
     assert str(Protocol.RED_TEAM) == "red_team"
+    assert str(Protocol.SHORT_REVIEW) == "short_review"
+    assert Protocol.SHORT_REVIEW not in PROTOCOL_BY_CLASS.values()
 
 
 def test_conflicting_clarify_flags_are_rejected() -> None:

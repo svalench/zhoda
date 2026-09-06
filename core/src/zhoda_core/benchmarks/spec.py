@@ -71,6 +71,8 @@ def hash_cases(cases: Sequence[BenchmarkCase]) -> str:
 
 def hash_prompts() -> str:
     """Hash шаблонов, которые реально импортирует eval, не ярлыка версии."""
+    from zhoda_core.debate import EVIDENCE_CRITIQUE_PROMPT
+
     from . import baselines, judge
 
     return content_hash(
@@ -81,6 +83,7 @@ def hash_prompts() -> str:
             "synthesize": baselines.SYNTHESIZE_PROMPT,
             "pick_best": baselines.PICK_BEST_PROMPT,
             "blind_judge": judge.BLIND_JUDGE_PROMPT,
+            "evidence_critique": EVIDENCE_CRITIQUE_PROMPT,
         }
     )
 

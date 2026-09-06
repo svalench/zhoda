@@ -25,8 +25,9 @@ PROTOCOL_BY_CLASS: dict[TaskClass, Protocol] = {
 
 THOROUGHNESS: dict[Protocol, int] = {
     Protocol.VOTE: 0,
-    Protocol.DEBATE: 1,
-    Protocol.RED_TEAM: 2,
+    Protocol.SHORT_REVIEW: 1,
+    Protocol.DEBATE: 2,
+    Protocol.RED_TEAM: 3,
 }
 
 FALLBACK_PROTOCOL = Protocol.DEBATE  # disagreement always lands here

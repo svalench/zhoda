@@ -23,6 +23,11 @@ def estimate_cost(cfg: dict[str, Any], protocol: str | None = None) -> dict[str,
         req_min = 2 + n + n + 3
         req_max = req_min + n
         latency_min, latency_max = 20, 90
+    elif proto == "short_review":
+        # Позиции + один evidence critique + revision + classify. Не Oxford.
+        req_min = 2 + n + n + 4
+        req_max = req_min + n + 4
+        latency_min, latency_max = 30, 120
     elif proto == "red_team":
         req_min = 15
         req_max = 30

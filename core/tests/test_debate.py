@@ -9,6 +9,7 @@ from zhoda_core.debate import (
     citation_quotes_objection,
     is_concede_rebuttal,
 )
+from zhoda_core.evidence import bundle_from_context
 from zhoda_core.models import Critique, FactionSwitch, FlawType, ObjectionStatus
 
 
@@ -542,6 +543,89 @@ async def test_c5_bool_true_moves_member_bool_false_does_not() -> None:
     assert "Response A" in factions_move[1].members
     assert "Response A" not in factions_move[0].members
     assert round_.switches
+
+
+def test_short_critique_requires_evidence_span() -> None:
+    """Без цитаты источника factual-критика short_review не проходит."""
+    engine = make_engine()
+    source = "On-call coverage ends at 18:00 on Fridays with no rollback owner."
+    engine.evidence = bundle_from_context(source)
+    quoted = make_critique(
+        claim="staffed rollback is required for payment changes",
+        specifics=source,
+    )
+    bare = make_critique(
+        claim="Kafka adds operational complexity the team cannot staff",
+    )
+    assert engine._short_critique_has_evidence(quoted) is True
+    assert engine._short_critique_has_evidence(bare) is False
+    engine.evidence = None
+    assert engine._short_critique_has_evidence(bare) is True
+
+
+@pytest.mark.asyncio
+async def test_short_review_skips_rebuttal_and_switch() -> None:
+    """Не Oxford: нет DA/rebut/switch; есть evidence critique и revision."""
+    from zhoda_core.factions import Faction
+    from zhoda_core.judges import Judges
+    from zhoda_core.models import Position
+
+    source = "On-call coverage ends at 18:00 on Fridays with no rollback owner."
+    seen: list[str] = []
+
+    class Spy:
+        async def complete(self, model, prompt, *, cache_key=None, **kwargs):
+            del model, cache_key, kwargs
+            seen.append(prompt[:80])
+            raise AssertionError(f"complete must not run in short_review: {prompt[:80]}")
+
+        async def ask_json(self, model, prompt, *, cache_key=None, **kwargs):
+            del model, cache_key, kwargs
+            seen.append(prompt)
+            if "evidence-focused critique" in prompt:
+                return {
+                    "target_faction": "Throughputists"
+                    if "Pragmatists" in prompt
+                    else "Pragmatists",
+                    "flaw_type": "factual",
+                    "claim": (
+                        "On-call coverage ends at 18:00 on Fridays with no rollback "
+                        "owner, so late payment deploys are unstaffed"
+                    ),
+                    "specifics": source,
+                    "evidence_url": None,
+                }
+            if "Revise your platform" in prompt:
+                return {
+                    "thesis": "Use PostgreSQL (simple, sufficient)",
+                    "answer": "pg",
+                    "claims": [],
+                    "falsifiability": "if load grows",
+                    "confidence": 0.7,
+                    "changed": False,
+                    "change_note": "kept",
+                }
+            raise AssertionError(f"unexpected ask_json: {prompt[:120]}")
+
+    pg = Position(model="A", thesis="Use PostgreSQL (simple, sufficient)", answer="pg")
+    kf = Position(model="B", thesis="Use Kafka (built for throughput)", answer="kf")
+    factions = [
+        Faction(name="Pragmatists", members=["A"], platform=pg),
+        Faction(name="Throughputists", members=["B"], platform=kf),
+    ]
+    engine = DebateEngine(provider=Spy())  # type: ignore[arg-type]
+    engine.evidence = bundle_from_context(source)
+    round_ = await engine.run_round(
+        1,
+        factions,
+        speakers={"A": "m1", "B": "m2"},
+        judges=Judges(("j1", "j2"), {}),
+        mode="short_review",
+    )
+    assert round_.critiques
+    assert round_.switches == []
+    assert not any("Rebut it" in p or "devil" in p.lower() or "switch factions" in p for p in seen)
+    assert any("evidence-focused critique" in p for p in seen)
 
 
 async def _two_faction_round(
