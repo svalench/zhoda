@@ -12,6 +12,7 @@ from typing import Sequence
 from zhoda_core.benchmarks.judge import (
     GradeResult,
     GradeStatus,
+    map_to_closed_label,
     pick_matches_gold,
     resolve_picked_id,
 )
@@ -69,15 +70,8 @@ def is_abstain_label(label: str) -> bool:
 
 
 def map_to_label(expected: str, labels: Sequence[str]) -> str:
-    if not labels:
-        return expected
-    fold = expected.casefold()
-    for opt in labels:
-        if opt.casefold() == fold:
-            return opt
-        if fold.startswith(opt.casefold() + ";"):
-            return opt
-    return expected
+    """Префикс до ';' побеждает полную форму gold в closed labels."""
+    return map_to_closed_label(expected, labels)
 
 
 def pick_is_credited(picked: str, gold: GoldRow, labels: Sequence[str]) -> bool:

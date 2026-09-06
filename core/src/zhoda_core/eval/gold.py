@@ -16,6 +16,19 @@ ANNOTATOR_NOT_INDEPENDENT = "protocol-author-not-independent"
 COMPARE_FIELDS = ("expected_action", "abstain_policy", "unacceptable_claims")
 ABSTAIN_POLICIES = ("required", "forbidden", "allowed")
 KAPPA_P5_MIN = 0.6
+P5_GATE_FIELD = "expected_action"
+OWNER_RESOLVED_BY = "owner:svalench"
+OWNER_ADJUDICATION_DATE = "2026-09-06"
+OWNER_ADJUDICATION_SHA = "51ee8e02ef55b29276decc2bf4f9111f1aba4ce0"
+OWNER_ACTION_NOTES = "B is a prefix of A; _map_to_label matches on 'No;' prefix"
+OWNER_CLAIMS_RESOLUTION = (
+    "not adjudicated; paraphrase-level mismatch, not a P5 gate"
+)
+HOL_MIN_IDS = frozenset(f"hol-min-{i:03d}" for i in range(1, 7))
+DISAGREEMENT_STATUS = (
+    "RESOLVED for expected_action / abstain_policy; "
+    "unacceptable_claims not adjudicated (non-gate)"
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 PILOT_DIR = REPO_ROOT / "core" / "eval" / "pilot"
@@ -114,6 +127,50 @@ def field_disagreements(
     return diffs
 
 
+def p5_gate_blocks(
+    disputed_fields: Sequence[object] | None,
+    label_status: object = None,
+) -> bool:
+    """P5 гейт: есть ли expected_action в disputed_fields. label_status не смотрим."""
+    del label_status
+    fields = [str(item) for item in (disputed_fields or ())]
+    return P5_GATE_FIELD in fields
+
+
+def p5_expected_action_unresolved(
+    rows: Mapping[str, Mapping[str, object]],
+) -> list[str]:
+    """Id, у которых в disputed_fields ещё expected_action."""
+    out: list[str] = []
+    for case_id, row in rows.items():
+        raw = row.get("disputed_fields") or []
+        fields = raw if isinstance(raw, list) else []
+        if p5_gate_blocks(fields, row.get("label_status")):
+            out.append(str(case_id))
+    return out
+
+
+def apply_owner_disputed_fields(case_id: str, fields: Sequence[str]) -> list[str]:
+    """Owner снял спор expected_action у hol-min-001…006. Списки claims не трогаем."""
+    kept = [str(item) for item in fields]
+    if case_id in HOL_MIN_IDS:
+        kept = [item for item in kept if item != P5_GATE_FIELD]
+    return kept
+
+
+def owner_resolution(
+    case_id: str,
+    field: str,
+    a_value: object,
+) -> tuple[str, str, str]:
+    """resolution, resolved_by, notes — решение владельца (не переобсуждать)."""
+    if field == P5_GATE_FIELD and case_id in HOL_MIN_IDS:
+        return str(a_value), OWNER_RESOLVED_BY, OWNER_ACTION_NOTES
+    if field == "unacceptable_claims":
+        return OWNER_CLAIMS_RESOLUTION, OWNER_RESOLVED_BY, "exact mismatch; owner adjudicates"
+    return "", "", "exact mismatch; owner adjudicates"
+
+
 def agreement_rate(pairs: Sequence[tuple[object, object]]) -> float:
     if not pairs:
         return 1.0
@@ -174,12 +231,13 @@ def render_disagreement_log(
     lines = [
         "# Disagreement log — pilot gold",
         "",
-        "Status: **OPEN — awaiting owner resolution**. Not adjudicated.",
+        f"Status: **{DISAGREEMENT_STATUS}**.",
+        f"Adjudicated: {OWNER_ADJUDICATION_DATE}, HEAD `{OWNER_ADJUDICATION_SHA}`.",
         "",
         "Comparison is **exact** on `expected_action`, `abstain_policy`, and",
         "`unacceptable_claims` (list equality, order-sensitive). Paraphrases are",
-        "logged, not merged. `resolution` / `resolved_by` stay empty until the owner",
-        "fills them. Do not treat this table as agreement.",
+        "logged, not merged. Owner filled `resolution` / `resolved_by`.",
+        "`unacceptable_claims` lists are not unioned. Do not treat claims rows as agreement.",
         "",
         f"- n_cases: {n}",
         f"- expected_action exact: {action_n}/{n} = {action_p:.3f}",
@@ -196,10 +254,10 @@ def render_disagreement_log(
         "|---|---|---|---|---|---|---|---|---|",
     ]
     for case_id, field, av, bv in diffs:
-        notes = "exact mismatch; owner adjudicates"
+        resolution, resolved_by, notes = owner_resolution(case_id, field, av)
         lines.append(
             f"| {case_id} | {annotator_a} | {annotator_b} | {field} | "
-            f"{_cell(av)} | {_cell(bv)} |  |  | {notes} |"
+            f"{_cell(av)} | {_cell(bv)} | {_cell(resolution)} | {resolved_by} | {notes} |"
         )
     lines.append("")
     return "\n".join(lines)
@@ -223,7 +281,7 @@ def merged_draft_payloads(
             bucket.append(field)
     out: list[dict[str, object]] = []
     for case_id, row in a_rows.items():
-        fields = disputed_fields.get(case_id, [])
+        fields = apply_owner_disputed_fields(case_id, disputed_fields.get(case_id, []))
         out.append(
             {
                 "id": row["id"],
@@ -235,6 +293,7 @@ def merged_draft_payloads(
                 "label_status": LABEL_DISPUTED if fields else row["label_status"],
                 "annotator": row["annotator"],
                 "disputed_fields": fields,
+                "gate_disputed": p5_gate_blocks(fields),
             }
         )
     return out
