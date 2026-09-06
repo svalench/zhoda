@@ -225,16 +225,20 @@ class Runtime:
         return tid
 
     def _budget_cfg(self, budget_usd: float | None) -> dict[str, Any] | None:
+        """Клиент может только снизить yaml-кап. 0 = только :free, не «без капа»."""
         if budget_usd is None:
             return None
         if budget_usd < 0:
-            return {"error": "invalid_budget", "message": "budget_usd must be >= 0"}
+            return incomplete_payload(
+                error="invalid_budget",
+                message="budget_usd must be >= 0",
+            )
         yaml_cap = float(self.cfg.get("budget_per_question_usd") or 0.0)
         cfg = dict(self.cfg)
-        if yaml_cap > 0:
-            cfg["budget_per_question_usd"] = min(float(budget_usd), yaml_cap)
+        if yaml_cap <= 0:
+            cfg["budget_per_question_usd"] = 0.0
         else:
-            cfg["budget_per_question_usd"] = float(budget_usd)
+            cfg["budget_per_question_usd"] = min(float(budget_usd), yaml_cap)
         return cfg
 
     async def review(
@@ -354,7 +358,19 @@ class Runtime:
                 or str(getattr(engine, "last_transcript_id", "") or ""),
             )
         except QuotaExceededError as exc:
-            return _quota(exc)
+            tid = self._terminal(engine, "QuotaExceededError", str(exc))
+            return incomplete_payload(
+                error="quota_exceeded",
+                message=str(exc),
+                transcript_id=tid
+                or str(getattr(engine, "last_transcript_id", "") or ""),
+                extra={
+                    "hint": (
+                        "wait for the daily reset or add credits; "
+                        "never silently degrade"
+                    ),
+                },
+            )
         except BudgetExceededError as exc:
             tid = self._terminal(engine, "BudgetExceededError", str(exc))
             return incomplete_payload(

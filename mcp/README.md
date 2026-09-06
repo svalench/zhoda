@@ -26,8 +26,10 @@ In-process core over **stdio** (default). SSE via `ZHODA_MCP_TRANSPORT=sse`.
 issues, or merge. `approved` is always false; incomplete/degraded runs are not
 recommended. Default `protocol_policy` is `debate` because the short_review
 eval is not a live usefulness result.
-On OpenRouter quota exhaustion the tool returns `{"error": "quota_exceeded", ...}`
-— it does not silently degrade.
+On OpenRouter quota exhaustion `zhoda_review` returns `status=incomplete` with
+`error=quota_exceeded` and `approved=false` — it does not silently degrade.
+`zhoda_deliberate` still returns the structured `{error: quota_exceeded}` object.
+`budget_usd` cannot raise a yaml cap of `$0` (`:free` only).
 
 ## Install (from this repo)
 

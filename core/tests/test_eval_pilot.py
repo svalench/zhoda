@@ -218,12 +218,13 @@ def test_build_live_arms_pilot_skips_council(tmp_path, monkeypatch) -> None:
 
 
 def test_frozen_manifest_hashes_content(tmp_path) -> None:
-    from zhoda_core.eval.gold import dump_gold
-    from zhoda_core.eval.pilot import write_frozen_manifest
+    from zhoda_core.eval.pilot import FROZEN_MANIFEST, write_frozen_manifest
 
-    dump_public(PUBLIC_JSONL)
-    dump_gold(GOLD_JSONL)
-    man = write_frozen_manifest()
+    before = FROZEN_MANIFEST.read_text(encoding="utf-8")
+    target = tmp_path / "frozen-manifest.json"
+    man = write_frozen_manifest(target)
+    assert FROZEN_MANIFEST.read_text(encoding="utf-8") == before
+    assert target.is_file()
     assert man["status"] == PILOT_STATUS
     assert man["live"] is False
     assert man["significance_promised"] is False
@@ -232,4 +233,6 @@ def test_frozen_manifest_hashes_content(tmp_path) -> None:
     assert man["prompt_hash"]
     assert man["n_cases"] == 36
     assert man["spend_cap_usd"] == 8.0
-    del tmp_path
+    committed = json.loads(before)
+    assert man["public_hash"] == committed["public_hash"]
+    assert man["gold_hash"] == committed["gold_hash"]

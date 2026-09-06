@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from zhoda_core.engine import ZhodaEngine
 from zhoda_core.models import (
     AccountingStatus,
     ConsensusStrength,
@@ -16,6 +17,12 @@ from zhoda_core.models import (
     RunCompleteness,
     Verdict,
 )
+from zhoda_core.providers.openrouter import (
+    BudgetExceededError,
+    OpenRouterProvider,
+    QuotaExceededError,
+)
+from zhoda_core.reputation import ReputationStorage
 
 from zhoda_mcp.demo_review import run_demo
 from zhoda_mcp.readonly import FORBIDDEN_ADAPTERS, ReadOnlyViolation, invoke_adapter
@@ -24,7 +31,7 @@ from zhoda_mcp.review import project_review, recommendation_status
 from zhoda_mcp.runtime import Runtime
 from zhoda_mcp.server import mcp
 from zhoda_mcp.sources import SourceError, assemble_context, resolve_allowed_file
-from test_runtime import FakeEngine, _runtime, _verdict
+from test_runtime import CFG, FakeEngine, _runtime, _verdict
 
 
 def test_six_tools_include_review() -> None:
@@ -262,3 +269,144 @@ def test_offline_demo_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "customer emails" in blob.casefold()
     assert report["demo"]["live"] is False
     assert report["demo"]["product_gate"] == "OPEN"
+
+
+class _SlowProvider(OpenRouterProvider):
+    def __init__(self) -> None:
+        super().__init__(api_key="test")
+
+    async def complete(self, model: str, prompt: str, **kwargs: object) -> str:
+        del model, prompt, kwargs
+        await asyncio.sleep(30)
+        return "{}"
+
+
+def _engine_runtime(tmp_path: Path, provider: OpenRouterProvider) -> tuple[Runtime, ZhodaEngine]:
+    engine = ZhodaEngine(
+        provider,
+        list(CFG["council"]),
+        chairman=str(CFG["chairman"]),
+        judges=tuple(CFG["judges"]),
+        router_classifiers=tuple(CFG["router_classifiers"]),
+        transcripts_dir=str(tmp_path / "tr"),
+        alias_seed=42,
+    )
+
+    def factory(_rounds: int | None) -> tuple[ZhodaEngine, OpenRouterProvider]:
+        return engine, provider
+
+    rt = Runtime(
+        dict(CFG),
+        transcripts=engine.transcripts,
+        reputation=ReputationStorage(tmp_path / "rep.json"),
+        session_factory=factory,
+    )
+    return rt, engine
+
+
+@pytest.mark.asyncio
+async def test_yaml_zero_budget_usd_cannot_raise_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """yaml 0 = :free only. budget_usd не поднимает кап. Проверка через make_provider."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    from zhoda_core.config import make_provider
+    from zhoda_core.transcripts import TranscriptStore
+
+    cfg = {
+        **CFG,
+        "budget_per_question_usd": 0.0,
+        "prices": {"paid/model": 0.01},
+    }
+    rt = Runtime(
+        cfg,
+        transcripts=TranscriptStore(str(tmp_path / "tr")),
+        reputation=ReputationStorage(tmp_path / "rep.json"),
+    )
+    assert rt.session_factory is None
+    clamped = rt._budget_cfg(10.0)
+    assert clamped is not None
+    assert clamped.get("error") is None
+    assert float(clamped["budget_per_question_usd"]) == 0.0
+    provider = make_provider(clamped)
+    assert provider.budget_usd == 0.0
+    provider.begin_question()
+    with pytest.raises(BudgetExceededError, match=":free"):
+        await provider.complete("paid/model", "hi")
+    await provider.close()
+
+    est = await rt.review("q", confirm=False, source_text="body", budget_usd=10.0)
+    assert est["status"] == "estimate"
+    assert est["estimate"]["budget_usd"] == 0.0
+    assert ":free" in est["estimate"]["note"]
+
+    rt.cfg = {**CFG, "budget_per_question_usd": 10.0}
+    lowered = rt._budget_cfg(4.0)
+    assert lowered is not None
+    assert float(lowered["budget_per_question_usd"]) == 4.0
+    raised = rt._budget_cfg(50.0)
+    assert raised is not None
+    assert float(raised["budget_per_question_usd"]) == 10.0
+
+    bad = await rt.review("q", confirm=False, source_text="body", budget_usd=-1)
+    assert bad["status"] == "incomplete"
+    assert bad["approved"] is False
+    assert bad["error"] == "invalid_budget"
+
+
+@pytest.mark.asyncio
+async def test_review_quota_is_incomplete(tmp_path: Path) -> None:
+    rt, _ = _runtime(tmp_path, FakeEngine(error=QuotaExceededError("daily cap")))
+    out = await rt.review("q", confirm=True, source_text="body")
+    assert out["status"] == "incomplete"
+    assert out["error"] == "quota_exceeded"
+    assert out["approved"] is False
+    assert out["incomplete"] is True
+    assert "silently" in out["hint"]
+
+
+@pytest.mark.asyncio
+async def test_review_cancel_engine_cleans_accounting(tmp_path: Path) -> None:
+    """Host cancel: MCP ловит CancelledError, engine end_question, не verdict."""
+    provider = _SlowProvider()
+    rt, engine = _engine_runtime(tmp_path, provider)
+    task = asyncio.create_task(
+        rt.review("q", confirm=True, source_text="body"),
+    )
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if engine.last_transcript_id:
+            break
+    assert engine.last_transcript_id
+    task.cancel()
+    out = await task
+    assert out["status"] == "incomplete"
+    assert out["error"] == "cancelled"
+    assert out["approved"] is False
+    assert provider._active_run is None
+    tid = engine.last_transcript_id
+    events = engine.transcripts.read(tid)
+    stages = [str(event.get("stage")) for event in events]
+    assert stages[0] == "start"
+    assert stages[-1] == "error"
+    assert "verdict" not in stages
+    assert events[-1].get("terminal") is True
+
+
+@pytest.mark.asyncio
+async def test_review_timeout_engine_cleans_accounting(tmp_path: Path) -> None:
+    provider = _SlowProvider()
+    rt, engine = _engine_runtime(tmp_path, provider)
+    out = await rt.review(
+        "q", confirm=True, source_text="body", timeout_s=0.05,
+    )
+    assert out["status"] == "incomplete"
+    assert out["error"] == "timeout"
+    assert out["approved"] is False
+    assert provider._active_run is None
+    tid = engine.last_transcript_id
+    assert tid
+    events = engine.transcripts.read(tid)
+    stages = [str(event.get("stage")) for event in events]
+    assert stages[-1] == "error"
+    assert "verdict" not in stages

@@ -118,6 +118,9 @@ Current mapping (keep updated):
 | MCP roundtrip: start before route before verdict; error ≠ success | mcp/tests/test_runtime.py::test_verdict_and_transcript_roundtrip + test_error_transcript_is_not_a_successful_verdict |
 | Cancelled run is terminal error, not verdict; end_question still runs | tests/test_transcripts.py::test_cancellation_is_terminal_error_not_success |
 | Read-only review: no write adapters; path bounds; never "approved" | mcp/tests/test_review.py |
+| yaml 0 review cap cannot be raised by client budget_usd | mcp/tests/test_review.py::test_yaml_zero_budget_usd_cannot_raise_cap |
+| Review quota/cancel/timeout is incomplete; engine end_question runs | mcp/tests/test_review.py::test_review_quota_is_incomplete + test_review_cancel_engine_cleans_accounting + test_review_timeout_engine_cleans_accounting |
+| Frozen manifest write does not mutate committed freeze identity | tests/test_eval_pilot.py::test_frozen_manifest_hashes_content |
 | Source span reaches closure (both judges) and revision prompts | tests/test_e2e.py::test_e1_source_span_reaches_closure_and_revision |
 | Revision does not copy a dropped/false finding into active supporting | tests/test_e2e.py::test_e2_revision_does_not_inherit_false_finding + tests/test_debate.py::test_revision_does_not_copy_dropped_finding |
 | Two confirmed findings survive partial overlap with the decision | tests/test_verdict.py::test_e3_two_findings_survive_partial_overlap |

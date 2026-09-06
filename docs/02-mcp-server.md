@@ -169,7 +169,9 @@ bounds без смены контракта для всех хостов.
 - `recommendation_status`: recommended / conditional / unresolved /
   insufficient_evidence. `approved` всегда false. Incomplete ≠ recommended.
 - `plan_proposal` — предложение, не команда к apply/merge/migration.
-- Cancel/timeout: `status=incomplete`, хроніка `stage=error`.
+- Cancel/timeout/quota: `status=incomplete`, `approved=false`, хроніка `stage=error`.
+- `budget_usd` может только снизить yaml-кап. `budget_per_question_usd: 0` =
+  только `:free`; клиент не поднимает кап до платных моделей.
 - Default `protocol_policy=debate` (G: полезность `short_review` неизвестна).
 - Retention: нет telemetry документов. Локальный `transcripts_dir`.
 - Offline demo: `uv run python -m zhoda_mcp.demo_review` — не user study.
