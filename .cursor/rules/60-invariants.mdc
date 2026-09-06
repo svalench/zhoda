@@ -47,6 +47,7 @@ Current mapping (keep updated):
 | Compare --arms/--tables slice skips unselected spend | tests/test_benchmarks.py::test_compare_arms_and_tables_slice |
 | Per-arm sqlite cache; vote does not reuse debate keys | tests/test_benchmarks.py::test_build_live_arms_uses_distinct_cache_files |
 | Fresh cache refuses occupied sqlite; resume needs matching spec_hash; cached rows excluded from mean USD | tests/test_cache_mode.py + tests/test_openrouter.py::test_preseeded_sqlite_hits_are_replayed_without_http |
+| P5 experiment cap $2; remaining clamp min(YAML, leftover); gate 3 in self-check | tests/test_cache_mode.py::test_p5_cap_is_two_dollars_and_gate3 + test_clamp_arm_budget_cannot_exceed_remaining |
 | Live G v1 tree byte-identical to 9abbe24 (git diff 9abbe24..HEAD + WT/index); v2 runner has no auto-resume | tests/test_pilot_rescore.py::test_v1_live_g_tree_matches_9abbe24 + tests/test_cache_mode.py::test_run_live_g_fresh_does_not_auto_resume_from_checkpoint |
 | Blind LLM judge: committed gold, dissent is a miss | tests/test_benchmarks.py::test_blind_judge_requires_committed_gold + test_blind_llm_judge_hides_arm_and_rejects_dissent |
 | Blind judge decision is judge_visible_decision (no dissent/arm marker in the answer slot) | tests/test_eval_grader.py::test_sidecar_judge_prompt_uses_gold_not_empty_gt |

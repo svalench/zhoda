@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live G: Oxford vs short_review vs majority. Кап эксперимента $8. Без freeze-manifest."""
+"""Live G v2 / P5: Oxford vs short_review vs majority. Кап эксперимента $2. Без freeze-manifest."""
 
 from __future__ import annotations
 
@@ -20,7 +20,9 @@ OUT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = OUT_DIR.parents[2]
 CORE_DIR = REPO_ROOT / "core"
 CONFIG_PATH = CORE_DIR / "zhoda.yaml"
-SPEND_CAP_USD = 8.0
+# P5 owner cap. YAML budget_per_question_usd — потолок руки, не кап эксперимента.
+P5_OWNER_CAP_USD = 2.0
+SPEND_CAP_USD = P5_OWNER_CAP_USD
 REPLICATE_ID = 0
 CACHE_MODE = "fresh"
 CLARIFY_MODE = "no-clarify"
@@ -88,8 +90,45 @@ def spent_usd(results: list[Any]) -> float:
     return float(sum(float(row.usd or 0.0) for row in unique_arm_rows(results)))
 
 
-async def compare_case_resilient(runner: Any, case: Any, models: list[str], rounds: int) -> list[Any]:
-    """Три руки независимо. Freeze/strip на одной не выкидывает кейс целиком."""
+def experiment_spent(results: list[Any]) -> float:
+    """Кап эксперимента = engine USD + evaluator USD."""
+    return spent_usd(results) + evaluator_usd(results)
+
+
+def remaining_experiment(results: list[Any], cap: float) -> float:
+    return float(cap) - experiment_spent(results)
+
+
+def _budget_holder(arm: Any) -> Any:
+    """OpenRouter (или inner у SpyingProvider) с полем budget_usd."""
+    from zhoda_core.benchmarks.spy import SpyingProvider
+
+    engine = arm.engine
+    provider = engine.provider
+    if isinstance(provider, SpyingProvider):
+        return provider.inner
+    return provider
+
+
+def clamp_arm_budget(arm: Any, yaml_budget: float, remaining: float) -> float:
+    """Потолок руки = min(YAML, остаток эксперимента). Не раздувает кап."""
+    cap = min(float(yaml_budget), max(0.0, float(remaining)))
+    holder = _budget_holder(arm)
+    holder.budget_usd = cap
+    return cap
+
+
+async def compare_case_resilient(
+    runner: Any,
+    case: Any,
+    models: list[str],
+    rounds: int,
+    *,
+    prior: list[Any],
+    cap: float,
+    yaml_budget: float,
+) -> list[Any]:
+    """Три руки последовательно. Перед каждой — clamp к остатку капа."""
     from zhoda_core.benchmarks.runner import (
         MATCH_REQUEST,
         MODE_MAJORITY,
@@ -98,16 +137,52 @@ async def compare_case_resilient(runner: Any, case: Any, models: list[str], roun
         CaseResult,
         mark_cost_comparable,
     )
-    from zhoda_core.providers.openrouter import QuotaExceededError
+    from zhoda_core.providers.openrouter import BudgetExceededError, QuotaExceededError
+
+    extra: list[Any] = []
+
+    def left() -> float:
+        return remaining_experiment(prior + extra, cap)
 
     async def one(mode: str) -> Any:
+        room = left()
+        if room <= 0:
+            row = CaseResult(
+                case_id=case.id,
+                suite=case.suite,
+                kind=case.kind,
+                mode=mode,
+                decision="",
+                match=MATCH_REQUEST,
+                coverage_status="failed",
+                skip_reason="spend_cap",
+                spec_hash=runner.spec_hash,
+                replicate_id=runner.replicate_id,
+            )
+            extra.append(row)
+            return row
+        clamp_arm_budget(runner.arms[mode], yaml_budget, room)
         try:
-            return await runner.run_case(case, models, mode, rounds, match=MATCH_REQUEST)
+            row = await runner.run_case(case, models, mode, rounds, match=MATCH_REQUEST)
         except QuotaExceededError:
             raise
+        except BudgetExceededError as exc:
+            _log(f"ARM {mode} {case.id} spend_cap: {exc}")
+            row = CaseResult(
+                case_id=case.id,
+                suite=case.suite,
+                kind=case.kind,
+                mode=mode,
+                decision="",
+                match=MATCH_REQUEST,
+                coverage_status="failed",
+                skip_reason="spend_cap",
+                spec_hash=runner.spec_hash,
+                replicate_id=runner.replicate_id,
+            )
         except Exception as exc:  # noqa: BLE001 — граница live-драйвера
             _log(f"ARM {mode} {case.id} err={type(exc).__name__}: {exc}")
-            return CaseResult(
+            row = CaseResult(
                 case_id=case.id,
                 suite=case.suite,
                 kind=case.kind,
@@ -119,6 +194,8 @@ async def compare_case_resilient(runner: Any, case: Any, models: list[str], roun
                 spec_hash=runner.spec_hash,
                 replicate_id=runner.replicate_id,
             )
+        extra.append(row)
+        return row
 
     zhoda = await one(MODE_ZHODA)
     results: list[Any] = []
@@ -429,7 +506,7 @@ def write_notes(report: dict[str, Any]) -> None:
         f"Stop reason: `{report['stop_reason']}`",
         f"Execution SHA: `{report['execution_sha']}`",
         f"Frozen source_sha (identity): `{report['frozen']['source_sha']}`",
-        f"Spend: ${report['spend_usd']:.4f} / ${SPEND_CAP_USD:.2f}",
+        f"Spend: ${report['spend_usd']:.4f} / ${float(report['spend_cap_usd']):.2f}",
         f"n complete (3 arms): {cov['n_complete']} / {cov['n_cases_in_suite']}",
         f"Ungraded/failed share: {cov['ungraded_failed_share']:.3f}",
         f"Primary Δ = action_correct(short_review) − action_correct(oxford): **{delta_s}**",
@@ -550,19 +627,40 @@ def check_gold_expected_action_gate() -> dict[str, Any]:
     }
 
 
-def check_preconditions() -> dict[str, Any]:
+def check_owner_budget_gate(cap: float) -> dict[str, Any]:
+    """Гейт 3: кап P5 = $2.00, не YAML $10 и не старый G $8."""
+    ok = abs(float(cap) - P5_OWNER_CAP_USD) < 1e-12
+    return {"ok": ok, "cap_usd": float(cap), "required_usd": P5_OWNER_CAP_USD}
+
+
+def check_preconditions(*, spend_cap_usd: float = P5_OWNER_CAP_USD) -> dict[str, Any]:
     """Предусловия P5. Гейт 2 не смотрит label_status."""
     g1 = check_p1_p2_p3_on_tree()
     g2 = check_gold_expected_action_gate()
+    g3 = check_owner_budget_gate(spend_cap_usd)
+    ok = bool(g1["ok"] and g2["ok"] and g3["ok"])
+    stop = ""
+    if not g2["ok"]:
+        stop = g2["stop_reason"]
+    elif not g1["ok"]:
+        stop = "preconditions_failed"
+    elif not g3["ok"]:
+        stop = "spend_cap_mismatch"
     return {
         "p1_p2_p3_on_main": g1,
         "gold_expected_action_resolved": g2,
-        "ok": bool(g1["ok"] and g2["ok"]),
-        "stop_reason": g2["stop_reason"] if not g2["ok"] else ("preconditions_failed" if not g1["ok"] else ""),
+        "owner_budget_and_launch": g3,
+        "ok": ok,
+        "stop_reason": stop,
     }
 
 
-def self_check(*, out_dir: Path = OUT_DIR, allow_resume: bool = False) -> int:
+def self_check(
+    *,
+    out_dir: Path = OUT_DIR,
+    allow_resume: bool = False,
+    spend_cap_usd: float = P5_OWNER_CAP_USD,
+) -> int:
     from zhoda_core.benchmarks.cache_guard import (
         apply_allow_resume,
         ensure_fresh_cache,
@@ -570,9 +668,10 @@ def self_check(*, out_dir: Path = OUT_DIR, allow_resume: bool = False) -> int:
     )
     from zhoda_core.env import load_zhoda_env
 
-    pre = check_preconditions()
+    pre = check_preconditions(spend_cap_usd=spend_cap_usd)
     print(f"gate 1 = {'PASS' if pre['p1_p2_p3_on_main']['ok'] else 'FAIL'}")
     print(f"gate 2 = {'PASS' if pre['gold_expected_action_resolved']['ok'] else 'FAIL'}")
+    print(f"gate 3 = {'PASS' if pre['owner_budget_and_launch']['ok'] else 'FAIL'}")
     if not pre["ok"]:
         print(json.dumps(pre, ensure_ascii=False))
         return 2
@@ -627,8 +726,16 @@ def self_check(*, out_dir: Path = OUT_DIR, allow_resume: bool = False) -> int:
     return 0
 
 
-async def run_live(*, allow_resume: bool = False) -> dict[str, Any]:
-    from zhoda_core.benchmarks.cache_guard import apply_allow_resume, ensure_resume_checkpoint
+async def run_live(
+    *,
+    allow_resume: bool = False,
+    spend_cap_usd: float = P5_OWNER_CAP_USD,
+) -> dict[str, Any]:
+    from zhoda_core.benchmarks.cache_guard import (
+        CacheNotFreshError,
+        apply_allow_resume,
+        ensure_resume_checkpoint,
+    )
     from zhoda_core.benchmarks.checkpoint import CheckpointStore
     from zhoda_core.benchmarks.cli import _build_arms
     from zhoda_core.benchmarks.runner import (
@@ -646,9 +753,9 @@ async def run_live(*, allow_resume: bool = False) -> dict[str, Any]:
     from zhoda_core.providers.openrouter import QuotaExceededError
 
     load_zhoda_env(REPO_ROOT)
-    pre = check_preconditions()
+    pre = check_preconditions(spend_cap_usd=spend_cap_usd)
     if not pre["ok"]:
-        raise SystemExit(pre["gold_expected_action_resolved"].get("stop_reason") or "preconditions_failed")
+        raise SystemExit(pre.get("stop_reason") or "preconditions_failed")
     if not os.environ.get("OPENROUTER_API_KEY"):
         raise SystemExit("missing OPENROUTER_API_KEY")
     freeze_info = verify_freeze()
@@ -683,19 +790,23 @@ async def run_live(*, allow_resume: bool = False) -> dict[str, Any]:
     if cache_mode == "resume":
         ensure_resume_checkpoint(CHECKPOINT_PATH, spec.spec_hash)
     checkpoint = CheckpointStore(CHECKPOINT_PATH)
-    arms = _build_arms(
-        str(CONFIG_PATH),
-        CLARIFY_MODE,
-        rounds_cap=spec.rounds,
-        cache_path=str(CACHE_PATH),
-        transcripts_dir=str(TRANSCRIPTS_DIR),
-        isolate_cache=True,
-        council=models,
-        replicate_id=spec.replicate_id,
-        cache_mode=spec.cache_mode,
-        spies=spies,
-        modes=PILOT_ARMS,
-    )
+    try:
+        arms = _build_arms(
+            str(CONFIG_PATH),
+            CLARIFY_MODE,
+            rounds_cap=spec.rounds,
+            cache_path=str(CACHE_PATH),
+            transcripts_dir=str(TRANSCRIPTS_DIR),
+            isolate_cache=True,
+            council=models,
+            replicate_id=spec.replicate_id,
+            cache_mode=spec.cache_mode,
+            spies=spies,
+            modes=PILOT_ARMS,
+        )
+    except CacheNotFreshError as exc:
+        raise SystemExit("cache_not_fresh") from exc
+    yaml_budget = float(spec.budget_per_question_usd)
     runner = ComparativeRunner(
         arms=arms,
         compare_modes=PILOT_ARMS,
@@ -712,22 +823,30 @@ async def run_live(*, allow_resume: bool = False) -> dict[str, Any]:
     stop_reason = "complete"
     stop_error = ""
     _log(
-        f"LIVE_G_START n={len(cases)} arms={list(PILOT_ARMS)} cap={SPEND_CAP_USD} "
+        f"LIVE_G_START n={len(cases)} arms={list(PILOT_ARMS)} cap={spend_cap_usd} "
         f"spec={spec.spec_hash[:12]} sha={source_sha(REPO_ROOT)[:12]}"
     )
     try:
         for index, case in enumerate(cases):
-            spent = spent_usd(results)
-            if spent >= SPEND_CAP_USD:
+            spent = experiment_spent(results)
+            if remaining_experiment(results, spend_cap_usd) <= 0:
                 stop_reason = "spend_cap"
                 _log(f"LIVE_G_STOP reason=spend_cap spent={spent:.4f}")
                 break
             _log(
                 f"CASE {index + 1}/{len(cases)} id={case.id} spent={spent:.4f} "
-                f"remain={SPEND_CAP_USD - spent:.4f}"
+                f"remain={remaining_experiment(results, spend_cap_usd):.4f}"
             )
             try:
-                batch = await compare_case_resilient(runner, case, models, spec.rounds)
+                batch = await compare_case_resilient(
+                    runner,
+                    case,
+                    models,
+                    spec.rounds,
+                    prior=results,
+                    cap=spend_cap_usd,
+                    yaml_budget=yaml_budget,
+                )
             except QuotaExceededError as exc:
                 stop_reason = "quota_exceeded"
                 stop_error = str(exc)
@@ -738,7 +857,7 @@ async def run_live(*, allow_resume: bool = False) -> dict[str, Any]:
                 traceback.print_exc()
                 continue
             results.extend(batch)
-            spent = spent_usd(results)
+            spent = experiment_spent(results)
             write_progress(
                 {
                     "status": "running",
@@ -746,7 +865,7 @@ async def run_live(*, allow_resume: bool = False) -> dict[str, Any]:
                     "case_id": case.id,
                     "n_cases": len(cases),
                     "spent_usd": spent,
-                    "spend_cap_usd": SPEND_CAP_USD,
+                    "spend_cap_usd": spend_cap_usd,
                     "n_rows": len(unique_arm_rows(results)),
                     "updated_at": _utc(),
                 }
@@ -755,7 +874,7 @@ async def run_live(*, allow_resume: bool = False) -> dict[str, Any]:
                 f"CASE_DONE {case.id} spent={spent:.4f} "
                 f"rows={len(unique_arm_rows(results))}"
             )
-            if spent >= SPEND_CAP_USD:
+            if remaining_experiment(results, spend_cap_usd) <= 0:
                 stop_reason = "spend_cap"
                 _log(f"LIVE_G_STOP reason=spend_cap spent={spent:.4f}")
                 break
@@ -784,7 +903,9 @@ async def run_live(*, allow_resume: bool = False) -> dict[str, Any]:
     cov = coverage_stats(scored, len(cases))
     primary = paired_primary(scored)
     rule = decide_rule(primary, cov["n_complete"], cov["ungraded_failed_share"])
-    spend = spent_usd(results)
+    engine_spend = spent_usd(results)
+    eval_spend = evaluator_usd(results)
+    spend = engine_spend + eval_spend
     from zhoda_core.benchmarks.metrics import summarize
 
     n_cached_by_arm = {
@@ -803,10 +924,10 @@ async def run_live(*, allow_resume: bool = False) -> dict[str, Any]:
         "execution_sha": source_sha(REPO_ROOT),
         "frozen": freeze_info["frozen"],
         "hash_ok": freeze_info["hash_ok"],
-        "spend_cap_usd": SPEND_CAP_USD,
+        "spend_cap_usd": spend_cap_usd,
         "spend_usd": spend,
-        "engine_usd": spend - evaluator_usd(results),
-        "evaluator_usd": evaluator_usd(results),
+        "engine_usd": engine_spend,
+        "evaluator_usd": eval_spend,
         "clarify_mode": CLARIFY_MODE,
         "cache_mode": cache_mode,
         "replicate_id": REPLICATE_ID,
@@ -877,19 +998,31 @@ def bind_out_dir(out_dir: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Live G pilot driver")
+    parser = argparse.ArgumentParser(description="Live G P5 driver")
     parser.add_argument("--self-check", action="store_true")
     parser.add_argument("--allow-resume", action="store_true")
     parser.add_argument("--out-dir", default=None)
+    parser.add_argument(
+        "--spend-cap-usd",
+        type=float,
+        default=P5_OWNER_CAP_USD,
+        help="experiment cap (P5 owner = 2.00). YAML budget_per_question is per-arm.",
+    )
     args = parser.parse_args(argv)
     out_dir = Path(args.out_dir).resolve() if args.out_dir else OUT_DIR
     if args.self_check:
-        return self_check(out_dir=out_dir, allow_resume=args.allow_resume)
+        return self_check(
+            out_dir=out_dir,
+            allow_resume=args.allow_resume,
+            spend_cap_usd=args.spend_cap_usd,
+        )
     if args.out_dir:
         bind_out_dir(out_dir)
     _acquire_lock()
     try:
-        asyncio.run(run_live(allow_resume=args.allow_resume))
+        asyncio.run(
+            run_live(allow_resume=args.allow_resume, spend_cap_usd=args.spend_cap_usd)
+        )
     finally:
         _release_lock()
     return 0
