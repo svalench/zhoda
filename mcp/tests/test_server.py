@@ -8,9 +8,10 @@ EXPECTED = {
     "zhoda_verdict",
     "zhoda_transcript",
     "zhoda_reputation",
+    "zhoda_review",
 }
 
 
-def test_five_tools_registered() -> None:
+def test_tools_registered() -> None:
     names = set(mcp._tool_manager._tools)
     assert names == EXPECTED

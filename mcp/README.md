@@ -18,9 +18,14 @@ In-process core over **stdio** (default). SSE via `ZHODA_MCP_TRANSPORT=sse`.
 | `zhoda_deliberate` | `confirm=false` → estimate; `confirm=true` → `Verdict` JSON |
 | `zhoda_verdict` | Stored verdict by `transcript_id` |
 | `zhoda_transcript` | хроніка as `json` or `md` |
+| `zhoda_review` | Read-only ADR/RFC/plan review (`zhoda.review.v1`). `confirm=false` estimates. Never writes, never fetches URLs. |
 | `zhoda_reputation` | Per-domain model ratings |
 
 `zhoda_deliberate` never starts the council until the host passes `confirm=true`.
+`zhoda_review` is the same confirm gate. It does **not** apply patches, open
+issues, or merge. `approved` is always false; incomplete/degraded runs are not
+recommended. Default `protocol_policy` is `debate` because the short_review
+eval is not a live usefulness result.
 On OpenRouter quota exhaustion the tool returns `{"error": "quota_exceeded", ...}`
 — it does not silently degrade.
 
@@ -129,6 +134,27 @@ Env:
 | `ZHODA_REPUTATION_PATH` | Domain ELO JSON |
 | `ZHODA_MCP_TRANSPORT` | `stdio` (default) or `sse` |
 | `ZHODA_CORE_URL` | Reserved; setting it returns `remote_core_unwired` |
+
+## Read-only decision review
+
+`zhoda_review` accepts `source_text` and/or `source_paths` under explicit
+`allowed_roots`. It does not scan the home directory or the git root.
+Local files only; no URL fetch. Secrets are redacted before the council.
+Transcripts stay in `ZHODA_TRANSCRIPTS_DIR`. User documents are not sent
+as telemetry.
+
+Trust: a `plan_proposal` is for the human, not for an executor agent to
+apply. Cancel and timeout return `status=incomplete` with a transcript
+error event — not a successful verdict.
+
+Statuses: [decision-review-status.md](../docs/eval/decision-review-status.md).
+Implementation is **IMPLEMENTATION_READY**. The volunteer pilot is **not**
+complete. Product gate is **OPEN**. The offline demo is not user impact.
+
+```bash
+cd mcp
+uv run python -m zhoda_mcp.demo_review
+```
 
 ## Tests
 

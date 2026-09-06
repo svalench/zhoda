@@ -144,6 +144,9 @@ Zhoda — open-source система, в которой несколько LLM �
 ### Этап 2 — MCP-сервер (после зелёного live)
 - [x] Инструменты clarify/deliberate/verdict/transcript/reputation
       (`confirm` до запуска; plan-контракт внутри Verdict)
+- [x] Read-only `zhoda_review` (ADR/RFC/plan). IMPLEMENTATION_READY offline.
+      Product gate **OPEN**; пилот не проводился.
+      [docs/eval/decision-review-status.md](eval/decision-review-status.md)
 - [x] Инструкции подключения к dsh, Cursor, Claude Code, Codex
 - [ ] Публикация в MCP-реестрах
 

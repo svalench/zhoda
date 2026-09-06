@@ -67,6 +67,38 @@ async def zhoda_transcript(transcript_id: str, format: str = "json") -> dict[str
 
 
 @mcp.tool()
+async def zhoda_review(
+    question: str = "",
+    confirm: bool = False,
+    source_text: str = "",
+    source_paths: list[str] | None = None,
+    allowed_roots: list[str] | None = None,
+    constraints: list[str] | None = None,
+    protocol_policy: str = "debate",
+    budget_usd: float | None = None,
+    timeout_s: float | None = None,
+    value_map: dict[str, Any] | None = None,
+    format: str = "json",
+    ctx: Context | None = None,  # type: ignore[type-arg]
+) -> dict[str, Any]:
+    """Read-only ADR/RFC/plan review. confirm=false estimates; never writes or fetches URLs."""
+    return await get_runtime().review(
+        question,
+        confirm=confirm,
+        source_text=source_text,
+        source_paths=source_paths,
+        allowed_roots=allowed_roots,
+        constraints=constraints,
+        protocol_policy=protocol_policy,
+        budget_usd=budget_usd,
+        timeout_s=timeout_s,
+        value_map=value_map,
+        format=format,
+        on_progress=progress_sink(ctx),
+    )
+
+
+@mcp.tool()
 async def zhoda_reputation(domain: str | None = None) -> dict[str, Any]:
     """Per-domain model ratings. Omit domain for the full matrix."""
     return get_runtime().reputation_report(domain)

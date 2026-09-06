@@ -1,0 +1,18 @@
+{
+  "schema": "zhoda.review.v1",
+  "intentional_errors": [
+    "Drop the unique constraint on invoices.id",
+    "Log raw customer emails on every HTTP 500",
+    "public write API unauthenticated",
+    "DDL on Friday 22:00 with no feature flag",
+    "Skip the restore drill"
+  ],
+  "expected_recommendation_status": ["conditional", "unresolved", "recommended"],
+  "must_not": ["approved"],
+  "expected_finding_substrings": [
+    "unique constraint",
+    "customer emails",
+    "feature flag"
+  ],
+  "note": "Offline scripted demo. Not a live user study. Product gate remains OPEN."
+}

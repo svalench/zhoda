@@ -1,5 +1,6 @@
 """Хроніка не бывает пустой: start при create, error при падении провайдера."""
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,30 @@ async def test_provider_crash_leaves_error_on_transcript(tmp_path: Path) -> None
     assert "verdict" not in stages
     assert events[-1]["error_type"] == "ZhodaProviderError"
     assert "401" in events[-1]["error"]
+
+
+class _CancelProvider(ScriptedProvider):
+    async def complete(self, model: str, prompt: str, **kwargs: object) -> str:
+        del model, prompt, kwargs
+        raise asyncio.CancelledError()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_is_terminal_error_not_success(tmp_path: Path) -> None:
+    """Cancel: accounting D (end_question) + terminal error E, не verdict."""
+    engine = make_engine(_CancelProvider([]), tmp_path)
+    with pytest.raises(asyncio.CancelledError):
+        await engine.deliberate("which db?", clarify_mode="no-clarify")
+    tid = engine.last_transcript_id
+    assert tid
+    events = engine.transcripts.read(tid)
+    stages = _stages(events)
+    assert stages[0] == "start"
+    assert stages[-1] == "error"
+    assert "verdict" not in stages
+    assert events[-1]["error_type"] == "CancelledError"
+    assert events[-1].get("terminal") is True
+    assert engine.provider._active_run is None
 
 
 @pytest.mark.asyncio

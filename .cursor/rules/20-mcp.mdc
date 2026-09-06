@@ -9,8 +9,10 @@ alwaysApply: false
 - Built on the Python `mcp` SDK (FastMCP). stdio transport by default,
   SSE optional via `ZHODA_CORE_URL`.
 - Tools: `zhoda_clarify`, `zhoda_deliberate`, `zhoda_verdict`,
-  `zhoda_transcript`, `zhoda_reputation`. Names and signatures must match
-  docs/02-mcp-server.md.
+  `zhoda_transcript`, `zhoda_reputation`, `zhoda_review`. Names and
+  signatures must match docs/02-mcp-server.md.
+- `zhoda_review` is read-only: no write/execute adapters, no URL fetch,
+  explicit `allowed_roots` for local files. Plan contract is a proposal.
 - Tools return structured JSON, never prose walls — the host agent decides
   how to render.
 - `zhoda_deliberate` must first return a cost/time estimate and require

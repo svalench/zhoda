@@ -20,6 +20,7 @@
 | `zhoda_deliberate` | `question`, `confirm`, `value_map?`, `rounds_cap?`, `protocol?` | estimate **или** `Verdict` | `confirm=false` — оценка; `confirm=true` — полный цикл |
 | `zhoda_verdict` | `transcript_id: str` | `Verdict` или `error` | Последний event `stage=verdict`. Нет такого event (в т.ч. start+error) — не успешный вердикт (`error`, не `status: verdict`) |
 | `zhoda_transcript` | `transcript_id: str`, `format: "md" \| "json"` | хроніка | JSON: `events[0].stage` = `start`; дальше `route` … `verdict`; промежуточные стадии допустимы |
+| `zhoda_review` | `question`, `confirm`, `source_text?`, `source_paths?`, `allowed_roots?`, `constraints?`, `protocol_policy?`, `budget_usd?`, `timeout_s?` | estimate **или** `zhoda.review.v1` | Read-only ADR/RFC/plan review. `confirm=false` — оценка. Не пишет код, не fetch URL, не auto-merge. Recommendation: `recommended` / `conditional` / `unresolved` / `insufficient_evidence` — никогда `approved`. |
 | `zhoda_reputation` | `domain?: str` | рейтинг моделей | Какой модели доверять в домене |
 
 Принцип: инструменты возвращают структурированный JSON, а не простыню текста —
@@ -40,6 +41,11 @@
 **Сценарий В — «проверь себя»:**
 Агент написал код/план → `zhoda_deliberate` в режиме red-team →
 фракции ищут дыры → агент исправляет до показа пользователю.
+
+**Сценарий Г — «ревью ADR/плана» (read-only):**
+Хост передаёт документ в `source_text` или `source_paths` + `allowed_roots`
+→ `zhoda_review` `confirm=false` (оценка) → `confirm=true` →
+`zhoda.review.v1`. План — предложение, не auto-apply.
 
 ## 4. Транспорт и установка
 
@@ -150,6 +156,26 @@ zhoda-mcp
 - Бесплатные модели OpenRouter имеют дневные квоты — при исчерпании возвращаем
   честную ошибку `quota_exceeded` с инструкцией, а не молчаливую деградацию
 
+### 6.1 Read-only decision review (`zhoda_review`)
+
+Отдельный tool: `zhoda_deliberate` отдаёт `Verdict` и не принимает filesystem
+bounds без смены контракта для всех хостов.
+
+- Вход: `source_text` и/или `source_paths` **только** под явным
+  `allowed_roots`. Нет скана `$HOME`/репозитория. Нет fetch URL.
+- Симлинк `resolve()` + `relative_to`: выход за root — ошибка.
+- Лимиты: 8 файлов, 64 KiB/файл, 24k combined chars.
+- Секреты редактируются до передачи в engine; `usd_status=unknown` виден.
+- `recommendation_status`: recommended / conditional / unresolved /
+  insufficient_evidence. `approved` всегда false. Incomplete ≠ recommended.
+- `plan_proposal` — предложение, не команда к apply/merge/migration.
+- Cancel/timeout: `status=incomplete`, хроніка `stage=error`.
+- Default `protocol_policy=debate` (G: полезность `short_review` неизвестна).
+- Retention: нет telemetry документов. Локальный `transcripts_dir`.
+- Offline demo: `uv run python -m zhoda_mcp.demo_review` — не user study.
+
+Статусы: [decision-review-status.md](eval/decision-review-status.md).
+
 ## 7. Публикация
 
 - [ ] PyPI: `zhoda-mcp`
@@ -160,7 +186,7 @@ zhoda-mcp
 ## 8. Задачи этапа
 
 - [x] Скелет на `mcp` Python SDK (FastMCP), stdio-транспорт
-- [x] Инструменты clarify/deliberate/verdict/transcript/reputation поверх ядра
+- [x] Инструменты clarify/deliberate/verdict/transcript/reputation/review поверх ядра
 - [x] Оценка стоимости и MCP-нотификации прогресса
 - [ ] SSE-транспорт + `ZHODA_CORE_URL` (SSE: `ZHODA_MCP_TRANSPORT=sse`;
       удалённое ядро честно отвечает `remote_core_unwired`)

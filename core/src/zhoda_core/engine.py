@@ -9,6 +9,7 @@ model's fiat is labeled, never mistaken for zhoda. Headcount majority at
 rounds_cap is decision_origin="majority_at_cap": dissent, not zhoda.
 """
 
+import asyncio
 from collections.abc import Callable
 
 from .anonymize import content_alias_seed, make_aliases
@@ -184,6 +185,18 @@ class ZhodaEngine:
                 value_map=value_map,
                 supplied_positions=supplied_positions,
             )
+        except asyncio.CancelledError:
+            # Terminal E + cleanup D (end_question в finally _deliberate_body).
+            self.transcripts.append(
+                tid,
+                {
+                    "stage": "error",
+                    "error_type": "CancelledError",
+                    "error": "cancelled",
+                    "terminal": True,
+                },
+            )
+            raise
         except Exception as exc:
             # Падение до verdict не оставляет пустой jsonl.
             self.transcripts.append(
@@ -192,6 +205,7 @@ class ZhodaEngine:
                     "stage": "error",
                     "error_type": type(exc).__name__,
                     "error": str(exc)[:800],
+                    "terminal": True,
                 },
             )
             raise

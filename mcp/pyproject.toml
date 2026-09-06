@@ -14,6 +14,7 @@ dependencies = [
 
 [project.scripts]
 zhoda-mcp = "zhoda_mcp.server:main"
+zhoda-review-demo = "zhoda_mcp.demo_review:main"
 
 [project.optional-dependencies]
 dev = [

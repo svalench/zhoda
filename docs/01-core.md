@@ -21,8 +21,9 @@ models.py and this file in the same commit (Cursor rule 10-python-core).
   Unknown schema, seq gap, cross-run id, duplicate `event_id` with a
   conflicting payload, or a corrupted event is `ReplayError`, not a
   partial success. Same `event_id` + same payload is an idempotent no-op.
-  A provider crash appends `error` (no `verdict`) and
-  re-raises; the id is still printed.
+  A provider crash or cancellation appends `error` (no `verdict`) and
+  re-raises (`CancelledError` is terminal, not a successful review). The id
+  is still printed. `end_question` still runs (accounting cleanup).
 5. **Cost honesty** — free models first, explicit budget caps, no hidden spend.
 
 ## Protocols

@@ -21,7 +21,15 @@ from zhoda_core.reputation import Domain, ReputationStorage
 from zhoda_core.transcripts import TranscriptStore
 
 from .estimate import estimate_cost
-from .render import last_verdict, render_transcript_md
+from .render import last_verdict, render_review_md, render_transcript_md
+from .review import (
+    ALLOWED_PROTOCOL_POLICIES,
+    DEFAULT_PROTOCOL_POLICY,
+    DEFAULT_REVIEW_QUESTION,
+    incomplete_payload,
+    project_review,
+)
+from .sources import SourceError, assemble_context
 
 KNOWN_PROTOCOLS = {p.value for p in Protocol}
 KNOWN_DOMAINS = {d.value for d in Domain}
@@ -194,6 +202,173 @@ class Runtime:
         finally:
             await provider.close()
 
+    def _terminal(self, engine: Any, error_type: str, message: str) -> str:
+        """Дописать error, если движок не успел. Не маскируем под verdict."""
+        tid = str(getattr(engine, "last_transcript_id", "") or "")
+        if not tid:
+            return ""
+        try:
+            events = self.transcripts.read(tid)
+        except OSError:
+            return tid
+        if events and events[-1].get("stage") == "error":
+            return tid
+        self.transcripts.append(
+            tid,
+            {
+                "stage": "error",
+                "error_type": error_type,
+                "error": message[:800],
+                "terminal": True,
+            },
+        )
+        return tid
+
+    def _budget_cfg(self, budget_usd: float | None) -> dict[str, Any] | None:
+        if budget_usd is None:
+            return None
+        if budget_usd < 0:
+            return {"error": "invalid_budget", "message": "budget_usd must be >= 0"}
+        yaml_cap = float(self.cfg.get("budget_per_question_usd") or 0.0)
+        cfg = dict(self.cfg)
+        if yaml_cap > 0:
+            cfg["budget_per_question_usd"] = min(float(budget_usd), yaml_cap)
+        else:
+            cfg["budget_per_question_usd"] = float(budget_usd)
+        return cfg
+
+    async def review(
+        self,
+        question: str = "",
+        *,
+        confirm: bool = False,
+        source_text: str = "",
+        source_paths: list[str] | None = None,
+        allowed_roots: list[str] | None = None,
+        constraints: list[str] | None = None,
+        protocol_policy: str = DEFAULT_PROTOCOL_POLICY,
+        budget_usd: float | None = None,
+        timeout_s: float | None = None,
+        value_map: dict[str, Any] | None = None,
+        format: str = "json",
+        on_progress: Callable[[ProgressEvent], None] | None = None,
+    ) -> dict[str, Any]:
+        """Read-only ADR/RFC/plan review. Не пишет код и не fetch URL."""
+        blocked = self._guard()
+        if blocked is not None:
+            return blocked
+        proto = protocol_policy or DEFAULT_PROTOCOL_POLICY
+        if proto not in ALLOWED_PROTOCOL_POLICIES:
+            return {
+                "error": "invalid_protocol_policy",
+                "message": f"unknown protocol_policy {proto!r}",
+                "known": sorted(ALLOWED_PROTOCOL_POLICIES),
+                "g_protocol_usefulness": "unknown",
+                "default": DEFAULT_PROTOCOL_POLICY,
+            }
+        if format not in {"json", "md"}:
+            return {
+                "error": "invalid_format",
+                "message": f"format must be json or md, got {format!r}",
+            }
+        try:
+            context, source_manifest = assemble_context(
+                source_text=source_text,
+                source_paths=source_paths,
+                allowed_roots=allowed_roots,
+            )
+        except SourceError as exc:
+            return incomplete_payload(error=exc.code, message=exc.message)
+        budget_cfg = self._budget_cfg(budget_usd)
+        if budget_cfg is not None and budget_cfg.get("error"):
+            return budget_cfg
+        if not confirm:
+            estimate = estimate_cost(
+                budget_cfg if budget_cfg is not None else self.cfg, proto
+            )
+            estimate["read_only"] = True
+            estimate["executable"] = False
+            estimate["protocol_policy"] = proto
+            estimate["g_protocol_usefulness"] = "unknown"
+            extra = (
+                "; plan is a proposal, not an execution command; no URL fetch"
+            )
+            estimate["note"] = str(estimate.get("note") or "") + extra
+            return {
+                "status": "estimate",
+                "schema": "zhoda.review.v1",
+                "estimate": estimate,
+                "source_manifest": source_manifest,
+                "approved": False,
+            }
+        q = (question or "").strip() or DEFAULT_REVIEW_QUESTION
+        supplied: ValueMap
+        if value_map is not None:
+            supplied = ValueMap.model_validate(value_map)
+        else:
+            supplied = ValueMap(
+                goal="review the attached change",
+                constraints=list(constraints or ()),
+            )
+        engine, provider = self._open_session(None, cfg=budget_cfg)
+        try:
+            if timeout_s is not None and timeout_s <= 0:
+                return incomplete_payload(
+                    error="invalid_timeout", message="timeout_s must be > 0"
+                )
+
+            async def _run() -> Verdict:
+                return await engine.deliberate(  # type: ignore[no-any-return]
+                    q,
+                    force_protocol=Protocol(proto),
+                    clarify_mode="no-clarify",
+                    on_progress=on_progress,
+                    context=context,
+                    value_map=supplied,
+                )
+
+            if timeout_s is not None:
+                verdict = await asyncio.wait_for(_run(), timeout=timeout_s)
+            else:
+                verdict = await _run()
+            report = project_review(
+                verdict, source_manifest=source_manifest, protocol_policy=proto
+            )
+            if format == "md":
+                report["markdown"] = render_review_md(report)
+            return report
+        except TimeoutError:
+            tid = self._terminal(engine, "TimeoutError", "timeout")
+            return incomplete_payload(
+                error="timeout",
+                message="review exceeded timeout_s",
+                transcript_id=tid
+                or str(getattr(engine, "last_transcript_id", "") or ""),
+            )
+        except asyncio.CancelledError:
+            tid = self._terminal(engine, "CancelledError", "cancelled")
+            return incomplete_payload(
+                error="cancelled",
+                message="review cancelled",
+                transcript_id=tid
+                or str(getattr(engine, "last_transcript_id", "") or ""),
+            )
+        except QuotaExceededError as exc:
+            return _quota(exc)
+        except BudgetExceededError as exc:
+            tid = self._terminal(engine, "BudgetExceededError", str(exc))
+            return incomplete_payload(
+                error="budget_exceeded",
+                message=str(exc),
+                transcript_id=tid,
+            )
+        except ZhodaProviderError as exc:
+            return _provider_error(exc)
+        except ValueError as exc:
+            return _provider_error(exc)
+        finally:
+            await provider.close()
+
     def verdict(self, transcript_id: str) -> dict[str, Any]:
         blocked = self._guard()
         if blocked is not None:
@@ -253,12 +428,18 @@ class Runtime:
                 ratings[model] = {domain: row[domain]}
         return {"status": "reputation", "domain": domain, "ratings": ratings}
 
-    def _open_session(self, rounds_cap: int | None) -> tuple[Any, Any]:
+    def _open_session(
+        self,
+        rounds_cap: int | None,
+        *,
+        cfg: dict[str, Any] | None = None,
+    ) -> tuple[Any, Any]:
+        used = cfg if cfg is not None else self.cfg
         if self.session_factory is not None:
             return self.session_factory(rounds_cap)
-        provider = make_provider(self.cfg)
+        provider = make_provider(used)
         engine = make_engine(
-            self.cfg,
+            used,
             provider,
             transcripts_dir=str(self.transcripts.dir),
             rounds_cap=rounds_cap,
