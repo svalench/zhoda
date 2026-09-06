@@ -14,6 +14,14 @@ G protocol usefulness: **unknown**
 ([g-protocol-policy.md](g-protocol-policy.md)). Default review protocol
 remains `debate`.
 
+2026-09-06: S4 `docs/live-runs/2026-09-06-g-pilot-p5/report.json`
+verdict=`short_review_wins_primary` (not preregistered rule 2: `|Δ|=0.125>0.10`).
+Δ=0.125, n=32, spend=$0.381 / $2.00. Classes n≥5: adr_plan_review 0.00,
+correct_minority +0.17, counterfactual +0.40, evidence_required 0.00,
+premise_pair 0.00; legitimate_uncertainty n=4 Δ=+0.25. Rule 3 Oxford class
+opt-in: none. Product default stays `debate`. Not validated
+(gold sidecar heuristic; `independent_validation=false`).
+
 Telemetry: user source documents are **not** collected by default.
 
 Stars are not a quality metric for this workflow.
