@@ -8,7 +8,6 @@ import json
 import os
 import sys
 import traceback
-from collections import defaultdict
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -152,241 +151,33 @@ def evaluator_usd(results: list[Any]) -> float:
     return total
 
 
-def _map_gold_id(expected: str, options: tuple[str, ...]) -> str:
-    if not options:
-        return expected
-    fold_exp = expected.casefold()
-    for opt in options:
-        if opt.casefold() == fold_exp:
-            return opt
-        if fold_exp.startswith(opt.casefold() + ";"):
-            return opt
-    return expected
-
-
-def score_with_gold(decision: str, coverage: str, gold: Any, options: tuple[str, ...]) -> dict[str, Any]:
-    """Gold после attempts. Не в engine. Ungraded/failed в знаменателе, без зачёта."""
-    from zhoda_core.benchmarks.judge import pick_matches_gold
-    from zhoda_core.benchmarks.quality import _ABSTAIN_RE, extract_chosen_action
-
-    failed = coverage in {"failed", "skipped", "infeasible"} or not (decision or "").strip()
-    abstain = bool(_ABSTAIN_RE.search(decision or ""))
-    labels = list(options)
-    gold_id = _map_gold_id(gold.expected_action, options)
-    if gold_id not in labels and options:
-        labels = [gold_id, *labels]
-    elif not labels:
-        labels = [gold.expected_action, *gold.allowed_alternatives]
-    unacc = [
-        claim
-        for claim in gold.unacceptable_claims
-        if claim and claim.casefold() in (decision or "").casefold()
-    ]
-    chosen: str | None
-    action_correct: bool | None
-    if gold.abstain_policy == "required":
-        chosen = None
-        action_correct = False if failed else bool(abstain)
-    elif failed:
-        chosen = None
-        action_correct = False
-    elif abstain:
-        chosen = None
-        action_correct = False
-    else:
-        chosen = extract_chosen_action(decision, tuple(labels))
-        if not chosen:
-            action_correct = None
-        else:
-            ok = pick_matches_gold(chosen, gold_id, labels)
-            for alt in gold.allowed_alternatives:
-                alt_id = _map_gold_id(alt, tuple(labels))
-                if pick_matches_gold(chosen, alt_id, labels):
-                    ok = True
-            action_correct = ok
-    appropriate: bool | None
-    if gold.abstain_policy == "required":
-        appropriate = bool(abstain) and not failed
-    elif gold.abstain_policy == "forbidden":
-        appropriate = (not abstain) if not failed else False
-    else:
-        appropriate = None
-    return {
-        "chosen_action": chosen,
-        "action_correct": action_correct,
-        "ungraded": action_correct is None,
-        "unacceptable_hit": bool(unacc),
-        "abstain": abstain,
-        "appropriate_abstention": appropriate,
-        "label_status": gold.label_status,
-        "annotator": gold.annotator,
-    }
-
-
 def overlay_gold(results: list[Any], gold_map: dict[str, Any], cases: dict[str, Any]) -> list[dict[str, Any]]:
+    from zhoda_core.eval.rescore import overlay_row
+
     rows: list[dict[str, Any]] = []
     for row in unique_arm_rows(results):
-        payload = asdict(row)
         gold = gold_map[row.case_id]
         case = cases[row.case_id]
-        scored = score_with_gold(
-            row.decision, row.coverage_status, gold, case.answer_options,
-        )
-        payload["action_correct_heuristic"] = row.action_correct
-        payload["action_correct"] = scored["action_correct"]
-        payload["chosen_action"] = scored["chosen_action"]
-        payload["appropriate_abstention"] = scored["appropriate_abstention"]
-        payload["unacceptable_hit"] = scored["unacceptable_hit"]
-        payload["gold_after_attempts"] = True
-        payload["ungraded"] = scored["ungraded"]
-        rows.append(payload)
+        rows.append(overlay_row(asdict(row), gold, case.answer_options))
     return rows
 
 
-def _credit(value: bool | None) -> float:
-    return 1.0 if value is True else 0.0
-
-
 def paired_primary(scored: list[dict[str, Any]]) -> dict[str, Any]:
-    by_case: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
-    for row in scored:
-        by_case[str(row["case_id"])][str(row["mode"])] = row
-    paired: list[dict[str, Any]] = []
-    for case_id, arms in sorted(by_case.items()):
-        ox = arms.get("zhoda")
-        sr = arms.get("short_review")
-        if ox is None or sr is None:
-            continue
-        if ox.get("coverage_status") != "ok" or sr.get("coverage_status") != "ok":
-            continue
-        ox_c = _credit(ox.get("action_correct"))  # type: ignore[arg-type]
-        sr_c = _credit(sr.get("action_correct"))  # type: ignore[arg-type]
-        kind = str(ox.get("kind") or "")
-        paired.append(
-            {
-                "case_id": case_id,
-                "kind": kind,
-                "oxford_correct": ox_c,
-                "short_review_correct": sr_c,
-                "delta": sr_c - ox_c,
-                "oxford_usd": float(ox.get("usd") or 0.0),
-                "short_review_usd": float(sr.get("usd") or 0.0),
-                "majority_usd": float((arms.get("majority") or {}).get("usd") or 0.0),
-            }
-        )
-    n = len(paired)
-    delta = sum(p["delta"] for p in paired) / n if n else None
-    mean_sr = sum(p["short_review_usd"] for p in paired) / n if n else None
-    mean_ox = sum(p["oxford_usd"] for p in paired) / n if n else None
-    by_kind: dict[str, list[float]] = defaultdict(list)
-    for row in paired:
-        by_kind[row["kind"]].append(row["delta"])
-    class_delta = {
-        kind: {
-            "n": len(vals),
-            "delta": sum(vals) / len(vals),
-        }
-        for kind, vals in sorted(by_kind.items())
-    }
-    return {
-        "n_paired": n,
-        "delta": delta,
-        "mean_usd_short_review": mean_sr,
-        "mean_usd_oxford": mean_ox,
-        "class_delta": class_delta,
-        "pairs": paired,
-    }
+    from zhoda_core.eval.rescore import paired_primary as _paired
+
+    return _paired(scored)
 
 
 def decide_rule(primary: dict[str, Any], n_complete: int, bad_share: float) -> dict[str, Any]:
-    """Правило из preregistration. Не p-value. Product default здесь не меняем."""
-    if n_complete < 30 or bad_share > 0.20:
-        return {
-            "verdict": "inconclusive",
-            "product_default": "debate",
-            "reason": (
-                f"rule1: n_complete={n_complete} < 30 or ungraded/failed share "
-                f"{bad_share:.3f} > 0.20"
-            ),
-        }
-    delta = primary["delta"]
-    mean_sr = primary["mean_usd_short_review"]
-    mean_ox = primary["mean_usd_oxford"]
-    if delta is None:
-        return {
-            "verdict": "inconclusive",
-            "product_default": "debate",
-            "reason": "no paired Δ",
-        }
-    class_notes = []
-    for kind, info in (primary.get("class_delta") or {}).items():
-        if info["n"] >= 5 and info["delta"] < -0.15:
-            class_notes.append(
-                f"{kind}: oxford advantage {-info['delta']:.3f} (n={info['n']})"
-            )
-    if abs(delta) <= 0.10 and mean_sr is not None and mean_ox is not None and mean_sr < mean_ox:
-        return {
-            "verdict": "recommend_short_review_default",
-            "product_default": "debate",
-            "reason": (
-                f"rule2: |Δ|={abs(delta):.3f}≤0.10 and mean USD short_review "
-                f"{mean_sr:.4f} < oxford {mean_ox:.4f}; code default unchanged until owner"
-            ),
-            "class_oxford_opt_in": class_notes,
-        }
-    if delta < -0.10:
-        return {
-            "verdict": "keep_debate_default",
-            "product_default": "debate",
-            "reason": f"rule3: Δ={delta:.3f} < -0.10 (oxford wins primary)",
-            "class_oxford_opt_in": class_notes,
-        }
-    if delta > 0.10:
-        return {
-            "verdict": "short_review_wins_primary",
-            "product_default": "debate",
-            "reason": (
-                f"Δ={delta:.3f} > 0.10; short_review лучше по primary. "
-                "Default в коде не меняем без отдельного решения owner."
-            ),
-            "class_oxford_opt_in": class_notes,
-        }
-    return {
-        "verdict": "keep_debate_default",
-        "product_default": "debate",
-        "reason": (
-            f"|Δ|={abs(delta):.3f}≤0.10 but short_review is not cheaper; keep debate"
-        ),
-        "class_oxford_opt_in": class_notes,
-    }
+    from zhoda_core.eval.rescore import decide_rule as _decide
+
+    return _decide(primary, n_complete, bad_share)
 
 
 def coverage_stats(scored: list[dict[str, Any]], n_cases: int) -> dict[str, Any]:
-    by_case: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in scored:
-        by_case[str(row["case_id"])].append(row)
-    complete = 0
-    for rows in by_case.values():
-        modes = {str(r["mode"]): r for r in rows}
-        if all(
-            modes.get(m, {}).get("coverage_status") == "ok"
-            for m in ("zhoda", "short_review", "majority")
-        ):
-            complete += 1
-    n_attempts = len(scored)
-    bad = 0
-    for row in scored:
-        if row.get("coverage_status") != "ok" or row.get("ungraded") or row.get("action_correct") is None:
-            bad += 1
-    share = (bad / n_attempts) if n_attempts else 1.0
-    return {
-        "n_cases_in_suite": n_cases,
-        "n_cases_touched": len(by_case),
-        "n_complete": complete,
-        "n_attempts": n_attempts,
-        "n_failed_or_ungraded": bad,
-        "ungraded_failed_share": share,
-    }
+    from zhoda_core.eval.rescore import coverage_stats as _cov
+
+    return _cov(scored, n_cases)
 
 
 def write_progress(payload: dict[str, Any]) -> None:
@@ -632,7 +423,7 @@ async def run_live() -> dict[str, Any]:
         "replicate_id": REPLICATE_ID,
         "arms": list(PILOT_ARMS),
         "tables": ["request"],
-        "judge": "gold_sidecar_after_attempts",
+        "judge": "gold_aware_executable",
         "blind_llm_judge": False,
         "n_cases": len(cases),
         "case_ids": [c.id for c in cases],

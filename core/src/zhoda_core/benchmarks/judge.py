@@ -168,17 +168,28 @@ class BlindLlmJudge:
     async def score(self, case: BenchmarkCase, decision: str) -> GradeResult:
         gold = gold_label(case)
         allowed = case.answer_options or (gold,)
-        options = ", ".join(allowed)
+        return await self.score_with_labels(case, decision, gold=gold, allowed=allowed)
+
+    async def score_with_labels(
+        self,
+        case: BenchmarkCase,
+        decision: str,
+        *,
+        gold: str,
+        allowed: Sequence[str],
+    ) -> GradeResult:
+        """Тот же BLIND_JUDGE_PROMPT; gold/labels снаружи (sidecar), не из ground_truth."""
+        labels = tuple(allowed) if allowed else (gold,)
         prompt = BLIND_JUDGE_PROMPT.format(
             question=case.question,
             gold=gold,
-            options=options,
+            options=", ".join(labels),
             decision=decision,
         )
         obj = await self.provider.ask_json(
             self.model,
             prompt,
-            cache_key=make_cache_key("bench-judge", case.id, decision),
+            cache_key=make_cache_key("bench-judge", case.id, gold, decision),
         )
         parsed = parse_stage(BlindGradeVote, obj, stage="blind_judge", prompt=prompt)
         if parsed.value is None:
@@ -188,4 +199,4 @@ class BlindLlmJudge:
                 error=error,
                 reason=parsed.error.raw_preview if parsed.error else "",
             )
-        return grade_blind_vote(parsed.value, gold=gold, allowed=allowed)
+        return grade_blind_vote(parsed.value, gold=gold, allowed=labels)

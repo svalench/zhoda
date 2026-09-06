@@ -440,7 +440,14 @@ are split: `chosen_action` / `action_correct`, `premise_handling`,
 `constraint_violations`, `evidence_support`, `useful_findings`,
 `appropriate_abstention`. Executable graders cover the adversarial
 calibration corpus; the blind LLM judge sees a neutral structure without
-arm branding. Model identity alone is not independence: `judge_overlap`
+arm branding. Pilot holdout scoring uses the **gold sidecar** (not empty
+`ground_truth`): a committed pick must be an allowed label (expected or
+alternative). A paraphrase that is not an allowed label is **ungraded**,
+not incorrect. `abstain_policy=required` credits `INSUFFICIENT_CONTEXT` /
+an abstain label; a confident delay is not an abstain. Ungraded judge
+JSON stays ungraded. `python -m zhoda_core.eval rescore-report` writes a
+new file (`report-v2.json`); it does not overwrite a historical
+`report.json`. Model identity alone is not independence: `judge_overlap`
 lists chairman/council/protocol_judge/classifier when the judge model
 appears there. Chairman is not an implicit independent judge (default is
 the first YAML `judges` entry).

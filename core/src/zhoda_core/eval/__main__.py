@@ -1,4 +1,8 @@
-"""CLI: validate / dry-run / freeze-manifest / status. Без live API."""
+"""CLI: validate / dry-run / freeze-manifest / status / rescore-report.
+
+rescore-report по умолчанию executable (без OpenRouter). --judge llm — только
+если задание явно разрешает тратить evaluator budget.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from .pilot import (
     FROZEN_MANIFEST,
@@ -99,6 +104,83 @@ def _cmd_dry_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_rescore_report(args: argparse.Namespace) -> int:
+    """Пересчитать сохранённый report. Engine не вызываем. Источник не переписываем."""
+    from .gold import load_gold
+    from .rescore import rescore_report
+
+    src = Path(args.report)
+    out = Path(args.out)
+    if src.resolve() == out.resolve():
+        print(
+            "refusing to overwrite source report; pass a new --out (e.g. report-v2.json)",
+            file=sys.stderr,
+        )
+        return 2
+    report = json.loads(src.read_text(encoding="utf-8"))
+    gold_map = load_gold(GOLD_JSONL)
+    cases = {c.id: public_to_benchmark(c) for c in load_public_cases()}
+    missing = sorted({str(r["case_id"]) for r in report.get("results") or []} - set(cases))
+    if missing:
+        print(f"unknown case ids: {missing[:8]}", file=sys.stderr)
+        return 2
+    votes = None
+    judge_name = args.judge
+    if judge_name == "llm":
+        try:
+            votes = asyncio.run(_llm_votes(report, gold_map, cases, args.config))
+        except (OSError, ValueError) as exc:
+            print(f"judge llm unavailable: {exc}", file=sys.stderr)
+            return 2
+    scored = rescore_report(
+        report, gold_map, cases, votes=votes, judge_name=judge_name,
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(scored, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"wrote {out} schema={scored.get('schema')} judge={judge_name}")
+    return 0
+
+
+async def _llm_votes(
+    report: dict[str, Any],
+    gold_map: dict[str, Any],
+    cases: dict[str, Any],
+    config_path: str,
+) -> dict[tuple[str, str], Any]:
+    """Blind judge по сохранённым decision. Engine не трогаем."""
+    from zhoda_core.benchmarks.judge import BlindLlmJudge
+    from zhoda_core.config import load_council_config, make_provider
+
+    from .grader import allowed_labels
+    from .rescore import unique_arm_rows
+
+    cfg = dict(load_council_config(config_path))
+    judges = cfg.get("judges") or []
+    model = str(judges[0] if judges else "")
+    if not model:
+        raise ValueError("no judges in yaml — refusing implicit chairman")
+    overlap: list[str] = []
+    chairman = str(cfg.get("chairman") or "")
+    if model == chairman:
+        overlap.append("chairman")
+    if model in (cfg.get("council") or []):
+        overlap.append("council")
+    judge = BlindLlmJudge(make_provider(cfg), model, overlap_roles=overlap)
+    votes: dict[tuple[str, str], Any] = {}
+    for row in unique_arm_rows(list(report.get("results") or [])):
+        case_id = str(row["case_id"])
+        mode = str(row["mode"])
+        gold = gold_map[case_id]
+        case = cases[case_id]
+        votes[(case_id, mode)] = await judge.score_with_labels(
+            case,
+            str(row.get("decision") or ""),
+            gold=gold.expected_action,
+            allowed=allowed_labels(gold, case.answer_options),
+        )
+    return votes
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="zhoda-eval")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -107,6 +189,19 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("freeze-manifest", help="write frozen hashes (no live)")
     dry = sub.add_parser("dry-run", help="offline mock on public cases only")
     dry.add_argument("--out", default=None)
+    rescore = sub.add_parser(
+        "rescore-report",
+        help="offline gold-aware rescore of a saved report (new file, no engine)",
+    )
+    rescore.add_argument("--report", required=True)
+    rescore.add_argument("--out", required=True)
+    rescore.add_argument(
+        "--judge",
+        default="none",
+        choices=["none", "llm"],
+        help="none = executable (no HTTP); llm = blind sidecar judge (evaluator spend)",
+    )
+    rescore.add_argument("--config", default="zhoda.yaml")
     args = parser.parse_args(argv)
     if args.command == "validate":
         return _cmd_validate(args)
@@ -116,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_freeze(args)
     if args.command == "dry-run":
         return _cmd_dry_run(args)
+    if args.command == "rescore-report":
+        return _cmd_rescore_report(args)
     return 2
 
 
