@@ -51,7 +51,7 @@ from .models import (
 from .plan import collect_rejected_paths, render_plan_contract
 from .positions import extract_positions
 from .progress import ProgressEvent
-from .providers.openrouter import OpenRouterProvider, make_cache_key
+from .providers.openrouter import BudgetExceededError, OpenRouterProvider, make_cache_key
 from .replay import EventLog
 from .router import ProtocolRouter
 from .transcripts import TranscriptStore
@@ -466,163 +466,177 @@ class ZhodaEngine:
         else:
             emit("positions", f"positions: {len(positions)} models", done=True)
 
-        emit("factions", "clustering factions…")
-        factions = await clusterer.cluster(positions, judges=judges, speakers=speakers)
-        for faction in factions:
-            if faction.platform is None:
-                continue
-            faction.platform = faction.platform.model_copy(
-                update={
-                    "action": attach_action(
-                        faction.platform.thesis,
-                        faction.platform.answer,
-                        catalog,
-                        prior=faction.platform.action,
-                    )
-                }
-            )
-        if completeness.get("opposition", "synthetic") is not None:
-            if len(factions) >= 2:
-                completeness.skip("opposition", "synthetic", "multi_faction")
-            elif not self.devils_advocate:
-                completeness.skip("opposition", "synthetic", "da_disabled")
-            else:
-                opposition = await self._spawn_opposition(
-                    question, factions[0], speakers, user_context, evidence=evidence,
-                )
-                if opposition is not None:
-                    completeness.succeed("opposition", "synthetic")
-                    factions.append(opposition)
-                    self.transcripts.append(
-                        tid,
-                        {
-                            "stage": "opposition_spawned",
-                            "faction": opposition.model_dump(),
-                        },
-                    )
-                else:
-                    completeness.fail("opposition", "synthetic", "spawn_failed")
-        # Только платформы: position-level id не пишется в лог, иначе
-        # совпадение owner+текст глушит CLAIM_CREATED и replay теряет findings.
-        emitted_ids: set[str] = set()
-        for faction in factions:
-            if faction.platform is None:
-                continue
-            faction.platform = stamp_position(
-                faction.platform, evidence_id=evidence_id, provenance="faction",
-            )
-            for claim in faction.platform.claims:
-                if claim.claim_id and claim.claim_id not in emitted_ids:
-                    log.emit(
-                        EventType.CLAIM_CREATED,
-                        claim.model_dump(mode="json"),
-                        attribution=faction.name,
-                    )
-                    emitted_ids.add(claim.claim_id)
-        await self._name_factions(factions)
-        self.transcripts.append(
-            tid,
-            {
-                "stage": "factions",
-                "factions": [f.model_dump() for f in factions],
-                "prefilter_merges": clusterer.prefilter_merges,
-            },
-        )
-        mark("factions")
-        emit("factions", f"factions: {len(factions)}", done=True)
-
+        factions: list[Faction] = []
+        zhoda = False
+        strength = ConsensusStrength.SPLIT
         rounds_taken = 0
         majority_at_cap = False
-        if route.protocol == Protocol.VOTE:
-            emit("consensus", "classifying agreement…")
-            strength = await consensus.classify(factions, judges=judges)
-            zhoda = strength in (ConsensusStrength.UNANIMOUS, ConsensusStrength.MAJORITY)
-            emit("consensus", f"zhoda={zhoda} {strength}", done=True)
-        elif route.protocol == Protocol.RED_TEAM:
-            emit("round", "round 1/1 (red_team)…")
-            round_ = await debate.run_round(1, factions, speakers=speakers, judges=judges)
-            self.transcripts.append(tid, {"stage": "round", **round_.model_dump()})
-            rounds_taken = 1
-            emit("round", "round 1/1 done", done=True)
-            emit("consensus", "classifying agreement…")
-            strength = await consensus.classify(factions, judges=judges)
-            zhoda = strength in (ConsensusStrength.UNANIMOUS, ConsensusStrength.MAJORITY)
-            emit("consensus", f"zhoda={zhoda} {strength}", done=True)
-            mark("debate")
-        elif route.protocol == Protocol.SHORT_REVIEW:
-            emit("round", "round 1/1 (short_review)…")
-            round_ = await debate.run_round(
-                1, factions, speakers=speakers, judges=judges, mode="short_review",
-            )
-            self.transcripts.append(tid, {"stage": "round", **round_.model_dump()})
-            rounds_taken = 1
-            emit("round", "round 1/1 done", done=True)
-            emit("consensus", "classifying agreement…")
-            strength = await consensus.classify(factions, judges=judges)
-            # Majority здесь — не згода: сравнимо с Oxford majority_at_cap, не с vote.
-            zhoda = strength is ConsensusStrength.UNANIMOUS
-            if not zhoda and strength is ConsensusStrength.MAJORITY:
-                majority_at_cap = True
-            emit("consensus", f"zhoda={zhoda} {strength}", done=True)
-            mark("debate")
-        else:
-            zhoda, strength = False, ConsensusStrength.SPLIT
-            if len(factions) == 1:
-                rounds_taken = 0
-                strength = ConsensusStrength.UNANIMOUS
-                zhoda = True
-                self.transcripts.append(
-                    tid,
-                    {
-                        "stage": "consensus",
-                        "zhoda": True,
-                        "strength": str(strength),
-                        "fast_pass": "unanimity_at_birth",
-                    },
+        try:
+            emit("factions", "clustering factions…")
+            factions = await clusterer.cluster(positions, judges=judges, speakers=speakers)
+            for faction in factions:
+                if faction.platform is None:
+                    continue
+                faction.platform = faction.platform.model_copy(
+                    update={
+                        "action": attach_action(
+                            faction.platform.thesis,
+                            faction.platform.answer,
+                            catalog,
+                            prior=faction.platform.action,
+                        )
+                    }
                 )
-                emit("consensus", "fast_pass unanimity_at_birth", done=True)
-            else:
-                for rounds_taken in range(1, self.rounds_cap + 1):
-                    emit("round", f"round {rounds_taken}/{self.rounds_cap}…")
-                    round_ = await debate.run_round(
-                        rounds_taken,
-                        factions,
-                        speakers=speakers,
-                        judges=judges,
+            if completeness.get("opposition", "synthetic") is not None:
+                if len(factions) >= 2:
+                    completeness.skip("opposition", "synthetic", "multi_faction")
+                elif not self.devils_advocate:
+                    completeness.skip("opposition", "synthetic", "da_disabled")
+                else:
+                    opposition = await self._spawn_opposition(
+                        question, factions[0], speakers, user_context, evidence=evidence,
                     )
-                    self.transcripts.append(tid, {"stage": "round", **round_.model_dump()})
-                    emit("round", f"round {rounds_taken}/{self.rounds_cap} done", done=True)
-                    factions = [f for f in factions if f.members]
-                    emit("consensus", "checking consensus…")
-                    zhoda, strength = await consensus.check(factions, judges=judges)
-                    if (
-                        not zhoda
-                        and rounds_taken == self.rounds_cap
-                        and strength is ConsensusStrength.UNANIMOUS
-                    ):
-                        # Early-stop требует streak; на капе ждать нечего.
-                        # Majority без all_agree — не згода (честный раскол).
-                        zhoda = True
+                    if opposition is not None:
+                        completeness.succeed("opposition", "synthetic")
+                        factions.append(opposition)
+                        self.transcripts.append(
+                            tid,
+                            {
+                                "stage": "opposition_spawned",
+                                "faction": opposition.model_dump(),
+                            },
+                        )
+                    else:
+                        completeness.fail("opposition", "synthetic", "spawn_failed")
+            # Только платформы: position-level id не пишется в лог, иначе
+            # совпадение owner+текст глушит CLAIM_CREATED и replay теряет findings.
+            emitted_ids: set[str] = set()
+            for faction in factions:
+                if faction.platform is None:
+                    continue
+                faction.platform = stamp_position(
+                    faction.platform, evidence_id=evidence_id, provenance="faction",
+                )
+                for claim in faction.platform.claims:
+                    if claim.claim_id and claim.claim_id not in emitted_ids:
+                        log.emit(
+                            EventType.CLAIM_CREATED,
+                            claim.model_dump(mode="json"),
+                            attribution=faction.name,
+                        )
+                        emitted_ids.add(claim.claim_id)
+            await self._name_factions(factions)
+            self.transcripts.append(
+                tid,
+                {
+                    "stage": "factions",
+                    "factions": [f.model_dump() for f in factions],
+                    "prefilter_merges": clusterer.prefilter_merges,
+                },
+            )
+            mark("factions")
+            emit("factions", f"factions: {len(factions)}", done=True)
+
+            rounds_taken = 0
+            majority_at_cap = False
+            if route.protocol == Protocol.VOTE:
+                emit("consensus", "classifying agreement…")
+                strength = await consensus.classify(factions, judges=judges)
+                zhoda = strength in (ConsensusStrength.UNANIMOUS, ConsensusStrength.MAJORITY)
+                emit("consensus", f"zhoda={zhoda} {strength}", done=True)
+            elif route.protocol == Protocol.RED_TEAM:
+                emit("round", "round 1/1 (red_team)…")
+                round_ = await debate.run_round(1, factions, speakers=speakers, judges=judges)
+                self.transcripts.append(tid, {"stage": "round", **round_.model_dump()})
+                rounds_taken = 1
+                emit("round", "round 1/1 done", done=True)
+                emit("consensus", "classifying agreement…")
+                strength = await consensus.classify(factions, judges=judges)
+                zhoda = strength in (ConsensusStrength.UNANIMOUS, ConsensusStrength.MAJORITY)
+                emit("consensus", f"zhoda={zhoda} {strength}", done=True)
+                mark("debate")
+            elif route.protocol == Protocol.SHORT_REVIEW:
+                emit("round", "round 1/1 (short_review)…")
+                round_ = await debate.run_round(
+                    1, factions, speakers=speakers, judges=judges, mode="short_review",
+                )
+                self.transcripts.append(tid, {"stage": "round", **round_.model_dump()})
+                rounds_taken = 1
+                emit("round", "round 1/1 done", done=True)
+                emit("consensus", "classifying agreement…")
+                strength = await consensus.classify(factions, judges=judges)
+                # Majority здесь — не згода: сравнимо с Oxford majority_at_cap, не с vote.
+                zhoda = strength is ConsensusStrength.UNANIMOUS
+                if not zhoda and strength is ConsensusStrength.MAJORITY:
+                    majority_at_cap = True
+                emit("consensus", f"zhoda={zhoda} {strength}", done=True)
+                mark("debate")
+            else:
+                zhoda, strength = False, ConsensusStrength.SPLIT
+                if len(factions) == 1:
+                    rounds_taken = 0
+                    strength = ConsensusStrength.UNANIMOUS
+                    zhoda = True
                     self.transcripts.append(
                         tid,
                         {
                             "stage": "consensus",
-                            "zhoda": zhoda,
+                            "zhoda": True,
                             "strength": str(strength),
-                            "parse_failures": [
-                                f.model_dump() for f in consensus.parse_failures
-                            ],
+                            "fast_pass": "unanimity_at_birth",
                         },
                     )
-                    emit("consensus", f"zhoda={zhoda} {strength}", done=True)
-                    if zhoda:
-                        break
-            mark("debate")
-            if not zhoda and strength == ConsensusStrength.SPLIT:
-                strength = ConsensusStrength.DEADLOCK
-            elif not zhoda and strength is ConsensusStrength.MAJORITY:
-                # Majority на капе — честный раскол, не згода и не апелляция.
-                majority_at_cap = True
+                    emit("consensus", "fast_pass unanimity_at_birth", done=True)
+                else:
+                    for rounds_taken in range(1, self.rounds_cap + 1):
+                        emit("round", f"round {rounds_taken}/{self.rounds_cap}…")
+                        round_ = await debate.run_round(
+                            rounds_taken,
+                            factions,
+                            speakers=speakers,
+                            judges=judges,
+                        )
+                        self.transcripts.append(tid, {"stage": "round", **round_.model_dump()})
+                        emit("round", f"round {rounds_taken}/{self.rounds_cap} done", done=True)
+                        factions = [f for f in factions if f.members]
+                        emit("consensus", "checking consensus…")
+                        zhoda, strength = await consensus.check(factions, judges=judges)
+                        if (
+                            not zhoda
+                            and rounds_taken == self.rounds_cap
+                            and strength is ConsensusStrength.UNANIMOUS
+                        ):
+                            # Early-stop требует streak; на капе ждать нечего.
+                            # Majority без all_agree — не згода (честный раскол).
+                            zhoda = True
+                        self.transcripts.append(
+                            tid,
+                            {
+                                "stage": "consensus",
+                                "zhoda": zhoda,
+                                "strength": str(strength),
+                                "parse_failures": [
+                                    f.model_dump() for f in consensus.parse_failures
+                                ],
+                            },
+                        )
+                        emit("consensus", f"zhoda={zhoda} {strength}", done=True)
+                        if zhoda:
+                            break
+                mark("debate")
+                if not zhoda and strength == ConsensusStrength.SPLIT:
+                    strength = ConsensusStrength.DEADLOCK
+                elif not zhoda and strength is ConsensusStrength.MAJORITY:
+                    # Majority на капе — честный раскол, не згода и не апелляция.
+                    majority_at_cap = True
+        except BudgetExceededError:
+            emit("consensus", "admissions frozen — local verdict", done=True)
+            if not factions:
+                raise
+            zhoda = False
+            majority_at_cap = True
+            if strength is ConsensusStrength.UNANIMOUS:
+                strength = ConsensusStrength.MAJORITY
 
         # escalation: the appellate model decides a deadlock — LABELED (round-10 §2)
         escalated_to = None
@@ -724,7 +738,7 @@ class ZhodaEngine:
                     value_map=value_map,
                     evidence=evidence,
                 )
-            except (ValueError, TypeError, KeyError, RuntimeError):
+            except (ValueError, TypeError, KeyError, RuntimeError, BudgetExceededError):
                 verdict.decision = leading.platform.thesis
         # honest metric (round-10 §3): rejections by a REACHED consensus only
         verdict.paths_rejected = collect_rejected_paths(

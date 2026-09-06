@@ -280,6 +280,8 @@ class OpenRouterProvider:
 
     @staticmethod
     def _extract_json(text: str) -> dict[str, object]:
+        if not isinstance(text, str):
+            raise ValueError("no JSON in model output")
         cleaned = text.strip()
         if cleaned.startswith("```"):
             cleaned = cleaned[cleaned.find("\n") + 1:].rstrip("`").strip()
@@ -366,7 +368,9 @@ class OpenRouterProvider:
         self.cost.overrun_usd = ctx.overrun_usd
         self.cost.attempts = ctx.attempts
 
-        text: str = data["choices"][0]["message"]["content"]
+        raw = data["choices"][0]["message"].get("content")
+        # OpenRouter иногда отдаёт content: null — это пустой ответ, не AttributeError.
+        text = raw if isinstance(raw, str) else ""
         if cache_key:
             self._cache_put(cache_key, text)
         return text

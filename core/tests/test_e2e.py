@@ -14,7 +14,11 @@ from zhoda_core.anonymize import content_alias_seed, make_aliases
 from zhoda_core.engine import ZhodaEngine
 from zhoda_core.models import CheckStatus, ConsensusStrength, Protocol
 from zhoda_core.progress import ProgressEvent
-from zhoda_core.providers.openrouter import OpenRouterProvider, ZhodaProviderError
+from zhoda_core.providers.openrouter import (
+    BudgetExceededError,
+    OpenRouterProvider,
+    ZhodaProviderError,
+)
 
 COUNCIL = ["m1", "m2", "m3"]
 JUDGES = ("j1", "j2")
@@ -1847,6 +1851,47 @@ async def test_router_does_not_select_short_review() -> None:
     )
     assert route.protocol is Protocol.DEBATE
     assert route.overridden is False
+
+
+class FreezeAfterN(ScriptedProvider):
+    """После N complete — BudgetExceededError, как admissions freeze в live G."""
+
+    def __init__(
+        self,
+        script: list[tuple[str | None, tuple[str, ...], object]],
+        freeze_after: int,
+    ) -> None:
+        super().__init__(script)
+        self.freeze_after = freeze_after
+        self.calls = 0
+
+    async def complete(self, model, prompt, **kwargs):
+        if self.calls >= self.freeze_after:
+            raise BudgetExceededError("admissions frozen after overrun $0.0001")
+        self.calls += 1
+        return await super().complete(model, prompt, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_budget_freeze_after_factions_is_local_verdict(tmp_path) -> None:
+    """Freeze после фракций не роняет deliberate: локальный вердикт, не згода."""
+    aliases = make_aliases(COUNCIL, seed=42)
+    script = opening_script(aliases)
+    engine = make_engine(
+        FreezeAfterN(script, freeze_after=len(script)),
+        tmp_path,
+        rounds_cap=4,
+        devils_advocate=False,
+    )
+    verdict = await engine.deliberate(
+        "PostgreSQL or Kafka for a 50k RPS ledger?",
+        force_protocol=Protocol.DEBATE,
+        clarify_mode="no-clarify",
+    )
+    assert verdict.zhoda_reached is False
+    assert verdict.decision
+    assert verdict.plan_contract is None
+    assert "PostgreSQL" in verdict.decision or "Kafka" in verdict.decision
 
 
 

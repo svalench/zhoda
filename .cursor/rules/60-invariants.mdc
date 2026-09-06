@@ -23,6 +23,8 @@ Current mapping (keep updated):
 | Unknown paid price is not a $0 reservation; underfunded admission is preflight | tests/test_openrouter.py::test_d3_unknown_price_blocks_underfunded_admission + test_d4_paid_unknown_price_zero_reservation_forbidden |
 | Overlapping begin_question is refused; reserved does not go negative | tests/test_openrouter.py::test_d5_overlapping_begin_question_is_refused + test_double_cleanup_does_not_go_negative |
 | Missing usage is unknown/partial, not an exact $0 total; overrun freezes admissions | tests/test_openrouter.py::test_missing_usage_is_unknown_not_exact_zero + test_external_overrun_freezes_admissions_without_clamping |
+| Null OpenRouter content is empty string, not `.strip()` crash | tests/test_openrouter.py::test_null_content_is_empty_not_attribute_error |
+| Admissions freeze after factions yields local verdict, not trusted zhoda | tests/test_e2e.py::test_budget_freeze_after_factions_is_local_verdict |
 | Request-matched baselines: n_samples == zhoda.requests when feasible | tests/test_benchmarks.py::test_compare_uses_distinct_arms + test_compute_matched_n_equals_zhoda_requests |
 | Request-matched is not called compute-matched; $0.04 vs $0.10/$0.20 unmatched | tests/test_benchmarks.py::test_request_match_not_called_compute_matched |
 | C=1 with four mandatory council calls is infeasible, zero hidden calls | tests/test_benchmarks.py::test_c1_council_is_infeasible_not_hidden_four_calls |

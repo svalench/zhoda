@@ -306,7 +306,7 @@ def engine_claims(items: list[ModelClaim]) -> list[Claim]:
             verified=False,
         )
         for item in items
-        if item.claim.strip()
+        if (item.claim or "").strip()
     ]
 
 

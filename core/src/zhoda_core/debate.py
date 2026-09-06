@@ -49,13 +49,14 @@ MIN_CLAIM_LEN = 20
 _SOURCE_RE = re.compile(r"SOURCE:\s*(https?://\S+)", re.IGNORECASE)
 
 
-def extract_source(text: str) -> tuple[str, str | None]:
+def extract_source(text: str | None) -> tuple[str, str | None]:
     """SOURCE: url → (prose without the line, url). URL без fetch = unverified."""
-    match = _SOURCE_RE.search(text)
+    body = text or ""
+    match = _SOURCE_RE.search(body)
     if not match:
-        return text.strip(), None
+        return body.strip(), None
     url = match.group(1).rstrip(").,]")
-    prose = _SOURCE_RE.sub("", text).strip()
+    prose = _SOURCE_RE.sub("", body).strip()
     return prose, url
 
 
@@ -253,10 +254,12 @@ class DebateEngine:
 
     def register_critique(self, critique: Critique) -> Critique:
         """Structural prefilter + ID assignment (semantic validation: judges)."""
+        claim = critique.claim or ""
+        specifics = critique.specifics or ""
         if critique.flaw_type in (FlawType.FACTUAL, FlawType.LOGICAL):
-            if len(critique.claim.strip()) < MIN_CLAIM_LEN:
+            if len(claim.strip()) < MIN_CLAIM_LEN:
                 raise ValueError("factual/logical critique needs a concrete claim")
-        elif len(critique.specifics.strip()) < MIN_CLAIM_LEN:
+        elif len(specifics.strip()) < MIN_CLAIM_LEN:
             raise ValueError("scope/values critique needs specifics: what exactly is missing")
         critique.id = uuid4().hex[:8]
         self.objections.append(critique)

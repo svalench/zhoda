@@ -339,7 +339,7 @@ class HeuristicJudge:
         mode: str,
         match: str = MATCH_COMPUTE,
     ) -> CaseResult:
-        decision = outcome.decision.lower()
+        decision = (outcome.decision or "").lower()
         truth_hit = _truth_hit(case, decision)
 
         resisted: Optional[bool] = None

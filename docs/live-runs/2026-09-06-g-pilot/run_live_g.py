@@ -86,6 +86,57 @@ def spent_usd(results: list[Any]) -> float:
     return float(sum(float(row.usd or 0.0) for row in unique_arm_rows(results)))
 
 
+async def compare_case_resilient(runner: Any, case: Any, models: list[str], rounds: int) -> list[Any]:
+    """Три руки независимо. Freeze/strip на одной не выкидывает кейс целиком."""
+    from zhoda_core.benchmarks.runner import (
+        MATCH_REQUEST,
+        MODE_MAJORITY,
+        MODE_SHORT_REVIEW,
+        MODE_ZHODA,
+        CaseResult,
+    )
+    from zhoda_core.providers.openrouter import QuotaExceededError
+
+    async def one(mode: str) -> Any:
+        try:
+            return await runner.run_case(case, models, mode, rounds, match=MATCH_REQUEST)
+        except QuotaExceededError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — граница live-драйвера
+            _log(f"ARM {mode} {case.id} err={type(exc).__name__}: {exc}")
+            return CaseResult(
+                case_id=case.id,
+                suite=case.suite,
+                kind=case.kind,
+                mode=mode,
+                decision="",
+                match=MATCH_REQUEST,
+                coverage_status="failed",
+                skip_reason=f"{type(exc).__name__}: {exc}"[:300],
+                spec_hash=runner.spec_hash,
+                replicate_id=runner.replicate_id,
+            )
+
+    zhoda = await one(MODE_ZHODA)
+    results: list[Any] = []
+    if zhoda.coverage_status == "ok":
+        results.extend(runner._emit_match_copy(zhoda))
+    else:
+        results.append(zhoda)
+    compute = max(zhoda.requests, 1)
+    majority = await one(MODE_MAJORITY)
+    if majority.coverage_status == "ok":
+        results.append(runner._qualify_request(majority, compute, 1))
+    else:
+        results.append(majority)
+    short = await one(MODE_SHORT_REVIEW)
+    if short.coverage_status == "ok":
+        results.append(runner._qualify_request(short, compute, 1))
+    else:
+        results.append(short)
+    return results
+
+
 def evaluator_usd(results: list[Any]) -> float:
     total = 0.0
     seen: set[tuple[str, str]] = set()
@@ -426,11 +477,7 @@ async def run_live() -> dict[str, Any]:
     from zhoda_core.config import load_council_config
     from zhoda_core.env import load_zhoda_env
     from zhoda_core.eval.pilot import load_public_cases, public_to_benchmark
-    from zhoda_core.providers.openrouter import (
-        BudgetExceededError,
-        QuotaExceededError,
-        ZhodaProviderError,
-    )
+    from zhoda_core.providers.openrouter import QuotaExceededError
 
     load_zhoda_env(REPO_ROOT)
     if not os.environ.get("OPENROUTER_API_KEY"):
@@ -506,26 +553,16 @@ async def run_live() -> dict[str, Any]:
                 f"remain={SPEND_CAP_USD - spent:.4f}"
             )
             try:
-                batch = await runner._run_compare_case(case, models, spec.rounds)
+                batch = await compare_case_resilient(runner, case, models, spec.rounds)
             except QuotaExceededError as exc:
                 stop_reason = "quota_exceeded"
                 stop_error = str(exc)
                 _log(f"LIVE_G_STOP reason=quota_exceeded err={exc}")
                 break
-            except BudgetExceededError as exc:
-                _log(f"CASE {case.id} budget_exceeded (per-question) err={exc}")
-                stop_error = str(exc)
-                spent = spent_usd(results)
-                if spent >= SPEND_CAP_USD:
-                    stop_reason = "spend_cap"
-                    _log(f"LIVE_G_STOP reason=spend_cap spent={spent:.4f}")
-                    break
+            except Exception as exc:  # noqa: BLE001 — кейс не валит весь G
+                _log(f"CASE {case.id} err={type(exc).__name__}: {exc}")
+                traceback.print_exc()
                 continue
-            except ZhodaProviderError as exc:
-                stop_reason = "provider_hard_fail"
-                stop_error = str(exc)
-                _log(f"LIVE_G_STOP reason=provider_hard_fail err={exc}")
-                break
             results.extend(batch)
             spent = spent_usd(results)
             write_progress(

@@ -465,3 +465,24 @@ async def test_explicit_zero_price_is_a_strategy_not_unknown() -> None:
     assert provider._active_run is not None
     assert provider._active_run.admissions_frozen is False
     await provider.complete("paid/model", "two")
+
+
+@pytest.mark.asyncio
+async def test_null_content_is_empty_not_attribute_error() -> None:
+    """content: null — пустая строка, не падение на .strip()."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": None}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 0, "cost": 0.0},
+            },
+        )
+
+    provider = make_provider(httpx.MockTransport(handler))
+    provider.begin_question()
+    assert await provider.complete("m:free", "hi") == ""
+    with pytest.raises(ValueError, match="no JSON"):
+        await provider.ask_json("m:free", "hi")
