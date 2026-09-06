@@ -22,6 +22,7 @@
 | appeal     | DecisionVote     | decision                                  | skip overwrite |
 | bon        | PickBestVote     | index: StrictInt in range                 | no default-1 guess |
 | blind      | BlindGradeVote   | committed: StrictBool; picked ∈ allowed   | ungraded, не incorrect |
+| action-grade | ActionGradeVote | committed: StrictBool; picked_id ∈ labels | ungraded, не incorrect |
 
 Syntax repair в ask_json только чинит JSON, не committed/closed/verified.
 """
@@ -51,9 +52,7 @@ from .models import (
 
 T = TypeVar("T", bound=BaseModel)
 
-_SECRET_RE = re.compile(
-    r"(?i)(bearer\s+\S+|sk-[a-zA-Z0-9_-]{8,}|OPENROUTER_API_KEY\s*=\s*\S+)"
-)
+_SECRET_RE = re.compile(r"(?i)(bearer\s+\S+|sk-[a-zA-Z0-9_-]{8,}|OPENROUTER_API_KEY\s*=\s*\S+)")
 
 # Поля, которые модель не имеет права импортировать в engine state.
 ENGINE_OWNED_FIELDS = frozenset(
@@ -231,6 +230,14 @@ class BlindGradeVote(StageModel):
     committed: StrictBool
     picked: str = ""
     reason: str = ""
+
+
+class ActionGradeVote(StageModel):
+    """Пилот-грейдер v2: закрытый picked_id, без arm name в промпте."""
+
+    committed: StrictBool
+    picked_id: str
+    quote: str = ""
 
 
 def _strict_unit_float(value: object) -> float:

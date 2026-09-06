@@ -8,7 +8,6 @@ import json
 import os
 import sys
 import traceback
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -139,27 +138,64 @@ async def compare_case_resilient(runner: Any, case: Any, models: list[str], roun
 def evaluator_usd(results: list[Any]) -> float:
     total = 0.0
     seen: set[tuple[str, str]] = set()
-    for row in unique_arm_rows(results):
-        key = (row.case_id, row.mode)
+    for row in results:
+        if isinstance(row, dict):
+            key = (str(row.get("case_id")), str(row.get("mode")))
+            usage = row.get("evaluator_usage") or {}
+        else:
+            key = (row.case_id, row.mode)
+            usage = row.evaluator_usage or {}
         if key in seen:
             continue
         seen.add(key)
-        usage = row.evaluator_usage or {}
         raw = usage.get("usd")
         if raw is not None:
             total += float(raw)
     return total
 
 
-def overlay_gold(results: list[Any], gold_map: dict[str, Any], cases: dict[str, Any]) -> list[dict[str, Any]]:
-    from zhoda_core.eval.rescore import overlay_row
+async def score_with_gold(
+    decision: str,
+    coverage: str,
+    gold: Any,
+    case_public: Any,
+    *,
+    provider: Any,
+    model: str,
+    judge_overlap: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    from zhoda_core.eval.grading import score_with_gold as _score
 
-    rows: list[dict[str, Any]] = []
-    for row in unique_arm_rows(results):
-        gold = gold_map[row.case_id]
-        case = cases[row.case_id]
-        rows.append(overlay_row(asdict(row), gold, case.answer_options))
-    return rows
+    return await _score(
+        decision,
+        coverage,
+        gold,
+        case_public,
+        provider=provider,
+        model=model,
+        judge_overlap=judge_overlap,
+    )
+
+
+async def overlay_gold(
+    results: list[Any],
+    gold_map: dict[str, Any],
+    public_by_id: dict[str, Any],
+    *,
+    provider: Any,
+    model: str,
+    judge_overlap: tuple[str, ...] = (),
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    from zhoda_core.eval.grading import overlay_scored_rows
+
+    return await overlay_scored_rows(
+        unique_arm_rows(results),
+        gold_map,
+        public_by_id,
+        provider=provider,
+        model=model,
+        judge_overlap=judge_overlap,
+    )
 
 
 def paired_primary(scored: list[dict[str, Any]]) -> dict[str, Any]:
@@ -208,7 +244,8 @@ def write_notes(report: dict[str, Any]) -> None:
         f"Product default in code: **{rule['product_default']}** (not flipped by this script).",
         "",
         "Independent validation: **false**. Gold is provisional / protocol-author-not-independent.",
-        "No p-value. Blind LLM judge was not spent during the engine loop (gold sidecar after attempts).",
+        "No p-value. Grader: `pilot-grader.v2` (YAML judges[0], evaluator_usage). "
+        "Keyword heuristic is kept as `action_correct_heuristic`.",
         "Do not retune prompts on these holdout outputs.",
         "",
     ]
@@ -265,7 +302,7 @@ async def run_live() -> dict[str, Any]:
     )
     from zhoda_core.benchmarks.spec import resolve_run_spec, source_sha
     from zhoda_core.benchmarks.spy import CallSpy
-    from zhoda_core.config import load_council_config
+    from zhoda_core.config import load_council_config, make_provider
     from zhoda_core.env import load_zhoda_env
     from zhoda_core.eval.pilot import load_public_cases, public_to_benchmark
     from zhoda_core.providers.openrouter import QuotaExceededError
@@ -277,7 +314,6 @@ async def run_live() -> dict[str, Any]:
     yaml_cfg = load_council_config(CONFIG_PATH)
     public_cases = load_public_cases()
     cases = [public_to_benchmark(item) for item in public_cases]
-    case_by_id = {c.id: c for c in cases}
     spec = resolve_run_spec(
         cases=cases,
         yaml_cfg=yaml_cfg,
@@ -394,10 +430,24 @@ async def run_live() -> dict[str, Any]:
         _log(f"spy.verify failed: {exc}")
 
     from zhoda_core.eval.gold import load_gold
+    from zhoda_core.eval.grading import GRADER_VERSION
     from zhoda_core.eval.pilot import GOLD_JSONL
 
     gold_map = load_gold(GOLD_JSONL)
-    scored = overlay_gold(results, gold_map, case_by_id)
+    if not spec.roster.judge_model:
+        raise SystemExit("no yaml judges[0] — refusing chairman as grader")
+    public_by_id = {item.id: item for item in public_cases}
+    eval_cfg = dict(yaml_cfg)
+    eval_cfg["cache_path"] = str(OUT_DIR / "cache-grader.db")
+    eval_provider = make_provider(eval_cfg)
+    scored, disagreements = await overlay_gold(
+        results,
+        gold_map,
+        public_by_id,
+        provider=eval_provider,
+        model=spec.roster.judge_model,
+        judge_overlap=spec.roster.judge_overlap,
+    )
     cov = coverage_stats(scored, len(cases))
     primary = paired_primary(scored)
     rule = decide_rule(primary, cov["n_complete"], cov["ungraded_failed_share"])
@@ -416,15 +466,17 @@ async def run_live() -> dict[str, Any]:
         "hash_ok": freeze_info["hash_ok"],
         "spend_cap_usd": SPEND_CAP_USD,
         "spend_usd": spend,
-        "engine_usd": spend - evaluator_usd(results),
-        "evaluator_usd": evaluator_usd(results),
+        "engine_usd": spend,
+        "evaluator_usd": evaluator_usd(scored),
         "clarify_mode": CLARIFY_MODE,
         "cache_mode": CACHE_MODE,
         "replicate_id": REPLICATE_ID,
         "arms": list(PILOT_ARMS),
         "tables": ["request"],
-        "judge": "gold_aware_executable",
-        "blind_llm_judge": False,
+        "judge": GRADER_VERSION,
+        "blind_llm_judge": True,
+        "grader_version": GRADER_VERSION,
+        "heuristic_llm_disagreements": disagreements,
         "n_cases": len(cases),
         "case_ids": [c.id for c in cases],
         "manifest": spec.to_manifest(),

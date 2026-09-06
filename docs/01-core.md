@@ -157,8 +157,10 @@ Public serialization additions (optional, default-empty):
 `Round.parse_failures`, `CaseResult.grade_status` / `grade_error`.
 Blind grader returns `GradeResult`: `graded|ungraded`, `committed`,
 `picked_id` (exact allowed label, no substring), `correct`,
-`reason`/`error`. Ungraded is **not** mapped to incorrect; coverage
-aggregation is package F.
+`reason`/`error`. `ActionGradeVote` (pilot-grader.v2) is the same
+trust boundary: `committed` is `StrictBool`, `picked_id` is a closed
+label, `quote` ≤200 characters from the decision. Ungraded is **not**
+mapped to incorrect; coverage aggregation is package F.
 
 ## Stage 2 — Factions
 
@@ -440,17 +442,26 @@ are split: `chosen_action` / `action_correct`, `premise_handling`,
 `constraint_violations`, `evidence_support`, `useful_findings`,
 `appropriate_abstention`. Executable graders cover the adversarial
 calibration corpus; the blind LLM judge sees a neutral structure without
-arm branding. Pilot holdout scoring uses the **gold sidecar** (not empty
-`ground_truth`): a committed pick must be an allowed label (expected or
-alternative). A paraphrase that is not an allowed label is **ungraded**,
-not incorrect. `abstain_policy=required` credits `INSUFFICIENT_CONTEXT` /
-an abstain label; a confident delay is not an abstain. Ungraded judge
-JSON stays ungraded. `python -m zhoda_core.eval rescore-report` writes a
-new file (`report-v2.json`); it does not overwrite a historical
-`report.json`. Model identity alone is not independence: `judge_overlap`
+arm branding. Pilot holdout scoring has two layers. `pilot-grader.v1`
+(`eval.grader.apply_gold`) treats a paraphrase that is not an allowed
+label as **ungraded**. `pilot-grader.v2` (`eval.grading.score_action_llm`)
+asks YAML `roster.judges[0]` (not chairman, not council) for
+`{"picked_id", "committed", "quote"}` via `ActionGradeVote` / `StrictBool`
+and a closed label list (gold + alternatives + `answer_options` +
+`ABSTAIN`). Arm names and the `Recommended (majority at cap…)` prefix are
+not format hints in that prompt. Parse failure stays **ungraded**, not
+incorrect. Keyword `extract_chosen_action` remains
+`action_correct_heuristic` (a paraphrase that misses the exact label is
+**False**, which is the v1 instrument defect). Abstain regex matches only
+the recommendation head (before `Dissent:` or the first 400 characters).
+Judge spend is `evaluator_usage`, never `engine_usage`. `judge_overlap`
 lists chairman/council/protocol_judge/classifier when the judge model
 appears there. Chairman is not an implicit independent judge (default is
-the first YAML `judges` entry).
+the first YAML `judges` entry). `abstain_policy=required` credits
+`picked_id=ABSTAIN`; a forbidden abstain is not appropriate. Ungraded judge
+JSON stays ungraded. `python -m zhoda_core.eval rescore-report` writes a
+new file (`report-v2.json`); it does not overwrite a historical
+`report.json`.
 
 Each arm gets its own sqlite (`cache-zhoda.db`, `cache-majority.db`, …)
 so vote does not reuse debate completions. `--shared-cache` restores the
