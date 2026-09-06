@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
-from .cache_guard import replayed_without_http
 from .spec import SpecMismatch
 
 
@@ -47,7 +46,8 @@ class CallSpy:
             raise SpecMismatch(f"undeclared models in actual calls: {unknown}")
         if self.expected_max_tokens is not None:
             bad = [
-                c for c in self.calls
+                c
+                for c in self.calls
                 if c.kind == "complete"
                 and c.max_tokens is not None
                 and c.max_tokens != self.expected_max_tokens
@@ -101,7 +101,10 @@ class SpyingProvider:
         except Exception:
             self.spy.record(
                 CallRecord(
-                    model=model, kind="complete", failed=True, role=self.role,
+                    model=model,
+                    kind="complete",
+                    failed=True,
+                    role=self.role,
                     prompt_chars=len(prompt or ""),
                     max_tokens=recorded,
                 )
@@ -123,7 +126,11 @@ class SpyingProvider:
         return str(text)
 
     async def ask_json(
-        self, model: str, prompt: str, *, cache_key: str | None = None,
+        self,
+        model: str,
+        prompt: str,
+        *,
+        cache_key: str | None = None,
     ) -> dict[str, object]:
         hits_before = _cache_hits(self.inner)
         try:
@@ -131,7 +138,10 @@ class SpyingProvider:
         except Exception:
             self.spy.record(
                 CallRecord(
-                    model=model, kind="ask_json", failed=True, role=self.role,
+                    model=model,
+                    kind="ask_json",
+                    failed=True,
+                    role=self.role,
                     prompt_chars=len(prompt or ""),
                 )
             )
@@ -164,10 +174,14 @@ def _request_id(provider: Any) -> str | None:
 
 def usage_from_report(report: Any, *, role: str) -> dict[str, object]:
     """Engine/evaluator usage из CostReport. unknown usd не притворяется 0 matched."""
+    from .cache_guard import cost_status_for, served_from_cache
+
     usd = float(getattr(report, "usd", 0.0) or 0.0)
     status = str(getattr(report, "usd_status", "exact") or "exact")
     requests = int(getattr(report, "requests", 0) or 0)
     cache_hits = int(getattr(report, "cache_hits", 0) or 0)
+    served = served_from_cache(requests, cache_hits)
+    cost_status = cost_status_for(requests, cache_hits, status)
     return {
         "role": role,
         "requests": requests,
@@ -180,25 +194,33 @@ def usage_from_report(report: Any, *, role: str) -> dict[str, object]:
         "latency_s": float(getattr(report, "latency_s", 0.0) or 0.0),
         "attempts": int(getattr(report, "attempts", 0) or 0),
         "failed": False,
-        "replayed_without_http": replayed_without_http(requests, cache_hits),
+        "served_from_cache": served,
+        "cost_status": cost_status,
+        "replayed_without_http": served,
     }
 
 
 def combine_usage(records: Sequence[CallRecord], report: Any, *, role: str) -> dict[str, object]:
-    base = usage_from_report(report, role=role) if report is not None else {
-        "role": role,
-        "requests": 0,
-        "cache_hits": 0,
-        "tokens_in": 0,
-        "tokens_out": 0,
-        "usd": 0.0,
-        "usd_status": "unknown",
-        "usd_known": False,
-        "latency_s": 0.0,
-        "attempts": 0,
-        "failed": False,
-        "replayed_without_http": False,
-    }
+    base = (
+        usage_from_report(report, role=role)
+        if report is not None
+        else {
+            "role": role,
+            "requests": 0,
+            "cache_hits": 0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "usd": 0.0,
+            "usd_status": "unknown",
+            "usd_known": False,
+            "latency_s": 0.0,
+            "attempts": 0,
+            "failed": False,
+            "served_from_cache": False,
+            "cost_status": "partial",
+            "replayed_without_http": False,
+        }
+    )
     base["call_count"] = len([c for c in records if c.role == role])
     base["failed"] = any(c.failed for c in records if c.role == role)
     ids = [c.provider_request_id for c in records if c.role == role and c.provider_request_id]

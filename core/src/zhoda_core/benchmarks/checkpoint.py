@@ -48,26 +48,38 @@ class CheckpointStore:
             prior_body = {k: v for k, v in prior.items() if k != "ts"}
             new_body = {k: v for k, v in payload.items() if k != "ts"}
             if prior_body != new_body:
-                raise CheckpointConflict(
-                    f"checkpoint {key!r} already has a different record"
-                )
+                raise CheckpointConflict(f"checkpoint {key!r} already has a different record")
             return  # idempotent
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
+    def count_rows(self) -> int:
+        return sum(1 for _ in self._rows())
+
+    def matching_spec_terminal_rows(self, spec_hash: str) -> int:
+        """Terminal rows, чей ключ заканчивается этим spec_hash."""
+        from .cache_guard import CHECKPOINT_TERMINAL
+
+        n = 0
+        for row in self._rows():
+            if str(row.get("status") or "") not in CHECKPOINT_TERMINAL:
+                continue
+            key = str(row.get("key") or "")
+            parts = key.split("\x1f")
+            if len(parts) >= 4 and parts[-1] == spec_hash:
+                n += 1
+        return n
+
     def has_any_terminal(self) -> bool:
         """Есть ли хотя бы один завершённый attempt — признак resume того же run."""
-        return any(
-            str(row.get("status") or "") in {
-                "ok", "failed", "ungraded", "skipped", "infeasible",
-            }
-            for row in self._rows()
-        )
+        from .cache_guard import CHECKPOINT_TERMINAL
+
+        return any(str(row.get("status") or "") in CHECKPOINT_TERMINAL for row in self._rows())
 
     def has_terminal(self, key: str) -> bool:
+        from .cache_guard import CHECKPOINT_TERMINAL
+
         row = self.get(key)
         if row is None:
             return False
-        return str(row.get("status") or "") in {
-            "ok", "failed", "ungraded", "skipped", "infeasible",
-        }
+        return str(row.get("status") or "") in CHECKPOINT_TERMINAL

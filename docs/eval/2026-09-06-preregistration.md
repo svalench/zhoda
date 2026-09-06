@@ -123,3 +123,13 @@ manifest `config_hash`. Intended shape matches `zhoda.yaml.example`:
 
 Owner: approve the frozen manifest, spend cap, and arms — or reject.
 Without that approval, status stays **READY_FOR_APPROVAL**.
+## Поправка 1 (после прогона) — 2026-09-06
+
+`cache_mode=fresh` нарушен: прогон G был перезапущен поверх непустого
+arm sqlite (`cache-zhoda.db` / `cache-majority.db` / `cache-short_review.db`)
+и `checkpoint.jsonl`. Строки с `requests=0` и `cache_hits>0` (например
+evd-001 zhoda: 53 hits, $0.00) — replay, не live spend. Сравнение mean USD
+short_review vs oxford по этому отчёту недостоверно. См. work package P3
+(`CacheNotFreshError`, `cost_status`, `n_cached`). Исторические
+`docs/live-runs/2026-09-05-bench.md` и
+`docs/live-runs/2026-09-06-g-pilot/NOTES.md` не меняются.

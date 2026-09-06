@@ -48,8 +48,10 @@ def request_match(
 ) -> MatchVerdict:
     if is_reference:
         return MatchVerdict(
-            STATUS_REFERENCE, "zhoda reference",
-            target=float(target_requests), actual=float(actual_requests),
+            STATUS_REFERENCE,
+            "zhoda reference",
+            target=float(target_requests),
+            actual=float(actual_requests),
             minimum=float(min_mandatory),
         )
     if min_mandatory > target_requests:
@@ -62,8 +64,10 @@ def request_match(
         )
     if actual_requests == target_requests:
         return MatchVerdict(
-            STATUS_MATCHED, "request count equal",
-            target=float(target_requests), actual=float(actual_requests),
+            STATUS_MATCHED,
+            "request count equal",
+            target=float(target_requests),
+            actual=float(actual_requests),
             minimum=float(min_mandatory),
         )
     return MatchVerdict(
@@ -84,14 +88,21 @@ def cost_match(
     min_usd: float = 0.0,
     min_tokens: int = 0,
     usd_unknown: bool = False,
+    cost_status: str = "exact",
     is_reference: bool = False,
 ) -> MatchVerdict:
     if is_reference:
         return MatchVerdict(
-            STATUS_REFERENCE, "zhoda reference",
+            STATUS_REFERENCE,
+            "zhoda reference",
             target=float(target_usd or target_tokens or 0),
             actual=float(actual_usd if target_usd else actual_tokens),
             minimum=min_usd if target_usd else float(min_tokens),
+        )
+    if cost_status != "exact":
+        return MatchVerdict(
+            STATUS_UNMATCHED,
+            f"cost_status={cost_status} excluded from mean USD",
         )
     if usd_unknown:
         return MatchVerdict(STATUS_UNMATCHED, "usd unknown — not a matched cost")
@@ -100,21 +111,31 @@ def cost_match(
             return MatchVerdict(
                 STATUS_INFEASIBLE,
                 f"min council usd {min_usd} exceeds target {target_usd}",
-                target=target_usd, actual=actual_usd, minimum=min_usd,
+                target=target_usd,
+                actual=actual_usd,
+                minimum=min_usd,
             )
         if _within(actual_usd, target_usd, USD_REL_TOL, USD_ABS_TOL):
             return MatchVerdict(
-                STATUS_MATCHED, "usd within tolerance",
-                target=target_usd, actual=actual_usd, minimum=min_usd,
+                STATUS_MATCHED,
+                "usd within tolerance",
+                target=target_usd,
+                actual=actual_usd,
+                minimum=min_usd,
             )
         return MatchVerdict(
             STATUS_UNMATCHED,
             f"usd {actual_usd} vs target {target_usd} outside tolerance",
-            target=target_usd, actual=actual_usd, minimum=min_usd,
+            target=target_usd,
+            actual=actual_usd,
+            minimum=min_usd,
         )
     if target_tokens is not None and target_tokens > 0:
         if min_tokens > target_tokens and not _within(
-            float(min_tokens), float(target_tokens), TOKEN_REL_TOL, float(TOKEN_ABS_TOL),
+            float(min_tokens),
+            float(target_tokens),
+            TOKEN_REL_TOL,
+            float(TOKEN_ABS_TOL),
         ):
             return MatchVerdict(
                 STATUS_INFEASIBLE,
@@ -124,15 +145,21 @@ def cost_match(
                 minimum=float(min_tokens),
             )
         if _within(
-            float(actual_tokens), float(target_tokens), TOKEN_REL_TOL, float(TOKEN_ABS_TOL),
+            float(actual_tokens),
+            float(target_tokens),
+            TOKEN_REL_TOL,
+            float(TOKEN_ABS_TOL),
         ):
             return MatchVerdict(
-                STATUS_MATCHED, "tokens within tolerance",
-                target=float(target_tokens), actual=float(actual_tokens),
+                STATUS_MATCHED,
+                "tokens within tolerance",
+                target=float(target_tokens),
+                actual=float(actual_tokens),
             )
         return MatchVerdict(
             STATUS_UNMATCHED,
             f"tokens {actual_tokens} vs target {target_tokens}",
-            target=float(target_tokens), actual=float(actual_tokens),
+            target=float(target_tokens),
+            actual=float(actual_tokens),
         )
     return MatchVerdict(STATUS_UNMATCHED, "no cost target")

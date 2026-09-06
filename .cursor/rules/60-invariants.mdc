@@ -46,8 +46,17 @@ Current mapping (keep updated):
 | dead_ends from paths_rejected; dead_ends_per_usd | tests/test_benchmarks.py::test_zhoda_arm_maps_verdict + test_dead_ends_per_usd_metric |
 | Compare --arms/--tables slice skips unselected spend | tests/test_benchmarks.py::test_compare_arms_and_tables_slice |
 | Per-arm sqlite cache; vote does not reuse debate keys | tests/test_benchmarks.py::test_build_live_arms_uses_distinct_cache_files |
-| Fresh cache refuses occupied sqlite; replayed_without_http is honest | tests/test_cache_guard.py + tests/test_openrouter.py::test_preseeded_sqlite_hits_are_replayed_without_http |
+| Fresh cache refuses occupied sqlite; resume needs matching spec_hash; cached rows excluded from mean USD | tests/test_cache_mode.py + tests/test_openrouter.py::test_preseeded_sqlite_hits_are_replayed_without_http |
+| Live G v1 tree byte-identical to 9abbe24 (git diff 9abbe24..HEAD + WT/index); v2 runner has no auto-resume | tests/test_pilot_rescore.py::test_v1_live_g_tree_matches_9abbe24 + tests/test_cache_mode.py::test_run_live_g_fresh_does_not_auto_resume_from_checkpoint |
 | Blind LLM judge: committed gold, dissent is a miss | tests/test_benchmarks.py::test_blind_judge_requires_committed_gold + test_blind_llm_judge_hides_arm_and_rejects_dissent |
+| Blind judge decision is judge_visible_decision (no dissent/arm marker in the answer slot) | tests/test_eval_grader.py::test_sidecar_judge_prompt_uses_gold_not_empty_gt |
+| Pilot gold sidecar: paraphrase is ungraded; abstain policy; judge fixture | tests/test_eval_grader.py |
+| Pilot rescore writes v2 and refuses to overwrite the source report | tests/test_eval_grader.py::test_rescore_cli_refuses_overwrite_and_writes_v2 |
+| Frozen protocol prompt_hash unchanged; rubric hash is grader-v2 abstain regex | tests/test_eval_grader.py::test_prompt_and_rubric_hashes_frozen + tests/test_pilot_grader.py::test_prompt_hash_frozen_rubric_is_grader_v2 |
+| Pilot-grader v2: LLM action grade on paraphrase; gold abstain label credited; judge omits dissent/arm markers | tests/test_pilot_grader.py |
+| Lowercase dissent header is stripped; quote outside visible decision is ungraded | tests/test_pilot_grader.py::test_lowercase_dissent_is_not_visible_to_judge + test_quote_outside_visible_decision_is_ungraded |
+| Empty judge quote is ungraded; Minority:/Minority report: is not visible to the judge | tests/test_pilot_grader.py::test_empty_quote_is_ungraded + test_minority_without_dissent_header_is_not_visible_pick |
+| Live G rescore v2 does not mutate report.json; mean USD excludes cached; artifacts outside v1 | tests/test_pilot_rescore.py |
 | StrictBool stage DTOs; `"false"` is not a transition | tests/test_stage_dtos.py + tests/test_consensus.py::test_c1_string_false_is_not_unanimous + tests/test_debate.py::test_c2_string_false_does_not_close_objection |
 | String committed/picked hedge is ungraded, not correct | tests/test_benchmarks.py::test_c6_string_false_committed_on_hedge_is_ungraded |
 | pick_matches_gold is exact ID, not substring | tests/test_benchmarks.py::test_c7_negated_pick_is_not_gold |
@@ -72,6 +81,7 @@ Current mapping (keep updated):
 | short_review is critique+revision, not synthesis; no rebut/switch | tests/test_debate.py::test_short_review_skips_rebuttal_and_switch + tests/test_e2e.py::test_short_review_is_critique_revision_not_synthesis |
 | short_review factual critique without evidence span is discarded | tests/test_debate.py::test_short_critique_requires_evidence_span |
 | Pilot public JSONL has no gold keys; gold sidecar is provisional | tests/test_eval_pilot.py::test_public_jsonl_has_no_gold_keys + test_gold_sidecar_matches_public_ids |
+| A/B gold exact diffs logged; merged draft disputed; gold.jsonl hash frozen | tests/test_gold_disagreement.py |
 | Pilot loader source does not import gold; runner cases have empty GT | tests/test_eval_pilot.py::test_pilot_module_source_does_not_import_gold + test_runner_case_has_empty_ground_truth |
 | Pilot ids disjoint from development-51; 30–50 cases, all task classes | tests/test_eval_pilot.py::test_pilot_ids_disjoint_from_development_51 + test_pilot_size_and_classes |
 | Pilot source_bundle.text is BenchmarkCase.context, not ground_truth | tests/test_eval_pilot.py::test_runner_case_has_empty_ground_truth |

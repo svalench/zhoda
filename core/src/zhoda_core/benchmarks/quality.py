@@ -25,14 +25,67 @@ _HEDGE_RE = re.compile(
     re.IGNORECASE,
 )
 _ABSTAIN_RE = re.compile(
-    r"insufficient_context|cannot (?:decide|determine)|not enough (?:context|information)|"
-    r"воздерживаюсь|недостаточно (?:контекста|данных)",
+    r"insufficient_context|"
+    r"insufficient[ _](?:context|information|evidence|data)|"
+    r"cannot (?:decide|determine|conclude|confirm or deny)|"
+    r"not possible to determine|"
+    r"(?:not|un)able to (?:determine|conclude)|"
+    r"needs? more (?:context|information)|"
+    r"not enough (?:context|information)|"
+    r"воздерживаюсь|"
+    r"недостаточно (?:контекста|данных|информации|сведений)|"
+    r"невозможно (?:определить|сделать вывод)|"
+    r"нужно больше (?:контекста|данных)",
     re.IGNORECASE,
 )
 _NO_RE = re.compile(
     r"^\s*(no|нет)\s*\.?\s*$",
     re.IGNORECASE,
 )
+
+
+_ARM_MARKER_RE = re.compile(
+    r"^Recommended \([^)]*\bmajority at cap\b[^)]*\):\s*",
+    re.IGNORECASE,
+)
+# Только заголовок блока (начало строки). Протокольный текст не меняем.
+_DISSENT_HEADER_RE = re.compile(
+    r"(?:(?<=\n)|^)(?:dissent|minority(?:\s+report)?):\s*",
+    re.IGNORECASE,
+)
+
+
+def recommendation_head(decision: str, *, limit: int | None = 400) -> str:
+    """Первая рекомендация: до dissent/minority-заголовка. limit=None — без обрезки."""
+    body = decision or ""
+    match = _DISSENT_HEADER_RE.search(body)
+    if match:
+        head = body[: match.start()]
+    else:
+        idx = body.casefold().find("dissent:")
+        head = body[:idx] if idx >= 0 else body
+    if limit is None:
+        return head
+    return head[:limit]
+
+
+def judge_visible_decision(decision: str) -> str:
+    """Судье — head без dissent/minority и без маркера arm. Протокол не меняем."""
+    head = recommendation_head(decision, limit=None)
+    return _ARM_MARKER_RE.sub("", head, count=1).strip()
+
+
+def quote_in_visible(quote: str, visible: str) -> bool:
+    """quote — непустой span видимого decision. Пустая quote — промах."""
+    needle = " ".join((quote or "").casefold().split())
+    if not needle:
+        return False
+    return needle in " ".join((visible or "").casefold().split())
+
+
+def decision_abstains(decision: str) -> bool:
+    """Abstain только в recommendation_head, не в dissent-абзаце."""
+    return bool(_ABSTAIN_RE.search(recommendation_head(decision)))
 
 
 @dataclass(frozen=True)
@@ -53,7 +106,7 @@ def extract_chosen_action(decision: str, options: Sequence[str]) -> str | None:
     body = (decision or "").strip()
     if not body:
         return None
-    if _ABSTAIN_RE.search(body):
+    if decision_abstains(body):
         return None
     if re.search(r"\bboth\b.{0,80}\band\b", body, re.IGNORECASE) or (
         "it depends" in body.casefold()
@@ -65,12 +118,13 @@ def extract_chosen_action(decision: str, options: Sequence[str]) -> str | None:
             return folded
         hit = resolve_picked_id("No", options) or resolve_picked_id("Нет", options)
         return hit or folded
+    cropped = recommendation_head(body, limit=None)
     labeled = re.search(
-        r"Recommended \([^)]+\):\s*(.+?)(?:\nDissent:|$)",
-        body,
+        r"Recommended \([^)]+\):\s*(.+)$",
+        cropped,
         re.DOTALL,
     )
-    head = labeled.group(1).strip() if labeled else body[:500]
+    head = labeled.group(1).strip() if labeled else cropped.strip()
     if options:
         found: list[tuple[int, str]] = []
         low = head.casefold()
@@ -113,15 +167,13 @@ def grade_quality(case: BenchmarkCase, decision: str) -> QualityScores:
     options = case.answer_options
     chosen = extract_chosen_action(decision, options)
     gold = gold_label(case)
-    abstain = bool(_ABSTAIN_RE.search(decision or ""))
+    abstain = decision_abstains(decision or "")
     hedge = bool(_HEDGE_RE.search(decision or ""))
     action_correct: bool | None
     if abstain:
         action_correct = None
     elif case.kind == KIND_XOR and options:
-        action_correct = bool(
-            chosen and pick_matches_gold(chosen, gold, options)
-        )
+        action_correct = bool(chosen and pick_matches_gold(chosen, gold, options))
     elif chosen and _NO_RE.match((decision or "").strip()) and gold.casefold().startswith("no"):
         action_correct = True
     elif case.truth_keywords:
@@ -136,7 +188,9 @@ def grade_quality(case: BenchmarkCase, decision: str) -> QualityScores:
         foil_as_action = any(f.casefold() in chosen.casefold() for f in case.foil_keywords)
         if case.kind == KIND_XOR and options and pick_matches_gold(chosen, gold, options):
             foil_as_action = False
-    findings = bool(re.search(r"\b(sql injection|finding|argon2|parameteriz)", decision or "", re.I))
+    findings = bool(
+        re.search(r"\b(sql injection|finding|argon2|parameteriz)", decision or "", re.I)
+    )
     return QualityScores(
         chosen_action=chosen,
         action_correct=action_correct,

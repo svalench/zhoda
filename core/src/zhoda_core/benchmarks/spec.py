@@ -25,7 +25,8 @@ PROMPT_SET_VERSION = "zhoda.eval.prompts.v1"
 
 CACHE_FRESH = "fresh"
 CACHE_REPLAY = "replay"
-CACHE_MODES = (CACHE_FRESH, CACHE_REPLAY)
+CACHE_RESUME = "resume"
+CACHE_MODES = (CACHE_FRESH, CACHE_REPLAY, CACHE_RESUME)
 
 
 class InapplicableOverride(ValueError):
@@ -141,9 +142,7 @@ class EffectiveRunSpec:
 
     schema: str = SPEC_SCHEMA
     source_sha: str = ""
-    roster: RoleRoster = field(
-        default_factory=lambda: RoleRoster((), (), "", ())
-    )
+    roster: RoleRoster = field(default_factory=lambda: RoleRoster((), (), "", ()))
     protocol_zhoda: str = "debate"
     rounds: int = 4
     max_tokens: int = DEFAULT_MAX_TOKENS
@@ -168,6 +167,9 @@ class EffectiveRunSpec:
     def spec_hash(self) -> str:
         payload = asdict(self)
         payload["roster"] = asdict(self.roster)
+        # resume — политика старта, не новая identity: checkpoint ключи как у fresh.
+        if payload.get("cache_mode") == CACHE_RESUME:
+            payload["cache_mode"] = CACHE_FRESH
         return content_hash(payload)
 
     def to_manifest(self) -> dict[str, Any]:
@@ -213,9 +215,7 @@ def resolve_run_spec(
     if replicate_id < 0:
         raise InapplicableOverride("replicate_id must be >= 0")
     if not isolate_cache and replicate_id > 0 and cache_mode == CACHE_FRESH:
-        raise InapplicableOverride(
-            "independent replicate requires isolated cache namespaces"
-        )
+        raise InapplicableOverride("independent replicate requires isolated cache namespaces")
     if rounds_override is not None and rounds_override < 1:
         raise InapplicableOverride("rounds override must be >= 1")
 

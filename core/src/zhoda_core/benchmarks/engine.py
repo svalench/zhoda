@@ -105,9 +105,7 @@ class ZhodaArm:
         engine_rounds = getattr(self.engine, "rounds_cap", None)
         if self.expected_rounds is not None:
             if rounds != self.expected_rounds:
-                raise SpecMismatch(
-                    f"adapter rounds {rounds} != spec {self.expected_rounds}"
-                )
+                raise SpecMismatch(f"adapter rounds {rounds} != spec {self.expected_rounds}")
             if engine_rounds is not None and int(engine_rounds) != self.expected_rounds:
                 raise SpecMismatch(
                     f"engine.rounds_cap {engine_rounds} != spec {self.expected_rounds}"
@@ -130,7 +128,8 @@ class ZhodaArm:
             if answer_options:
                 gold = answer_options[0]
             outcome.beneficial_switches = beneficial_switch_count(
-                verdict.switches, gold=gold,
+                verdict.switches,
+                gold=gold,
             )
             report = getattr(getattr(self.engine, "provider", None), "question_report", None)
             if callable(report):
@@ -173,7 +172,6 @@ def build_live_arms(
     spies: dict[str, Any] | None = None,
     expected_models: Sequence[str] | None = None,
     modes: Sequence[str] | None = None,
-    resume: bool = False,
 ) -> dict[str, DeliberationEngine]:
     """Собрать arms. Default = ALL_MODES (без short_review). Pilot передаёт PILOT_ARMS."""
     wanted = tuple(modes) if modes is not None else ALL_MODES
@@ -191,19 +189,31 @@ def build_live_arms(
 
     from .cache_guard import ensure_fresh_cache
 
+    if isolate_cache:
+        for mode in wanted:
+            ensure_fresh_cache(
+                arm_cache_path(
+                    base_cache,
+                    mode,
+                    replicate_id=replicate_id,
+                    cache_mode=cache_mode,
+                ),
+                cache_mode=cache_mode,
+            )
+    else:
+        ensure_fresh_cache(base_cache, cache_mode=cache_mode)
+
     def provider_for(mode: str) -> Any:
         from .spy import SpyingProvider
 
         arm_cfg = dict(cfg)
         if isolate_cache:
             arm_cfg["cache_path"] = arm_cache_path(
-                base_cache, mode, replicate_id=replicate_id, cache_mode=cache_mode,
+                base_cache,
+                mode,
+                replicate_id=replicate_id,
+                cache_mode=cache_mode,
             )
-        ensure_fresh_cache(
-            str(arm_cfg.get("cache_path") or base_cache),
-            cache_mode=cache_mode,
-            resume=resume,
-        )
         provider = make_provider(arm_cfg)
         spy = (spies or {}).get(mode)
         if spy is not None:
@@ -224,8 +234,11 @@ def build_live_arms(
         prov = engine_provider(mode)
         eng = make_engine(cfg, prov, transcripts_dir=transcripts, rounds_cap=rounds_cap)
         return ZhodaArm(
-            eng, protocol=protocol, clarify_mode=clarify_mode,
-            expected_models=expect, expected_rounds=rounds_cap,
+            eng,
+            protocol=protocol,
+            clarify_mode=clarify_mode,
+            expected_models=expect,
+            expected_rounds=rounds_cap,
             spy=(spies or {}).get(mode),
         )
 
@@ -238,15 +251,18 @@ def build_live_arms(
         arms[MODE_SHORT_REVIEW] = zhoda_like(MODE_SHORT_REVIEW, Protocol.SHORT_REVIEW)
     if MODE_COUNCIL in wanted:
         arms[MODE_COUNCIL] = SinglePassCouncilArm(
-            engine_provider(MODE_COUNCIL), chairman=chairman,
+            engine_provider(MODE_COUNCIL),
+            chairman=chairman,
         )
     if MODE_SELF_CONSISTENCY in wanted:
         arms[MODE_SELF_CONSISTENCY] = SelfConsistencyArm(
-            engine_provider(MODE_SELF_CONSISTENCY), judge_model=chairman,
+            engine_provider(MODE_SELF_CONSISTENCY),
+            judge_model=chairman,
         )
     if MODE_BEST_OF_N in wanted:
         arms[MODE_BEST_OF_N] = BestOfNArm(
-            engine_provider(MODE_BEST_OF_N), judge_model=str(judges[0]),
+            engine_provider(MODE_BEST_OF_N),
+            judge_model=str(judges[0]),
         )
     return arms
 

@@ -9,11 +9,15 @@ They were drafted by someone who (1) implemented protocol/eval code and
 That is **not** independent expert annotation. Do not cite these labels
 as a human expert panel.
 
-Until a second annotator finishes the set:
+Second annotator file: `core/eval/pilot/gold-annotator-b.jsonl`
+(`llm-independent:cursor-grok-4.6`). Owner resolution is **empty**.
 
-- `label_status` stays `provisional`
-- `annotator` stays `protocol-author-not-independent`
-- disagreement log remains **not started** (template only)
+Until the owner fills `docs/eval/disagreement-log.md`:
+
+- `core/eval/pilot/gold.jsonl` stays `provisional` /
+  `protocol-author-not-independent` (do not rewrite it in place)
+- `gold-merged-draft.jsonl` marks exact A/B field diffs as `disputed`
+- disagreement log is **OPEN**, not adjudicated
 
 ## How to label (second annotator)
 
@@ -34,6 +38,27 @@ For each id:
 
 If the source is too thin to decide, set `abstain_policy=required` and
 `expected_action` to an abstain form. Do not invent facts.
+
+## Как считается `action_correct` v2
+
+`grader_version=pilot-grader.v2` (`zhoda_core.eval.grading`).
+
+1. **LLM-судья** (YAML `judges[0]`, не chairman и не член совета). В
+   промпт попадают `question`, `source_bundle.text` и закрытый список
+   labels. Имя arm и `Recommended (majority at cap…)` в промпт не
+   кладутся: `dissent:` / `minority:` / `minority report:` (любой регистр)
+   и маркер срезаются (`judge_visible_decision`). `quote` должен быть
+   непустой span этого head, иначе `ungraded`. `"committed": "false"`
+   строкой и `picked_id` вне labels →
+   `grade_status=ungraded`, не incorrect. YAML `judges[0]` не chairman и
+   не член совета.
+2. **Зачёт.** Если `abstain_policy=required`, `action_correct` при
+   `picked_id == "ABSTAIN"` **или** золотой abstain-метке.
+3. **Heuristic** — keyword-путь; парафраз без exact label остаётся False.
+4. **Abstain regex** только до `dissent:` / `minority:`. «insufficient information» —
+   abstain; «insufficient index coverage is not the issue» — нет.
+
+Mean USD в таблицах — только `cost_status=exact`; `n_cached` отдельно.
 
 Synthetic sources only. If a future source has personal data, **do not**
 send it to an external provider without written permission.

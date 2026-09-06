@@ -183,6 +183,8 @@ async def test_same_cache_key_skips_http() -> None:
 
     usage = usage_from_report(provider.question_report(), role="engine")
     assert usage["replayed_without_http"] is False
+    assert usage["served_from_cache"] is False
+    assert usage["cost_status"] == "exact"
 
 
 @pytest.mark.asyncio
@@ -216,8 +218,12 @@ async def test_preseeded_sqlite_hits_are_replayed_without_http(tmp_path) -> None
     assert report.usd == 0.0
     usage = usage_from_report(report, role="engine")
     assert usage["replayed_without_http"] is True
+    assert usage["served_from_cache"] is True
+    assert usage["cost_status"] == "cached"
     live = usage_from_report(CostReport(requests=32, cache_hits=24, usd=0.01), role="engine")
     assert live["replayed_without_http"] is False
+    assert live["served_from_cache"] is False
+    assert live["cost_status"] == "exact"
 
 
 OVER_RESPONSE = {
