@@ -73,6 +73,7 @@ def _build_arms(
     cache_mode: str = "fresh",
     spies: dict[str, Any] | None = None,
     modes: Sequence[str] | None = None,
+    resume: bool = False,
 ) -> dict[str, DeliberationEngine]:
     """Реальный engine; исключения наружу — CLI печатает и выходит 2."""
     from .engine import build_live_arms
@@ -90,6 +91,7 @@ def _build_arms(
         spies=spies,
         expected_models=council,
         modes=modes,
+        resume=resume,
     )
 
 
@@ -204,6 +206,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
             for mode in compare_modes
         }
 
+    resume = False
+    if args.checkpoint:
+        from .checkpoint import CheckpointStore
+
+        resume = CheckpointStore(Path(args.checkpoint)).has_any_terminal()
+
     arms = None
     if not args.dry_run:
         try:
@@ -219,6 +227,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 cache_mode=spec.cache_mode,
                 spies=spies,
                 modes=compare_modes,
+                resume=resume,
             )
         except Exception as exc:  # noqa: BLE001 — CLI boundary: YAML/key/config
             print(
@@ -241,6 +250,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         cfg["cache_path"] = arm_cache_path(
             str(base), "judge", replicate_id=spec.replicate_id, cache_mode=spec.cache_mode,
         )
+        from .cache_guard import ensure_fresh_cache
+
+        ensure_fresh_cache(str(cfg["cache_path"]), cache_mode=spec.cache_mode, resume=resume)
         judge_model = spec.roster.judge_model
         if not judge_model:
             print("no judge model: pass --judge-model or configure judges", file=sys.stderr)

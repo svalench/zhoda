@@ -431,7 +431,10 @@ with four mandatory council calls is infeasible: zero hidden calls, not
 evaluator/judge usage. Answer `confidence` is never filled from
 `router_confidence`; missing stays missing and Brier is not invented.
 Fresh replicate namespaces do not reuse prior answers; `--cache-mode replay`
-is a separate exact-cache hypothesis.
+is a separate exact-cache hypothesis. `cache_mode=fresh` **refuses** a
+non-empty arm sqlite at start (`FreshCacheOccupiedError`) unless this is
+a checkpoint resume. `cache_hits>0` with `requests=0` is flagged
+`replayed_without_http` — that is not live spend.
 
 `paths_rejected` on a reached zhoda is `dead_ends`; the report adds
 `avg_dead_ends` and `dead_ends_per_usd`. Headline accuracy counts

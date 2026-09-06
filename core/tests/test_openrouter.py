@@ -179,6 +179,45 @@ async def test_same_cache_key_skips_http() -> None:
     assert calls["n"] == 1
     assert provider.question_report().cache_hits == 1
     assert provider.question_report().requests == 1
+    from zhoda_core.benchmarks.spy import usage_from_report
+
+    usage = usage_from_report(provider.question_report(), role="engine")
+    assert usage["replayed_without_http"] is False
+
+
+@pytest.mark.asyncio
+async def test_preseeded_sqlite_hits_are_replayed_without_http(tmp_path) -> None:
+    """Контрпример live G: cache_hits>0 и requests=0 на «fresh» — replay, не live."""
+    import sqlite3
+
+    from zhoda_core.benchmarks.spy import usage_from_report
+    from zhoda_core.models import CostReport
+    from zhoda_core.providers.openrouter import OpenRouterProvider
+
+    path = tmp_path / "c.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE cache (k TEXT PRIMARY KEY, v TEXT)")
+    conn.execute("INSERT INTO cache (k, v) VALUES ('k1', 'cached')")
+    conn.commit()
+    conn.close()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        raise AssertionError("HTTP must not run for a pre-seeded cache key")
+
+    provider = OpenRouterProvider(api_key="test-key", cache_path=str(path))
+    provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider.begin_question()
+    text = await provider.complete("m:free", "hi", cache_key="k1")
+    assert text == "cached"
+    report = provider.question_report()
+    assert report.requests == 0
+    assert report.cache_hits == 1
+    assert report.usd == 0.0
+    usage = usage_from_report(report, role="engine")
+    assert usage["replayed_without_http"] is True
+    live = usage_from_report(CostReport(requests=32, cache_hits=24, usd=0.01), role="engine")
+    assert live["replayed_without_http"] is False
 
 
 OVER_RESPONSE = {

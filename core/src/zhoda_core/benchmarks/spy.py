@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
+from .cache_guard import replayed_without_http
 from .spec import SpecMismatch
 
 
@@ -165,10 +166,12 @@ def usage_from_report(report: Any, *, role: str) -> dict[str, object]:
     """Engine/evaluator usage из CostReport. unknown usd не притворяется 0 matched."""
     usd = float(getattr(report, "usd", 0.0) or 0.0)
     status = str(getattr(report, "usd_status", "exact") or "exact")
+    requests = int(getattr(report, "requests", 0) or 0)
+    cache_hits = int(getattr(report, "cache_hits", 0) or 0)
     return {
         "role": role,
-        "requests": int(getattr(report, "requests", 0) or 0),
-        "cache_hits": int(getattr(report, "cache_hits", 0) or 0),
+        "requests": requests,
+        "cache_hits": cache_hits,
         "tokens_in": int(getattr(report, "tokens_in", 0) or 0),
         "tokens_out": int(getattr(report, "tokens_out", 0) or 0),
         "usd": usd,
@@ -177,6 +180,7 @@ def usage_from_report(report: Any, *, role: str) -> dict[str, object]:
         "latency_s": float(getattr(report, "latency_s", 0.0) or 0.0),
         "attempts": int(getattr(report, "attempts", 0) or 0),
         "failed": False,
+        "replayed_without_http": replayed_without_http(requests, cache_hits),
     }
 
 
@@ -193,6 +197,7 @@ def combine_usage(records: Sequence[CallRecord], report: Any, *, role: str) -> d
         "latency_s": 0.0,
         "attempts": 0,
         "failed": False,
+        "replayed_without_http": False,
     }
     base["call_count"] = len([c for c in records if c.role == role])
     base["failed"] = any(c.failed for c in records if c.role == role)

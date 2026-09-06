@@ -173,6 +173,7 @@ def build_live_arms(
     spies: dict[str, Any] | None = None,
     expected_models: Sequence[str] | None = None,
     modes: Sequence[str] | None = None,
+    resume: bool = False,
 ) -> dict[str, DeliberationEngine]:
     """Собрать arms. Default = ALL_MODES (без short_review). Pilot передаёт PILOT_ARMS."""
     wanted = tuple(modes) if modes is not None else ALL_MODES
@@ -188,6 +189,8 @@ def build_live_arms(
     judges = cfg["judges"]
     expect = tuple(expected_models) if expected_models is not None else tuple(roster)
 
+    from .cache_guard import ensure_fresh_cache
+
     def provider_for(mode: str) -> Any:
         from .spy import SpyingProvider
 
@@ -196,6 +199,11 @@ def build_live_arms(
             arm_cfg["cache_path"] = arm_cache_path(
                 base_cache, mode, replicate_id=replicate_id, cache_mode=cache_mode,
             )
+        ensure_fresh_cache(
+            str(arm_cfg.get("cache_path") or base_cache),
+            cache_mode=cache_mode,
+            resume=resume,
+        )
         provider = make_provider(arm_cfg)
         spy = (spies or {}).get(mode)
         if spy is not None:

@@ -508,6 +508,7 @@ async def run_live() -> dict[str, Any]:
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    checkpoint = CheckpointStore(CHECKPOINT_PATH)
     arms = _build_arms(
         str(CONFIG_PATH),
         CLARIFY_MODE,
@@ -520,8 +521,8 @@ async def run_live() -> dict[str, Any]:
         cache_mode=spec.cache_mode,
         spies=spies,
         modes=PILOT_ARMS,
+        resume=checkpoint.has_any_terminal(),
     )
-    checkpoint = CheckpointStore(CHECKPOINT_PATH)
     runner = ComparativeRunner(
         arms=arms,
         compare_modes=PILOT_ARMS,

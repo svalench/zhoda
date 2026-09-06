@@ -55,6 +55,15 @@ class CheckpointStore:
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
+    def has_any_terminal(self) -> bool:
+        """Есть ли хотя бы один завершённый attempt — признак resume того же run."""
+        return any(
+            str(row.get("status") or "") in {
+                "ok", "failed", "ungraded", "skipped", "infeasible",
+            }
+            for row in self._rows()
+        )
+
     def has_terminal(self, key: str) -> bool:
         row = self.get(key)
         if row is None:
