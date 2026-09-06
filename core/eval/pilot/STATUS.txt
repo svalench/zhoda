@@ -1,12 +1,14 @@
-P5_STOPPED_PRECONDITIONS
-live=false
+S5_APPLIED
+live=true
 independent_validation=false
-stop_reason=gold_expected_action_unresolved
-n_complete=0
-delta=n/a
-decision_rule=inconclusive
+stop_reason=complete
+n_complete=32
+delta=0.125
+decision_rule=short_review_wins_primary
 product_default=debate
-spend_usd=0.0
-# P1/P2/P3 on main (84ad1fe). Gold expected_action still disputed.
-# P5 did not start. See docs/live-runs/2026-09-06-g-pilot-v2/
-# Prior G artifacts untouched: docs/live-runs/2026-09-06-g-pilot/
+spend_usd=0.3810
+# Source: docs/live-runs/2026-09-06-g-pilot-p5/report.json
+# S4 did not use the template path *-g-pilot-v2-run1.
+# Rule 2 not met (|Δ|=0.125>0.10). Rule 3 Oxford class opt-in: none.
+# Router default unchanged. Not validated.
+# Judge=gold_sidecar_after_attempts; blind_llm_judge=false.

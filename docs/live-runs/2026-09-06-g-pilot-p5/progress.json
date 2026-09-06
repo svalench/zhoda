@@ -1,0 +1,9 @@
+{
+  "status": "stopped",
+  "stop_reason": "complete",
+  "spent_usd": 0.3810067321999999,
+  "n_complete": 32,
+  "delta": 0.125,
+  "verdict": "short_review_wins_primary",
+  "updated_at": "2026-09-06T16:51:25+00:00"
+}
