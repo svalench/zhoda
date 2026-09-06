@@ -1,0 +1,30 @@
+{
+  "schema": "zhoda.eval.preregister.v1",
+  "status": "READY_FOR_APPROVAL",
+  "live": false,
+  "independent_validation": false,
+  "protocol_prereq": "bfd7e90",
+  "f_acceptance": "6486e8e",
+  "source_sha": "bfd7e90b01515ddb09c8d00e60f8f3cf2b300277",
+  "public_hash": "2fb1bc6e7352740b6fa0cf8e1d65e4790d7b4fd3054b99eb83a2bd7bcec0834a",
+  "gold_hash": "499fd0280ac9637dd36615fafec69c7a5c69664bea256de7afc347c6216e71af",
+  "plan_hash": "d85fab9672c233789119428d676f0294cda3831583c76f13a4c61ebdb738fd05",
+  "prompt_hash": "f39cf8ca766392102f8b7d2734426b53d2d78ef004ac37667c19ee1ba70b1cdf",
+  "rubric_hash": "c5fd4ed906459db220859f71eb473347696672b919437b522752ffd02dfec4c6",
+  "dataset_split": "pilot_holdout",
+  "development_split": "decision-51",
+  "n_cases": 36,
+  "arms": [
+    "zhoda",
+    "short_review",
+    "majority"
+  ],
+  "primary_hypothesis": "quality",
+  "primary_metric": "paired_delta_action_correct_short_minus_oxford",
+  "noninferiority_margin": 0.1,
+  "spend_cap_usd": 8.0,
+  "replicates": 1,
+  "cache_mode": "fresh",
+  "failed_ungraded_policy": "keep_in_denominator",
+  "significance_promised": false
+}

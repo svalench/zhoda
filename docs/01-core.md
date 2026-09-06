@@ -447,7 +447,12 @@ the first YAML `judges` entry).
 Each arm gets its own sqlite (`cache-zhoda.db`, `cache-majority.db`, …)
 so vote does not reuse debate completions. `--shared-cache` restores the
 old leak. `--dry-run` writes manifest/results without `.env` or API; that
-offline pass is not independent live accuracy.
+offline pass is not independent live accuracy. Pilot holdout (36 synthetic
+cases, provisional gold sidecar) is preregistered in
+[docs/eval/2026-09-06-preregistration.md](eval/2026-09-06-preregistration.md)
+(`READY_FOR_APPROVAL`; `python -m zhoda_core.eval`). `short_review` is
+force-only ablation, not the product default. Attached sources land in
+`BenchmarkCase.context` (engine `--context`), never in `ground_truth`.
 
 Live numbers: [docs/benchmarks-and-reputation.md](benchmarks-and-reputation.md)
 and `docs/live-runs/`. Retrospective reread of saved XOR-10 / tiny-replay

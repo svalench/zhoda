@@ -9,13 +9,14 @@ from zhoda_core.config import load_council_config, make_engine, make_provider
 from zhoda_core.models import Protocol, Verdict
 
 from .baselines import BestOfNArm, SelfConsistencyArm, SinglePassCouncilArm
-from .datasets import SeedAgent, seed_agents_context, supplied_positions_from_seeds
+from .datasets import SeedAgent, combine_case_context, supplied_positions_from_seeds
 from .runner import (
     ALL_MODES,
     MODE_BEST_OF_N,
     MODE_COUNCIL,
     MODE_MAJORITY,
     MODE_SELF_CONSISTENCY,
+    MODE_SHORT_REVIEW,
     MODE_ZHODA,
     DeliberationEngine,
     EngineOutcome,
@@ -62,7 +63,7 @@ def beneficial_switch_count(
 
 
 class ZhodaArm:
-    """Настоящий движок: debate или vote (majority без раундов)."""
+    """ZhodaEngine: debate, vote, или opt-in short_review."""
 
     def __init__(
         self,
@@ -92,6 +93,7 @@ class ZhodaArm:
         usd_budget: float | None = None,
         token_budget: int | None = None,
         answer_options: Sequence[str] = (),
+        context: str = "",
     ) -> EngineOutcome:
         from .spec import SpecMismatch
 
@@ -115,7 +117,7 @@ class ZhodaArm:
             question,
             force_protocol=self.protocol,
             clarify_mode=self.clarify_mode,
-            context=seed_agents_context(seed_agents),
+            context=combine_case_context(context, seed_agents),
             supplied_positions=forced or None,
         )
         if self.spy is not None:
@@ -170,9 +172,10 @@ def build_live_arms(
     cache_mode: str = "fresh",
     spies: dict[str, Any] | None = None,
     expected_models: Sequence[str] | None = None,
+    modes: Sequence[str] | None = None,
 ) -> dict[str, DeliberationEngine]:
-    """Собрать 5 arms. По умолчанию у каждого свой sqlite-кэш — иначе vote
-    после debate читает чужие позиции. --models override меняет cfg council."""
+    """Собрать arms. Default = ALL_MODES (без short_review). Pilot передаёт PILOT_ARMS."""
+    wanted = tuple(modes) if modes is not None else ALL_MODES
     cfg = dict(load_council_config(config_path))
     if council is not None:
         cfg["council"] = list(council)
@@ -199,34 +202,45 @@ def build_live_arms(
             return SpyingProvider(provider, spy, role="engine")
         return provider
 
-    zhoda_provider = provider_for(MODE_ZHODA)
-    majority_provider = provider_for(MODE_MAJORITY) if isolate_cache else zhoda_provider
-    zhoda_engine = make_engine(
-        cfg, zhoda_provider, transcripts_dir=transcripts, rounds_cap=rounds_cap,
-    )
-    majority_engine = (
-        make_engine(cfg, majority_provider, transcripts_dir=transcripts, rounds_cap=rounds_cap)
-        if isolate_cache
-        else zhoda_engine
-    )
-    council_provider = provider_for(MODE_COUNCIL) if isolate_cache else zhoda_provider
-    sc_provider = provider_for(MODE_SELF_CONSISTENCY) if isolate_cache else zhoda_provider
-    bon_provider = provider_for(MODE_BEST_OF_N) if isolate_cache else zhoda_provider
-    return {
-        MODE_ZHODA: ZhodaArm(
-            zhoda_engine, protocol=Protocol.DEBATE, clarify_mode=clarify_mode,
+    shared_provider: Any = None
+
+    def engine_provider(mode: str) -> Any:
+        nonlocal shared_provider
+        if isolate_cache:
+            return provider_for(mode)
+        if shared_provider is None:
+            shared_provider = provider_for(mode)
+        return shared_provider
+
+    def zhoda_like(mode: str, protocol: Protocol) -> ZhodaArm:
+        prov = engine_provider(mode)
+        eng = make_engine(cfg, prov, transcripts_dir=transcripts, rounds_cap=rounds_cap)
+        return ZhodaArm(
+            eng, protocol=protocol, clarify_mode=clarify_mode,
             expected_models=expect, expected_rounds=rounds_cap,
-            spy=(spies or {}).get(MODE_ZHODA),
-        ),
-        MODE_MAJORITY: ZhodaArm(
-            majority_engine, protocol=Protocol.VOTE, clarify_mode=clarify_mode,
-            expected_models=expect, expected_rounds=rounds_cap,
-            spy=(spies or {}).get(MODE_MAJORITY),
-        ),
-        MODE_COUNCIL: SinglePassCouncilArm(council_provider, chairman=chairman),
-        MODE_SELF_CONSISTENCY: SelfConsistencyArm(sc_provider, judge_model=chairman),
-        MODE_BEST_OF_N: BestOfNArm(bon_provider, judge_model=str(judges[0])),
-    }
+            spy=(spies or {}).get(mode),
+        )
+
+    arms: dict[str, DeliberationEngine] = {}
+    if MODE_ZHODA in wanted:
+        arms[MODE_ZHODA] = zhoda_like(MODE_ZHODA, Protocol.DEBATE)
+    if MODE_MAJORITY in wanted:
+        arms[MODE_MAJORITY] = zhoda_like(MODE_MAJORITY, Protocol.VOTE)
+    if MODE_SHORT_REVIEW in wanted:
+        arms[MODE_SHORT_REVIEW] = zhoda_like(MODE_SHORT_REVIEW, Protocol.SHORT_REVIEW)
+    if MODE_COUNCIL in wanted:
+        arms[MODE_COUNCIL] = SinglePassCouncilArm(
+            engine_provider(MODE_COUNCIL), chairman=chairman,
+        )
+    if MODE_SELF_CONSISTENCY in wanted:
+        arms[MODE_SELF_CONSISTENCY] = SelfConsistencyArm(
+            engine_provider(MODE_SELF_CONSISTENCY), judge_model=chairman,
+        )
+    if MODE_BEST_OF_N in wanted:
+        arms[MODE_BEST_OF_N] = BestOfNArm(
+            engine_provider(MODE_BEST_OF_N), judge_model=str(judges[0]),
+        )
+    return arms
 
 
 def live_cache_paths(base: str | Path) -> dict[str, str]:

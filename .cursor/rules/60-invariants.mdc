@@ -68,6 +68,13 @@ Current mapping (keep updated):
 | short_review is force-only; not a router class; not default debate | tests/test_cli.py::test_cli_protocol_line_is_eval_stable + tests/test_e2e.py::test_router_does_not_select_short_review |
 | short_review is critique+revision, not synthesis; no rebut/switch | tests/test_debate.py::test_short_review_skips_rebuttal_and_switch + tests/test_e2e.py::test_short_review_is_critique_revision_not_synthesis |
 | short_review factual critique without evidence span is discarded | tests/test_debate.py::test_short_critique_requires_evidence_span |
+| Pilot public JSONL has no gold keys; gold sidecar is provisional | tests/test_eval_pilot.py::test_public_jsonl_has_no_gold_keys + test_gold_sidecar_matches_public_ids |
+| Pilot loader source does not import gold; runner cases have empty GT | tests/test_eval_pilot.py::test_pilot_module_source_does_not_import_gold + test_runner_case_has_empty_ground_truth |
+| Pilot ids disjoint from development-51; 30–50 cases, all task classes | tests/test_eval_pilot.py::test_pilot_ids_disjoint_from_development_51 + test_pilot_size_and_classes |
+| Pilot source_bundle.text is BenchmarkCase.context, not ground_truth | tests/test_eval_pilot.py::test_runner_case_has_empty_ground_truth |
+| Offline eval dry-run without .env is READY_FOR_APPROVAL, not live accuracy | tests/test_eval_pilot.py::test_eval_status_and_dry_run_without_env |
+| Pilot CLI defaults to PILOT_ARMS (no council/SC/BoN) | tests/test_eval_pilot.py::test_cli_pilot_suite_defaults_to_pilot_arms |
+| Compare with PILOT_ARMS actually runs short_review (not padable skip) | tests/test_eval_pilot.py::test_compare_pilot_arms_emits_short_review |
 | Successful хроніка: start before route before verdict; extra stages OK | tests/test_transcripts.py::test_successful_run_orders_start_route_verdict |
 | Nearest .env up to git root, no override | tests/test_env.py |
 | Progress callback optional; stages emitted | tests/test_e2e.py::test_progress_emits_protocol_stages |

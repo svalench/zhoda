@@ -72,6 +72,8 @@ class BenchmarkCase:
     answer_options: Tuple[str, ...] = ()
     # Проигравший XOR-вариант: оба хита → dissent/hedge, не зачёт.
     foil_keywords: Tuple[str, ...] = ()
+    # Приложенный source_bundle.text (pilot). Не gold.
+    context: str = ""
 
 
 _SEED_CASES: Tuple[BenchmarkCase, ...] = (
@@ -294,6 +296,18 @@ def seed_agents_context(seed_agents: Sequence[SeedAgent]) -> str:
         return ""
     lines = "\n".join(f"- {a.name}: {a.position}" for a in seed_agents)
     return "Injected majority positions (bandwagon probe):\n" + lines
+
+
+def combine_case_context(source: str, seed_agents: Sequence[SeedAgent] = ()) -> str:
+    """Source bundle + bandwagon probe. Minority seeds не дублируются в prompt."""
+    parts: list[str] = []
+    text = (source or "").strip()
+    if text:
+        parts.append(text)
+    extra = seed_agents_context(seed_agents)
+    if extra:
+        parts.append(extra)
+    return "\n\n".join(parts)
 
 
 def true_minority_seed_agents(

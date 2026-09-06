@@ -15,22 +15,37 @@ import sys
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple
 
-from .datasets import builtin_cases, load_cases
+from .datasets import BenchmarkCase, builtin_cases, load_cases
 from .metrics import summarize_tables
 from .runner import (
     ALL_MODES,
     MATCH_COMPUTE,
     MATCH_COST,
+    MODE_SHORT_REVIEW,
     MODE_ZHODA,
     PADABLE_MODES,
+    PILOT_ARMS,
     CaseResult,
     ComparativeRunner,
     DeliberationEngine,
     results_to_dicts,
 )
 
-_MODE_CHOICES = ("compare", *ALL_MODES)
-_SUITE_CHOICES = ("sycophancy", "minority", "decision", "all")
+ARM_CHOICES: Tuple[str, ...] = (*ALL_MODES, MODE_SHORT_REVIEW)
+_MODE_CHOICES = ("compare", *ARM_CHOICES)
+_SUITE_CHOICES = ("sycophancy", "minority", "decision", "pilot", "all")
+_KIND_CHOICES = (
+    "xor",
+    "biased_premise",
+    "bandwagon",
+    "true_minority",
+    "evidence_required",
+    "premise_pair",
+    "counterfactual",
+    "correct_minority",
+    "legitimate_uncertainty",
+    "adr_plan_review",
+)
 
 
 def _parse_csv(value: str | None, allowed: Sequence[str]) -> Tuple[str, ...]:
@@ -57,6 +72,7 @@ def _build_arms(
     replicate_id: int = 0,
     cache_mode: str = "fresh",
     spies: dict[str, Any] | None = None,
+    modes: Sequence[str] | None = None,
 ) -> dict[str, DeliberationEngine]:
     """Реальный engine; исключения наружу — CLI печатает и выходит 2."""
     from .engine import build_live_arms
@@ -73,6 +89,7 @@ def _build_arms(
         cache_mode=cache_mode,
         spies=spies,
         expected_models=council,
+        modes=modes,
     )
 
 
@@ -92,8 +109,18 @@ def _on_result(result: CaseResult) -> None:
     )
 
 
+def _load_run_cases(args: argparse.Namespace) -> list[BenchmarkCase]:
+    if args.dataset:
+        return load_cases(args.dataset)
+    if args.suite == "pilot":
+        from zhoda_core.eval.pilot import load_public_cases, public_to_benchmark
+
+        return [public_to_benchmark(c) for c in load_public_cases()]
+    return builtin_cases(args.suite)
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
-    cases = load_cases(args.dataset) if args.dataset else builtin_cases(args.suite)
+    cases = _load_run_cases(args)
     if args.kind:
         cases = [c for c in cases if c.kind == args.kind]
     if args.offset:
@@ -111,7 +138,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
 
     try:
-        compare_modes = _parse_csv(args.arms, ALL_MODES)
+        if args.arms:
+            compare_modes = _parse_csv(args.arms, ARM_CHOICES)
+        elif args.suite == "pilot":
+            compare_modes = PILOT_ARMS
+        else:
+            compare_modes = ALL_MODES
     except argparse.ArgumentTypeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -186,6 +218,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 replicate_id=spec.replicate_id,
                 cache_mode=spec.cache_mode,
                 spies=spies,
+                modes=compare_modes,
             )
         except Exception as exc:  # noqa: BLE001 — CLI boundary: YAML/key/config
             print(
@@ -444,13 +477,13 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--kind",
         default=None,
-        choices=["xor", "biased_premise", "bandwagon", "true_minority"],
+        choices=list(_KIND_CHOICES),
         help="filter cases by kind",
     )
     run.add_argument(
         "--arms",
         default=None,
-        help="comma-separated compare arms (default: all five)",
+        help="comma-separated compare arms (default: all five; pilot: zhoda,short_review,majority)",
     )
     run.add_argument(
         "--tables",

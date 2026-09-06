@@ -185,6 +185,7 @@ def test_compare_uses_distinct_arms() -> None:
             usd_budget: float | None = None,
             token_budget: int | None = None,
             answer_options: tuple[str, ...] = (),
+            context: str = "",
         ) -> EngineOutcome:
             self.calls.append({
                 "n_samples": n_samples,
@@ -192,6 +193,7 @@ def test_compare_uses_distinct_arms() -> None:
                 "token_budget": token_budget,
                 "question": question,
                 "answer_options": tuple(answer_options),
+                "context": context,
             })
             req = self.requests if self.name == MODE_ZHODA else (n_samples or 3)
             return EngineOutcome(
@@ -312,6 +314,7 @@ def test_cli_dry_run_still_works(capsys) -> None:
     assert "=== request_matched ===" in out
     assert "=== cost_matched ===" in out
     assert "latency_s is sequential" in out
+    assert "[short_review]" not in out
 
 
 def test_seed_agents_land_in_context() -> None:
@@ -618,8 +621,10 @@ def test_compare_arms_and_tables_slice() -> None:
             usd_budget: float | None = None,
             token_budget: int | None = None,
             answer_options: tuple[str, ...] = (),
+            context: str = "",
         ) -> EngineOutcome:
             self.calls.append({"n_samples": n_samples, "usd_budget": usd_budget})
+            del context
             req = self.requests if self.name == MODE_ZHODA else (n_samples or 3)
             return EngineOutcome(decision=f"{self.name}-ok", requests=req, usd=0.01)
 

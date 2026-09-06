@@ -16,7 +16,7 @@ from zhoda_core.models import CostReport
 from zhoda_core.providers.openrouter import OpenRouterProvider, make_cache_key
 from zhoda_core.stage_dtos import PickBestVote, parse_stage
 
-from .datasets import SeedAgent, seed_agents_context
+from .datasets import SeedAgent, combine_case_context
 from .runner import (
     MAX_COST_CALLS,
     EngineOutcome,
@@ -367,9 +367,10 @@ class SelfConsistencyArm:
         usd_budget: float | None = None,
         token_budget: int | None = None,
         answer_options: Sequence[str] = (),
+        context: str = "",
     ) -> EngineOutcome:
         model = models[0]
-        ctx = seed_agents_context(seed_agents)
+        ctx = combine_case_context(context, seed_agents)
         prompt = _sc_prompt(question, ctx, answer_options)
         discrete = bool(answer_options)
         cost_mode = (usd_budget is not None and usd_budget > 0) or (
@@ -458,6 +459,7 @@ class BestOfNArm:
         usd_budget: float | None = None,
         token_budget: int | None = None,
         answer_options: Sequence[str] = (),
+        context: str = "",
     ) -> EngineOutcome:
         cost_mode = (usd_budget is not None and usd_budget > 0) or (
             token_budget is not None and token_budget > 0
@@ -466,7 +468,7 @@ class BestOfNArm:
         budget = max(n_samples or rounds, 1)
         n = best_of_n_candidates(budget)
         model = models[0]
-        ctx = seed_agents_context(seed_agents)
+        ctx = combine_case_context(context, seed_agents)
         prompt = ANSWER_PROMPT.format(question=question, context=ctx)
         self.provider.begin_question()
         if cost_mode:
@@ -523,6 +525,7 @@ class SinglePassCouncilArm:
         usd_budget: float | None = None,
         token_budget: int | None = None,
         answer_options: Sequence[str] = (),
+        context: str = "",
     ) -> EngineOutcome:
         n = n_samples or (len(models) + 1)
         del rounds, answer_options
@@ -540,7 +543,7 @@ class SinglePassCouncilArm:
                     f"mandatory {mandatory} council calls exceed target {n_samples}"
                 ),
             )
-        ctx = seed_agents_context(seed_agents)
+        ctx = combine_case_context(context, seed_agents)
         prompt = ANSWER_PROMPT.format(question=question, context=ctx)
         self.provider.begin_question()
         answers = await asyncio.gather(

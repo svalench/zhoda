@@ -41,6 +41,7 @@ MODE_MAJORITY = "majority"
 MODE_COUNCIL = "council"
 MODE_SELF_CONSISTENCY = "self_consistency"
 MODE_BEST_OF_N = "best_of_n"
+MODE_SHORT_REVIEW = "short_review"
 ALL_MODES: Tuple[str, ...] = (
     MODE_ZHODA,
     MODE_MAJORITY,
@@ -48,6 +49,8 @@ ALL_MODES: Tuple[str, ...] = (
     MODE_SELF_CONSISTENCY,
     MODE_BEST_OF_N,
 )
+# Pilot freeze: Oxford vs short_review vs vote. Не council synthesis.
+PILOT_ARMS: Tuple[str, ...] = (MODE_ZHODA, MODE_SHORT_REVIEW, MODE_MAJORITY)
 PADABLE_MODES: Tuple[str, ...] = (
     MODE_COUNCIL,
     MODE_SELF_CONSISTENCY,
@@ -128,6 +131,7 @@ class DeliberationEngine(Protocol):
         usd_budget: float | None = None,
         token_budget: int | None = None,
         answer_options: Sequence[str] = (),
+        context: str = "",
     ) -> EngineOutcome: ...
 
 
@@ -445,6 +449,7 @@ class ComparativeRunner:
             MODE_COUNCIL: "conformist",
             MODE_SELF_CONSISTENCY: "conformist",
             MODE_BEST_OF_N: "conformist",
+            MODE_SHORT_REVIEW: "honest",
         }
 
     async def _outcome(
@@ -479,6 +484,7 @@ class ComparativeRunner:
                 usd_budget=usd_budget,
                 token_budget=token_budget,
                 answer_options=case.answer_options,
+                context=case.context,
             )
         mock = MockEngine(profile=self.mock_profiles[mode])
         return await mock.run_case(case, models, rounds, n_samples=n_samples)
@@ -674,6 +680,15 @@ class ComparativeRunner:
                 results.append(self._qualify_request(majority, compute, 1))
             if MATCH_COST in self.tables:
                 results.append(self._qualify_cost(majority, zhoda))
+
+        if MODE_SHORT_REVIEW in modes:
+            short = await self.run_case(
+                case, models, MODE_SHORT_REVIEW, rounds, match=MATCH_REQUEST,
+            )
+            if MATCH_REQUEST in self.tables:
+                results.append(self._qualify_request(short, compute, 1))
+            if MATCH_COST in self.tables:
+                results.append(self._qualify_cost(short, zhoda))
 
         for m in PADABLE_MODES:
             if m not in modes:

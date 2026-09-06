@@ -19,6 +19,7 @@ from .datasets import BenchmarkCase, dump_cases
 
 SPEC_SCHEMA = "zhoda.eval.spec.v1"
 DATASET_SPLIT_DEVELOPMENT = "development"
+DATASET_SPLIT_PILOT = "pilot_holdout"
 RUBRIC_VERSION = "zhoda.eval.quality.v1"
 PROMPT_SET_VERSION = "zhoda.eval.prompts.v1"
 
@@ -277,6 +278,8 @@ def resolve_run_spec(
     )
     prompt_h = hash_prompts()
     rubric_h = hash_rubric()
+    suites = {c.suite for c in cases}
+    split = DATASET_SPLIT_PILOT if suites == {"pilot"} else DATASET_SPLIT_DEVELOPMENT
     return EffectiveRunSpec(
         source_sha=source_sha(source_dir),
         roster=roster,
@@ -290,6 +293,7 @@ def resolve_run_spec(
         config_hash=content_hash(_config_for_hash({**cfg, "council": list(council)})),
         prompt_hash=prompt_h,
         rubric_hash=rubric_h,
+        dataset_split=split,
         replicate_id=replicate_id,
         seed_capabilities=("content_alias_seed", "forced_minority_positions"),
         clarify_mode=clarify_mode,

@@ -137,7 +137,9 @@ Zhoda — open-source система, в которой несколько LLM �
       live accuracy.
 - [ ] Independent validation pending. Новый слепой live-прогон на
       отдельном holdout не делался. ELO из некалиброванной оценки не
-      экспортируем.
+      экспортируем. Preregistration 2026-09-06:
+      [docs/eval/2026-09-06-preregistration.md](eval/2026-09-06-preregistration.md)
+      — статус **READY_FOR_APPROVAL**, без live.
 
 ### Этап 2 — MCP-сервер (после зелёного live)
 - [x] Инструменты clarify/deliberate/verdict/transcript/reputation

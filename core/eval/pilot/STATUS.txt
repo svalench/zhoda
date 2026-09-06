@@ -1,0 +1,4 @@
+READY_FOR_APPROVAL
+live=false
+independent_validation=false
+# No OpenRouter / no sanity live run without owner approval.
