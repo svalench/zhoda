@@ -5,9 +5,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
-from zhoda_core.providers.openrouter import OpenRouterProvider, make_cache_key
+from zhoda_core.providers.openrouter import make_cache_key
 from zhoda_core.stage_dtos import BlindGradeVote, parse_stage
 
 from .datasets import KIND_XOR, BenchmarkCase
@@ -149,11 +149,21 @@ def grade_blind_vote(
 
 
 class BlindLlmJudge:
-    """Один ask_json на decision. Arm name в промпт не попадает."""
+    """Один ask_json на decision. Arm name в промпт не попадает.
 
-    def __init__(self, provider: OpenRouterProvider, model: str) -> None:
+    model identity alone не гарантирует независимость: overlap ролей явный.
+    """
+
+    def __init__(
+        self,
+        provider: Any,
+        model: str,
+        *,
+        overlap_roles: Sequence[str] = (),
+    ) -> None:
         self.provider = provider
         self.model = model
+        self.overlap_roles = tuple(overlap_roles)
 
     async def score(self, case: BenchmarkCase, decision: str) -> GradeResult:
         gold = gold_label(case)

@@ -10,7 +10,8 @@ Suites:
   dissent map naming both options does not count as a pick.
 
 Comparison is five-way: Zhoda debate vs majority (vote, no debate) vs
-single-pass council vs compute-matched self-consistency vs best-of-N.
+single-pass council vs request-matched self-consistency vs best-of-N.
+Request-matched is not compute-matched; infeasible arms stay unmatched.
 """
 
 from .datasets import BenchmarkCase, SeedAgent, builtin_cases, dump_cases, load_cases

@@ -1,6 +1,7 @@
-"""Compute-matched бейзлайны: self-consistency, best-of-N, single-pass council.
+"""Request-matched бейзлайны: self-consistency, best-of-N, single-pass council.
 
 Не ZhodaEngine.debate: отдельные промпты через тот же OpenRouterProvider.
+Request-matched ≠ compute-matched: C=1 при обязательных n+1 вызовах — infeasible.
 """
 
 from __future__ import annotations
@@ -528,6 +529,17 @@ class SinglePassCouncilArm:
         cost_mode = (usd_budget is not None and usd_budget > 0) or (
             token_budget is not None and token_budget > 0
         )
+        mandatory = len(models) + 1
+        if not cost_mode and n_samples is not None and n_samples < mandatory:
+            from .matching import STATUS_INFEASIBLE
+
+            return EngineOutcome(
+                decision="",
+                match_status=STATUS_INFEASIBLE,
+                skip_reason=(
+                    f"mandatory {mandatory} council calls exceed target {n_samples}"
+                ),
+            )
         ctx = seed_agents_context(seed_agents)
         prompt = ANSWER_PROMPT.format(question=question, context=ctx)
         self.provider.begin_question()

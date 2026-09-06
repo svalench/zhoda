@@ -56,18 +56,19 @@ prompt can dwarf a short sample even at the same C.
 
 | Table | Budget | How baselines spend it |
 |---|---|---|
-| `compute_matched` | `C = max(zhoda.requests, 1)` API calls | discrete SC / council: C samples. Open-ended SC and `best_of_n`: `max(C-1, 1)` gens + 1 judge |
-| `cost_matched` | `zhoda.usd` if > 0, else `zhoda.total_tokens` | padable arms sample with a pre-check (next estimated call must not reach the cap; may undershoot). `majority` is a protocol run, not padded |
+| `request_matched` (`--tables request`; `compute` is an alias of the flag, not a compute-time claim) | `C = max(zhoda.requests, 1)` API calls | padable SC / council only if min mandatory calls (`n_models+1` for council) ≤ C. Else `infeasible`, zero hidden calls. Open-ended SC and `best_of_n`: `max(C-1, 1)` gens + 1 judge when feasible |
+| `cost_matched` | `zhoda.usd` if recorded, else tokens | padable arms sample with a pre-check. Tolerance: USD rel 0.15 + abs $0.005; tokens rel 0.15 + abs 50. Unknown USD is unmatched. $0.04 vs $0.10/$0.20 is unmatched |
+| `unmatched` / `infeasible` | — | not copied into matched headlines |
 
-`majority` and `zhoda` appear in both tables with the same spend (not padded).
+Zhoda is the **reference** row. Majority is a protocol run and enters a matched table only after the same request/cost check — it is not copied in by default.
 
 | Mode | What it does |
 |---|---|
 | `zhoda` | `ZhodaEngine` with `force_protocol=debate`, `clarify_mode=no-clarify` |
 | `majority` | `ZhodaEngine` with `force_protocol=vote` (positions + classify, no debate rounds) |
-| `council` | each model answers once; chairman synthesizes (Karpathy-style, no factions). Extra budget → more samples of the first model |
+| `council` | each model answers once; chairman synthesizes (Karpathy-style, no factions). Extra budget → more samples of the first model **only if** the match is feasible |
 | `self_consistency` | JSON `{answer, confidence, reason}`; majority on `answer` (options if set). Open-ended: `max(C-1, 1)` samples + 1 cluster judge when 1 < unique ≤ 24 |
-| `best_of_n` | generations + 1 judge (`max(C-1, 1)+1` in the compute table) |
+| `best_of_n` | generations + 1 judge (`max(C-1, 1)+1` in the request table) |
 
 `--dry-run` uses deterministic mock profiles (no API). Live runs need
 `zhoda.yaml` and `OPENROUTER_API_KEY`; a missing key or YAML is exit 2,
@@ -84,8 +85,8 @@ never a silent mock.
 - **avg_input_tokens / avg_output_tokens / avg_total_tokens / avg_usd /
   avg_cache_hits** — actual spend; compare these in the cost-matched table,
   not request count. Do **not** compare `avg_latency_s` across matching
-  tables: cost-mode sampling is sequential (stop on budget), compute-mode
-  is `asyncio.gather`.
+  tables: cost-mode sampling is sequential (stop on budget), request-mode
+  is `asyncio.gather`. Do not call request-matched "compute-matched".
 - **avg_json_parse_rate** — share of SC samples that parsed as
   `{answer, ...}` JSON (1.0 = all structured). Free models that ignore JSON
   degrade toward full-text voting; this rate flags that.
@@ -95,10 +96,13 @@ never a silent mock.
   honest programmatic proxy.
 - **zhoda_rate** — share of cases with `zhoda_reached`.
 
-`--arms zhoda,majority,council` and `--tables compute` skip SC/BoN and the
-cost-matched table (less spend). Live runs default `--models` to the YAML
-council, not the free-tier CLI default. `--rounds` is the engine
-`rounds_cap` for Zhoda/majority arms.
+`--arms zhoda,majority,council` and `--tables request` (or the `compute`
+alias) skip SC/BoN and the cost-matched table (less spend). Live runs
+default `--models` to the YAML council. `--rounds` is the engine
+`rounds_cap` for Zhoda/majority arms — the same value the spy checks
+against actual calls. Each run writes an `EffectiveRunSpec` manifest
+(content hashes, not labels). 51 builtin cases are **development**.
+Offline `--dry-run` is not independent live accuracy.
 
 `HeuristicJudge` is keyword-blind (it does not see the arm name). It is
 not an LLM judge; a human subsample of live decisions lives in

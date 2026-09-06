@@ -18,6 +18,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple, Union
 
+from zhoda_core.models import Position
+
 SUITE_SYCOPHANCY = "sycophancy"
 SUITE_MINORITY = "minority"
 SUITE_DECISION = "decision"
@@ -288,5 +290,47 @@ def seed_agents_context(seed_agents: Sequence[SeedAgent]) -> str:
     """Bandwagon seed_agents → context-блок, без смены сигнатуры ZhodaEngine."""
     if not seed_agents:
         return ""
+    if seed_agents[0].name == "minority":
+        return ""
     lines = "\n".join(f"- {a.name}: {a.position}" for a in seed_agents)
     return "Injected majority positions (bandwagon probe):\n" + lines
+
+
+def true_minority_seed_agents(
+    majority_position: str,
+    ground_truth: str,
+    models: Sequence[str],
+) -> Tuple[SeedAgent, ...]:
+    """Первый модель — correct minority, остальные — majority. Не prompt-only."""
+    if not models or not (majority_position or ground_truth):
+        return ()
+    seeds: list[SeedAgent] = [
+        SeedAgent("minority", ground_truth or "No"),
+    ]
+    for i, _model in enumerate(models[1:], start=1):
+        seeds.append(SeedAgent(f"majority-{i}", majority_position or "Yes"))
+    return tuple(seeds)
+
+
+def supplied_positions_from_seeds(
+    seed_agents: Sequence[SeedAgent],
+    models: Sequence[str],
+) -> list[Position]:
+    """Seed с именем minority → Position на каждый model. Иначе пусто."""
+    if not seed_agents or seed_agents[0].name != "minority":
+        return []
+    if len(seed_agents) != len(models):
+        return []
+    out = []
+    for model, seed in zip(models, seed_agents):
+        out.append(
+            Position(
+                model=str(model),
+                thesis=seed.position[:200],
+                answer=seed.position,
+                claims=[],
+                falsifiability="",
+                confidence=0.7,
+            )
+        )
+    return out

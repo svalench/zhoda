@@ -389,14 +389,66 @@ otherwise), `router_classifiers` (two distinct), `chairman`, `rounds_cap`,
 ## Benchmarks
 
 `python -m zhoda_core.benchmarks` compares Zhoda debate to vote, a
-single-pass council, self-consistency, and best-of-N. `--suite decision`
-is 51 tasks (XOR architecture, security, ops, plus sycophancy/minority
-seeds). `paths_rejected` on a reached zhoda is `dead_ends`; the report
-adds `avg_dead_ends` and `dead_ends_per_usd`. Headline accuracy is
-keyword-first; `--judge llm` overlays a blind committed-pick judge
-(arm name hidden; dissent map is a miss). Invalid judge JSON
-(`committed: "false"`) is `ungraded`, not a gold hit. Each compare arm gets its
-own sqlite (`cache-zhoda.db`, `cache-majority.db`, …) so vote does
-not reuse debate completions. `--shared-cache` restores the old leak.
+single-pass council, self-consistency, and best-of-N.
+
+`--suite decision` is 51 tasks (XOR architecture, security, ops, plus
+sycophancy/minority seeds). That set is the **development** split: offline
+regression and protocol debugging. It is not an independent validation
+holdout. Historical live numbers are versioned under `docs/live-runs/`
+with their original provenance; this tree does not rewrite them or claim
+they were re-run.
+
+Each compare run resolves one `EffectiveRunSpec` after YAML defaults and
+CLI overrides: source SHA, actual model IDs/roles, protocol, rounds,
+max tokens, budgets, cache mode/namespace, dataset/config/prompt/rubric
+**content hashes**, replicate id, seed capabilities, resource policy.
+Human-readable versions do not replace hashes. An inapplicable override
+(`--models` empty, `rounds < 1`, shared cache + independent replicate)
+is an error, not a silent ignore. Changing dataset, config, prompts, or
+rubric changes `spec_hash` and will not resume an incompatible
+checkpoint (`case × arm × replicate × spec_hash`).
+
+Runtime spies wrap the same provider the engine uses. Declared roster /
+max tokens must match actual `complete`/`ask_json` calls. `--models` and
+`--rounds` are the adapter inputs, not only CLI echo. YAML roster is the
+default when `--models` is omitted. `--rounds` default is YAML
+`rounds_cap`.
+
+Matching tables:
+
+| Table | Meaning |
+|---|---|
+| `request_matched` | same API-call count as Zhoda (`C`). `--tables compute` is an alias of this name, not a compute-time claim |
+| `cost_matched` | USD (rel 0.15 + abs $0.005) or tokens (rel 0.15 + abs 50), with mandatory/tail calls |
+| `unmatched` / `infeasible` | resources did not match, or min council (`n_models + 1`) exceeds the target |
+
+Zhoda is the reference row. Majority is not copied into a matched table
+without a check. Target $0.04 vs spend $0.10 / $0.20 is unmatched. `C=1`
+with four mandatory council calls is infeasible: zero hidden calls, not
+"one request". Engine usage (attempts/roles) is stored separately from
+evaluator/judge usage. Answer `confidence` is never filled from
+`router_confidence`; missing stays missing and Brier is not invented.
+Fresh replicate namespaces do not reuse prior answers; `--cache-mode replay`
+is a separate exact-cache hypothesis.
+
+`paths_rejected` on a reached zhoda is `dead_ends`; the report adds
+`avg_dead_ends` and `dead_ends_per_usd`. Headline accuracy counts
+ungraded/failed/skipped in the denominator (not credited). Quality axes
+are split: `chosen_action` / `action_correct`, `premise_handling`,
+`constraint_violations`, `evidence_support`, `useful_findings`,
+`appropriate_abstention`. Executable graders cover the adversarial
+calibration corpus; the blind LLM judge sees a neutral structure without
+arm branding. Model identity alone is not independence: `judge_overlap`
+lists chairman/council/protocol_judge/classifier when the judge model
+appears there. Chairman is not an implicit independent judge (default is
+the first YAML `judges` entry).
+
+Each arm gets its own sqlite (`cache-zhoda.db`, `cache-majority.db`, …)
+so vote does not reuse debate completions. `--shared-cache` restores the
+old leak. `--dry-run` writes manifest/results without `.env` or API; that
+offline pass is not independent live accuracy.
+
 Live numbers: [docs/benchmarks-and-reputation.md](benchmarks-and-reputation.md)
-and `docs/live-runs/`.
+and `docs/live-runs/`. Retrospective reread of saved XOR-10 / tiny-replay
+outputs (no new LLM calls):
+[docs/live-runs/2026-09-06-xor10-tiny-replay-retrospective.md](live-runs/2026-09-06-xor10-tiny-replay-retrospective.md).

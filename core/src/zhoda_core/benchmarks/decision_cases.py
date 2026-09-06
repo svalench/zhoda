@@ -1,6 +1,7 @@
-"""51 decision-задач: XOR-архитектура, security, ops + seed sycophancy/minority.
+"""51 decision-задач (development split, не independent validation).
 
 Источник для `--suite decision`. JSONL-снимок: `core/eval/bench/decision-50.jsonl`.
+Старые live-цифры не переписываем и не называем новым прогоном.
 """
 
 from __future__ import annotations

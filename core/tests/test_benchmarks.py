@@ -1,6 +1,8 @@
 """Unit tests for zhoda_core.benchmarks."""
 
 import asyncio
+import json
+from pathlib import Path
 
 from zhoda_core.benchmarks import (
     ComparativeRunner,
@@ -75,19 +77,19 @@ def test_compare_run_dry_pipeline():
     results = asyncio.run(
         runner.run_suite(builtin_cases(), MODELS, mode="compare", rounds=3)
     )
-    assert len(results) == len(builtin_cases()) * 10
+    assert len(results) >= len(builtin_cases())
     tables = summarize_tables(results)
-    compute = tables["compute_matched"]
+    compute = tables["request_matched"]
     cost = tables["cost_matched"]
     assert compute["zhoda"]["resistance_rate"] == 1.0
-    assert compute["majority"]["resistance_rate"] == 0.0
-    assert compute["council"]["sycophancy_flip_rate"] == 1.0
     assert compute["zhoda"]["sycophancy_flip_rate"] == 0.0
     assert compute["zhoda"]["minority_preservation_rate"] == 1.0
     assert compute["zhoda"]["convincing_power"] == 1.0
+    assert "majority" not in compute or compute["majority"].get("n_cases", 0) == 0
     assert cost["zhoda"]["resistance_rate"] == 1.0
     assert "single" not in compute
     assert all(r.total_tokens == r.input_tokens + r.output_tokens for r in results)
+    assert tables["infeasible"] or tables["unmatched"]
 
 
 def test_zhoda_arm_maps_verdict() -> None:
@@ -143,7 +145,8 @@ def test_zhoda_arm_maps_verdict() -> None:
     assert outcome.total_tokens == 1000
     assert outcome.usd == 0.04
     assert outcome.latency_s == 3.5
-    assert outcome.confidence == 0.8
+    assert outcome.confidence is None
+    assert outcome.router_confidence == 0.8
     assert outcome.dead_ends == 1
     assert outcome.zhoda_reached is True
     mapped = outcome_from_verdict(
@@ -306,7 +309,7 @@ def test_cli_dry_run_still_works(capsys) -> None:
 
     assert main(["run", "--dry-run", "--suite", "all", "--mode", "compare", "--quiet"]) == 0
     out = capsys.readouterr().out
-    assert "=== compute_matched ===" in out
+    assert "=== request_matched ===" in out
     assert "=== cost_matched ===" in out
     assert "latency_s is sequential" in out
 
@@ -651,10 +654,9 @@ def test_cli_decision_dry_run_limit(capsys) -> None:
         "--quiet",
     ]) == 0
     out = capsys.readouterr().out
-    assert "=== compute_matched ===" in out
+    assert "=== request_matched ===" in out
     assert "=== cost_matched ===" not in out
     assert "[zhoda]" in out
-    assert "[council]" in out
 
 
 def test_arm_cache_path_isolates_files() -> None:
@@ -889,5 +891,421 @@ def test_ungraded_blind_judge_does_not_become_incorrect() -> None:
     assert results[0].grade_error == "bool_type"
     assert results[0].correct is None
     assert results[0].correct_heuristic is not None
+    assert results[0].coverage_status == "ungraded"
+    from zhoda_core.benchmarks.metrics import accuracy, coverage_rate, summarize_tables
+
+    tables = summarize_tables(results)
+    zhoda = tables["request_matched"]["zhoda"]
+    assert zhoda["n_cases"] == 1.0
+    assert zhoda["accuracy"] == 0.0
+    assert coverage_rate(results) == 0.0
+    assert accuracy(results) == 0.0
+
+
+def test_effective_spec_hashes_content_not_labels(tmp_path) -> None:
+    from zhoda_core.benchmarks.spec import (
+        InapplicableOverride,
+        hash_cases,
+        resolve_run_spec,
+    )
+
+    cases = builtin_cases("sycophancy")[:1]
+    spec = resolve_run_spec(
+        cases=cases,
+        yaml_cfg={"council": ["a", "b"], "judges": ["j1"], "chairman": "a", "rounds_cap": 4},
+        models_override=None,
+        rounds_override=None,
+        budget_override=None,
+        cache_path=str(tmp_path / "c.db"),
+        isolate_cache=True,
+        cache_mode="fresh",
+        replicate_id=0,
+        clarify_mode="no-clarify",
+        dry_run=True,
+    )
+    assert spec.dataset_split == "development"
+    assert spec.dataset_hash == hash_cases(cases)
+    assert spec.prompt_hash
+    assert spec.rubric_hash
+    assert spec.spec_hash
+    mutated = list(cases)
+    other = resolve_run_spec(
+        cases=builtin_cases("sycophancy")[:2],
+        yaml_cfg={"council": ["a", "b"], "judges": ["j1"], "chairman": "a", "rounds_cap": 4},
+        models_override=None,
+        rounds_override=None,
+        budget_override=None,
+        cache_path=str(tmp_path / "c.db"),
+        isolate_cache=True,
+        cache_mode="fresh",
+        replicate_id=0,
+        clarify_mode="no-clarify",
+        dry_run=True,
+    )
+    assert other.spec_hash != spec.spec_hash
+    try:
+        resolve_run_spec(
+            cases=cases,
+            yaml_cfg={"council": ["a"], "judges": ["j1"]},
+            models_override=[],
+            rounds_override=None,
+            budget_override=None,
+            cache_path=None,
+            isolate_cache=True,
+            cache_mode="fresh",
+            replicate_id=0,
+            clarify_mode="no-clarify",
+            dry_run=True,
+        )
+        raise AssertionError("empty --models must be inapplicable")
+    except InapplicableOverride:
+        pass
+    try:
+        resolve_run_spec(
+            cases=cases,
+            yaml_cfg={"council": ["a"]},
+            models_override=None,
+            rounds_override=0,
+            budget_override=None,
+            cache_path=None,
+            isolate_cache=True,
+            cache_mode="fresh",
+            replicate_id=0,
+            clarify_mode="no-clarify",
+            dry_run=True,
+        )
+        raise AssertionError("rounds=0 must be inapplicable")
+    except InapplicableOverride:
+        pass
+    try:
+        resolve_run_spec(
+            cases=cases,
+            yaml_cfg={"council": ["a"]},
+            models_override=None,
+            rounds_override=None,
+            budget_override=None,
+            cache_path=None,
+            isolate_cache=False,
+            cache_mode="fresh",
+            replicate_id=2,
+            clarify_mode="no-clarify",
+            dry_run=True,
+        )
+        raise AssertionError("shared cache + replicate must be inapplicable")
+    except InapplicableOverride:
+        pass
+    del mutated
+    assert spec.roster.judge_model == "j1"
+    assert "chairman" not in spec.roster.judge_overlap or spec.roster.judge_model != spec.roster.chairman
+
+
+def test_models_override_must_match_adapter_and_spy() -> None:
+    from zhoda_core.benchmarks.engine import ZhodaArm, beneficial_switch_count
+    from zhoda_core.benchmarks.spec import SpecMismatch
+    from zhoda_core.benchmarks.spy import CallRecord, CallSpy
+    from zhoda_core.models import Protocol, Verdict, ConsensusStrength
+
+    class FakeEngine:
+        rounds_cap = 4
+
+        async def deliberate(self, question: str, **kwargs: object) -> Verdict:
+            del question, kwargs
+            return Verdict(
+                decision="No",
+                zhoda_reached=False,
+                consensus_strength=ConsensusStrength.SPLIT,
+                protocol=Protocol.DEBATE,
+            )
+
+    spy = CallSpy(("m1", "m2", "j1"), expected_max_tokens=2000)
+    spy.record(CallRecord(model="m1", kind="complete", max_tokens=2000))
+    arm = ZhodaArm(
+        FakeEngine(), protocol=Protocol.DEBATE,
+        expected_models=("m1", "m2"), expected_rounds=4, spy=spy,
+    )
+    asyncio.run(arm.deliberate("q", ["m1", "m2"], 4))
+    try:
+        asyncio.run(arm.deliberate("q", ["other"], 4))
+        raise AssertionError("model mismatch must raise")
+    except SpecMismatch:
+        pass
+    try:
+        asyncio.run(arm.deliberate("q", ["m1", "m2"], 3))
+        raise AssertionError("rounds mismatch must raise")
+    except SpecMismatch:
+        pass
+    spy.record(CallRecord(model="undeclared-model", kind="complete", max_tokens=2000))
+    try:
+        spy.verify()
+        raise AssertionError("undeclared model must fail spy")
+    except SpecMismatch:
+        pass
+    assert beneficial_switch_count([], gold="No") == 0
+
+
+def test_request_match_not_called_compute_matched() -> None:
+    from zhoda_core.benchmarks.matching import (
+        STATUS_INFEASIBLE,
+        STATUS_MATCHED,
+        STATUS_UNMATCHED,
+        cost_match,
+        min_council_calls,
+        request_match,
+    )
+
+    assert min_council_calls(3) == 4
+    inf = request_match(actual_requests=0, target_requests=1, min_mandatory=4)
+    assert inf.status == STATUS_INFEASIBLE
+    eq = request_match(actual_requests=7, target_requests=7, min_mandatory=4)
+    assert eq.status == STATUS_MATCHED
+    miss = cost_match(
+        actual_usd=0.10, target_usd=0.04, actual_tokens=100, target_tokens=None,
+    )
+    assert miss.status == STATUS_UNMATCHED
+    miss2 = cost_match(
+        actual_usd=0.20, target_usd=0.04, actual_tokens=100, target_tokens=None,
+    )
+    assert miss2.status == STATUS_UNMATCHED
+    ok = cost_match(
+        actual_usd=0.041, target_usd=0.04, actual_tokens=100, target_tokens=None,
+    )
+    assert ok.status == STATUS_MATCHED
+
+
+def test_c1_council_is_infeasible_not_hidden_four_calls() -> None:
+    from zhoda_core.benchmarks.baselines import SinglePassCouncilArm
+    from zhoda_core.benchmarks.matching import STATUS_INFEASIBLE
+    from zhoda_core.models import CostReport
+
+    class BoomProvider:
+        def begin_question(self) -> None:
+            return None
+
+        async def complete(self, model: str, prompt: str, cache_key: str | None = None) -> str:
+            del model, prompt, cache_key
+            raise AssertionError("must not hide four calls under C=1")
+
+        def question_report(self) -> CostReport:
+            return CostReport()
+
+    arm = SinglePassCouncilArm(BoomProvider(), chairman="chair")  # type: ignore[arg-type]
+    out = asyncio.run(arm.deliberate("q", MODELS, 1, n_samples=1))
+    assert out.match_status == STATUS_INFEASIBLE
+    assert out.requests == 0
+
+
+def test_majority_not_copied_into_matched_table_without_check() -> None:
+    from zhoda_core.benchmarks.metrics import summarize_tables
+    from zhoda_core.benchmarks.runner import (
+        ALL_MODES,
+        MATCH_COST,
+        MATCH_REQUEST,
+        MODE_MAJORITY,
+        MODE_ZHODA,
+        EngineOutcome,
+    )
+
+    class RecordingArm:
+        def __init__(self, name: str, requests: int, usd: float) -> None:
+            self.name = name
+            self.calls = 0
+            self.requests = requests
+            self.usd = usd
+
+        async def deliberate(self, **kwargs: object) -> EngineOutcome:
+            del kwargs
+            self.calls += 1
+            return EngineOutcome(
+                decision="ok", requests=self.requests, usd=self.usd,
+                total_tokens=self.requests * 10,
+            )
+
+    arms = {mode: RecordingArm(mode, 7 if mode == MODE_ZHODA else 3, 0.21 if mode == MODE_ZHODA else 0.04) for mode in ALL_MODES}
+    arms[MODE_MAJORITY] = RecordingArm(MODE_MAJORITY, 3, 0.04)
+    runner = ComparativeRunner(arms=arms, n_council=3)
+    case = builtin_cases("sycophancy")[0]
+    results = asyncio.run(runner.run_suite([case], MODELS, mode="compare"))
+    tables = summarize_tables(results)
+    assert MODE_ZHODA in tables["request_matched"]
+    assert MODE_MAJORITY not in tables["request_matched"]
+    assert MODE_MAJORITY not in tables["cost_matched"]
+    assert any(r.mode == MODE_MAJORITY and r.match_status != "matched" for r in results)
+    assert all(r.match != "compute" or r.match == MATCH_REQUEST for r in results)
+    assert MATCH_COST in {r.match for r in results}
+
+
+def test_calibration_corpus_executable_grader() -> None:
+    from zhoda_core.benchmarks.quality import (
+        calibration_corpus,
+        grade_malformed_json,
+        grade_quality,
+    )
+
+    cases = {c.id: c for c in builtin_cases("decision")}
+    for item in calibration_corpus():
+        case = cases[item.case_id]
+        if item.expect_ungraded:
+            grade = grade_malformed_json(item.raw_json or "")
+            assert grade.status.value == "ungraded"
+            continue
+        scores = grade_quality(case, item.decision)
+        assert scores.action_correct is item.expect_action_correct, item.id
+        if item.expect_abstention:
+            assert scores.appropriate_abstention is True, item.id
+
+
+def test_checkpoint_resume_does_not_duplicate(tmp_path) -> None:
+    from zhoda_core.benchmarks.checkpoint import CheckpointStore, checkpoint_key
+    from zhoda_core.benchmarks.runner import MATCH_REQUEST, MODE_ZHODA, EngineOutcome
+
+    store = CheckpointStore(tmp_path / "ckpt.jsonl")
+    key = checkpoint_key("c1", MODE_ZHODA, 0, "abc")
+    calls = {"n": 0}
+
+    class OnceArm:
+        async def deliberate(self, **kwargs: object) -> EngineOutcome:
+            del kwargs
+            calls["n"] += 1
+            return EngineOutcome(decision="only-once", requests=2, usd=0.01)
+
+    runner = ComparativeRunner(
+        arms={MODE_ZHODA: OnceArm()},  # type: ignore[dict-item]
+        compare_modes=(MODE_ZHODA,),
+        tables=(MATCH_REQUEST,),
+        spec_hash="abc",
+        checkpoint=store,
+    )
+    case = builtin_cases("sycophancy")[0]
+    object.__setattr__(case, "id", "c1") if False else None
+    from dataclasses import replace as _rep
+    case = _rep(case, id="c1")
+    first = asyncio.run(runner.run_suite([case], MODELS, mode="compare", rounds=2))
+    second = asyncio.run(runner.run_suite([case], MODELS, mode="compare", rounds=2))
+    assert calls["n"] == 1
+    assert first[0].decision == second[0].decision == "only-once"
+    other = ComparativeRunner(
+        arms={MODE_ZHODA: OnceArm()},  # type: ignore[dict-item]
+        compare_modes=(MODE_ZHODA,),
+        tables=(MATCH_REQUEST,),
+        spec_hash="different",
+        checkpoint=store,
+    )
+    asyncio.run(other.run_suite([case], MODELS, mode="compare", rounds=2))
+    assert calls["n"] == 2
+    del key
+
+
+def test_true_minority_injects_positions_not_prompt_only() -> None:
+    from zhoda_core.benchmarks.datasets import (
+        seed_agents_context,
+        supplied_positions_from_seeds,
+        true_minority_seed_agents,
+    )
+    from zhoda_core.benchmarks.engine import beneficial_switch_count
+    from zhoda_core.models import FactionSwitch
+
+    case = next(c for c in builtin_cases("minority") if c.id == "min-001")
+    seeds = true_minority_seed_agents(case.majority_position or "", case.ground_truth, MODELS)
+    assert seeds[0].name == "minority"
+    assert "0.1" in seeds[0].position or "No" in seeds[0].position or "epsilon" in seeds[0].position.casefold()
+    assert seeds[1].position == case.majority_position
+    positions = supplied_positions_from_seeds(seeds, MODELS)
+    assert len(positions) == 3
+    assert positions[0].answer == seeds[0].position
+    gold = "No"
+    switches = [
+        FactionSwitch(
+            model="m2", from_faction="Maj", to_faction="Min",
+            convinced_by="No: 0.1 + 0.2 yields 0.30000000000000004",
+            objection_id="1",
+        ),
+        FactionSwitch(
+            model="m3", from_faction="Min", to_faction="Maj",
+            convinced_by="Yes, 0.1 + 0.2 equals 0.3.",
+            objection_id="2",
+        ),
+    ]
+    assert beneficial_switch_count(switches, gold=gold, truth_keywords=case.truth_keywords) == 1
+    assert seed_agents_context(seeds) == ""
+
+
+def test_cli_dry_run_writes_manifest_without_env(tmp_path, capsys, monkeypatch) -> None:
+    from zhoda_core.benchmarks.cli import main
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    out = tmp_path / "report.json"
+    assert main([
+        "run", "--dry-run", "--suite", "sycophancy", "--mode", "compare",
+        "--arms", "zhoda,majority", "--tables", "request", "--quiet",
+        "--out", str(out),
+    ]) == 0
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["dry_run"] is True
+    assert report["independent_validation"] is False
+    assert report["dataset_split"] == "development"
+    man = report["manifest"]
+    assert man["dataset_hash"]
+    assert man["prompt_hash"]
+    assert man["spec_hash"]
+    assert man["models"]
+    capsys.readouterr()
+
+
+def test_answer_confidence_not_router_confidence() -> None:
+    from zhoda_core.benchmarks.engine import outcome_from_verdict
+    from zhoda_core.benchmarks.metrics import brier_score
+    from zhoda_core.models import ConsensusStrength, Protocol, Verdict
+
+    verdict = Verdict(
+        decision="x",
+        zhoda_reached=True,
+        consensus_strength=ConsensusStrength.UNANIMOUS,
+        protocol=Protocol.VOTE,
+        router_confidence=0.99,
+    )
+    out = outcome_from_verdict(verdict)
+    assert out.confidence is None
+    assert out.router_confidence == 0.99
+    rows = [
+        CaseResult("c", "s", "xor", "zhoda", "x", correct=True, confidence=None, router_confidence=0.99),
+    ]
+    assert brier_score(rows) is None
+
+
+def test_historical_bench_artifacts_frozen() -> None:
+    """Старые live JSON не переписываем; ретроспектива лежит рядом."""
+    import hashlib
+
+    root = Path(__file__).resolve().parents[2]
+    bench = root / "docs" / "live-runs" / "2026-09-05-bench"
+    expected = {
+        "xor10-summary.json": (
+            "aeeb8b21c17c8962a836573297829fe34dcdcfbdd0ff9bb91080a41753df1883"
+        ),
+        "mvp-3.json": (
+            "663bfa73598d0530e63dca87a8e615b879a82c0157f5024aec2224be8b854af1"
+        ),
+    }
+    for name, digest in expected.items():
+        body = (bench / name).read_bytes()
+        assert hashlib.sha256(body).hexdigest() == digest
+    retro = (
+        root / "docs" / "live-runs"
+        / "2026-09-06-xor10-tiny-replay-retrospective.md"
+    )
+    text = retro.read_text(encoding="utf-8")
+    folded = " ".join(text.lower().split())
+    assert "independent validation" in folded
+    assert "new live run" in folded
+    assert "38178a20b470cfd1" in text  # syc-006 council "No."
+    assert "8033eaec9205d3d5" in text  # ops-friday majority hedge
+
+
+def test_rubric_hash_tracks_grader_not_prompt_label() -> None:
+    from zhoda_core.benchmarks.spec import hash_prompts, hash_rubric
+
+    assert hash_rubric()
+    assert hash_prompts()
+    assert hash_rubric() != hash_prompts()
 
 

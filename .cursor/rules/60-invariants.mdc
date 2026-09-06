@@ -23,11 +23,22 @@ Current mapping (keep updated):
 | Unknown paid price is not a $0 reservation; underfunded admission is preflight | tests/test_openrouter.py::test_d3_unknown_price_blocks_underfunded_admission + test_d4_paid_unknown_price_zero_reservation_forbidden |
 | Overlapping begin_question is refused; reserved does not go negative | tests/test_openrouter.py::test_d5_overlapping_begin_question_is_refused + test_double_cleanup_does_not_go_negative |
 | Missing usage is unknown/partial, not an exact $0 total; overrun freezes admissions | tests/test_openrouter.py::test_missing_usage_is_unknown_not_exact_zero + test_external_overrun_freezes_admissions_without_clamping |
-| Compute-matched baselines: n_samples == zhoda.requests | tests/test_benchmarks.py::test_compare_uses_distinct_arms |
+| Request-matched baselines: n_samples == zhoda.requests when feasible | tests/test_benchmarks.py::test_compare_uses_distinct_arms + test_compute_matched_n_equals_zhoda_requests |
+| Request-matched is not called compute-matched; $0.04 vs $0.10/$0.20 unmatched | tests/test_benchmarks.py::test_request_match_not_called_compute_matched |
+| C=1 with four mandatory council calls is infeasible, zero hidden calls | tests/test_benchmarks.py::test_c1_council_is_infeasible_not_hidden_four_calls |
+| Majority not copied into a matched table without a resource check | tests/test_benchmarks.py::test_majority_not_copied_into_matched_table_without_check |
 | Cost-matched baselines stop at USD/token budget | tests/test_benchmarks.py::test_cost_matched_stops_at_usd_budget |
 | Open-ended SC is C calls: max(C-1, 1) gens + 1 cluster | tests/test_benchmarks.py::test_open_ended_sc_fits_compute_budget |
 | SC json_parse_rate counts unstructured fallback | tests/test_benchmarks.py::test_non_json_samples_are_reported |
 | CaseResult records tokens/usd/latency/cache_hits | tests/test_benchmarks.py::test_zhoda_arm_maps_verdict |
+| EffectiveRunSpec hashes dataset/config/prompt/rubric content, not labels | tests/test_benchmarks.py::test_effective_spec_hashes_content_not_labels |
+| Explicit --models/--rounds match adapter + spy actual calls | tests/test_benchmarks.py::test_models_override_must_match_adapter_and_spy |
+| Executable grader calibration corpus (No./negated/hedge/malformed/RU) | tests/test_benchmarks.py::test_calibration_corpus_executable_grader |
+| Checkpoint resume keyed by case×arm×replicate×spec_hash; no silent dup | tests/test_benchmarks.py::test_checkpoint_resume_does_not_duplicate |
+| True-minority injects initial positions, not prompt-only seed text | tests/test_benchmarks.py::test_true_minority_injects_positions_not_prompt_only |
+| Offline dry-run writes manifest without .env; not independent validation | tests/test_benchmarks.py::test_cli_dry_run_writes_manifest_without_env |
+| Answer confidence is not router_confidence; missing Brier stays missing | tests/test_benchmarks.py::test_answer_confidence_not_router_confidence |
+| Historical XOR-10 / tiny-replay JSON bytes frozen; retrospective exists | tests/test_benchmarks.py::test_historical_bench_artifacts_frozen |
 | Decision suite 51 unique ids; JSONL matches builtin | tests/test_benchmarks.py::test_decision_suite_integrity + test_committed_decision_jsonl_matches_builtin |
 | XOR foil: dissent map is not a pick | tests/test_benchmarks.py::test_xor_foil_blocks_dissent_map |
 | dead_ends from paths_rejected; dead_ends_per_usd | tests/test_benchmarks.py::test_zhoda_arm_maps_verdict + test_dead_ends_per_usd_metric |

@@ -128,6 +128,16 @@ Zhoda — open-source система, в которой несколько LLM �
       Новый протокол XOR-10 после стражей: **10/10 vs council 10/10**
       (гейт Zhoda ≥ council на committed pick закрыт). syc/min (rest-19):
       13/15 vs 14/15. SC/BoN не гнались.
+      Это датированное измерение 2026-09-05 (тогдашний ярлык
+      «compute-matched», keyword/LLM committed). **Не** переигрывалось
+      в 2026-09-06 и **не** independent validation.
+- [x] Development regression (offline, 2026-09-06): `EffectiveRunSpec` +
+      spies, request/cost matching, checkpoint/resume, quality axes.
+      51 кейс помечен development. Тесты без live API. Dry-run не объявляет
+      live accuracy.
+- [ ] Independent validation pending. Новый слепой live-прогон на
+      отдельном holdout не делался. ELO из некалиброванной оценки не
+      экспортируем.
 
 ### Этап 2 — MCP-сервер (после зелёного live)
 - [x] Инструменты clarify/deliberate/verdict/transcript/reputation
@@ -151,7 +161,7 @@ Zhoda — open-source система, в которой несколько LLM �
 | Срок | Метрика |
 |---|---|
 | 2 недели | Работающий цикл end-to-end на бесплатных моделях |
-| MVP | **Бенчмарк: Zhoda ≥ совета на committed XOR-pick** (labeled majority-at-cap + dissent). XOR-10 после стражей: zhoda **10/10**, majority **9/10**, council **10/10**. Гейт закрыт. `zhoda_rate` дебата **0/10**. |
+| MVP | **Бенчмарк: Zhoda ≥ совета на committed XOR-pick** (labeled majority-at-cap + dissent). XOR-10 после стражей (2026-09-05 journal): zhoda **10/10**, majority **9/10**, council **10/10**. Гейт тогда закрыт как датированное измерение. `zhoda_rate` дебата **0/10**. Independent validation — pending; development regression (offline) — passed 2026-09-06. |
 | 1 месяц | MCP-сервер в реестре, первые 50★ |
 | 2 месяца | Плагин в awesome-dsh-plugin, 300★ |
 | 3 месяца | 1000★, первые донаты, 5 внешних контрибьюторов |

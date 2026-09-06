@@ -13,7 +13,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 from .datasets import builtin_cases, load_cases
 from .metrics import summarize_tables
@@ -27,12 +27,6 @@ from .runner import (
     ComparativeRunner,
     DeliberationEngine,
     results_to_dicts,
-)
-
-DEFAULT_MODELS = (
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "deepseek/deepseek-chat-v3-0324:free",
-    "qwen/qwen3-235b-a22b:free",
 )
 
 _MODE_CHOICES = ("compare", *ALL_MODES)
@@ -59,6 +53,10 @@ def _build_arms(
     cache_path: str | None,
     transcripts_dir: str | None,
     isolate_cache: bool,
+    council: list[str] | None = None,
+    replicate_id: int = 0,
+    cache_mode: str = "fresh",
+    spies: dict[str, Any] | None = None,
 ) -> dict[str, DeliberationEngine]:
     """Реальный engine; исключения наружу — CLI печатает и выходит 2."""
     from .engine import build_live_arms
@@ -70,6 +68,11 @@ def _build_arms(
         cache_path=cache_path,
         transcripts_dir=transcripts_dir,
         isolate_cache=isolate_cache,
+        council=council,
+        replicate_id=replicate_id,
+        cache_mode=cache_mode,
+        spies=spies,
+        expected_models=council,
     )
 
 
@@ -116,28 +119,74 @@ def _cmd_run(args: argparse.Namespace) -> int:
         if MODE_ZHODA not in compare_modes:
             compare_modes = (MODE_ZHODA, *compare_modes)
 
-    if args.tables == "compute":
+    if args.tables == "compute" or args.tables == "request":
         tables: Tuple[str, ...] = (MATCH_COMPUTE,)
     elif args.tables == "cost":
         tables = (MATCH_COST,)
     else:
         tables = (MATCH_COMPUTE, MATCH_COST)
 
-    arms = None
-    council_models: List[str] | None = None
-    if not args.dry_run:
+    yaml_cfg = None
+    cfg_path = Path(args.config)
+    if cfg_path.exists():
         try:
             from zhoda_core.config import load_council_config
 
+            yaml_cfg = load_council_config(args.config)
+        except Exception as exc:  # noqa: BLE001
+            if not args.dry_run:
+                print(f"zhoda-core engine not available: {exc}", file=sys.stderr)
+                return 2
+
+    from .spec import InapplicableOverride, resolve_run_spec
+
+    try:
+        spec = resolve_run_spec(
+            cases=cases,
+            yaml_cfg=yaml_cfg,
+            models_override=models_arg,
+            rounds_override=args.rounds,
+            budget_override=args.budget,
+            cache_path=args.cache_path,
+            isolate_cache=not args.shared_cache,
+            cache_mode=args.cache_mode,
+            replicate_id=args.replicate,
+            clarify_mode=args.clarify,
+            dry_run=args.dry_run,
+            judge_model_override=args.judge_model,
+        )
+    except InapplicableOverride as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    models: List[str] = list(spec.roster.council)
+    spies: dict[str, Any] = {}
+    if not args.dry_run:
+        from .spy import CallSpy
+
+        spies = {
+            mode: CallSpy(
+                spec.roster.allowed_models(),
+                expected_max_tokens=spec.max_tokens,
+            )
+            for mode in compare_modes
+        }
+
+    arms = None
+    if not args.dry_run:
+        try:
             arms = _build_arms(
                 args.config,
                 args.clarify,
-                rounds_cap=args.rounds,
+                rounds_cap=spec.rounds,
                 cache_path=args.cache_path,
                 transcripts_dir=args.transcripts_dir,
                 isolate_cache=not args.shared_cache,
+                council=models,
+                replicate_id=spec.replicate_id,
+                cache_mode=spec.cache_mode,
+                spies=spies,
             )
-            council_models = [str(m) for m in load_council_config(args.config)["council"]]
         except Exception as exc:  # noqa: BLE001 — CLI boundary: YAML/key/config
             print(
                 f"zhoda-core engine not available: {exc}\n"
@@ -146,20 +195,36 @@ def _cmd_run(args: argparse.Namespace) -> int:
             )
             return 2
 
-    models: List[str] = models_arg or council_models or list(DEFAULT_MODELS)
-
     blind_judge = None
     if args.judge == "llm" and not args.dry_run:
         from zhoda_core.config import load_council_config, make_provider
 
         from .engine import arm_cache_path
         from .judge import BlindLlmJudge
+        from .spy import CallSpy, SpyingProvider
 
         cfg = dict(load_council_config(args.config))
         base = args.cache_path or cfg.get("cache_path") or ".zhoda-cache.db"
-        cfg["cache_path"] = arm_cache_path(str(base), "judge")
-        chairman = str(cfg.get("chairman") or cfg["council"][0])
-        blind_judge = BlindLlmJudge(make_provider(cfg), chairman)
+        cfg["cache_path"] = arm_cache_path(
+            str(base), "judge", replicate_id=spec.replicate_id, cache_mode=spec.cache_mode,
+        )
+        judge_model = spec.roster.judge_model
+        if not judge_model:
+            print("no judge model: pass --judge-model or configure judges", file=sys.stderr)
+            return 2
+        judge_spy = CallSpy(spec.roster.allowed_models())
+        spies["judge"] = judge_spy
+        blind_judge = BlindLlmJudge(
+            SpyingProvider(make_provider(cfg), judge_spy, role="evaluator"),
+            judge_model,
+            overlap_roles=spec.roster.judge_overlap,
+        )
+
+    checkpoint = None
+    if args.checkpoint:
+        from .checkpoint import CheckpointStore
+
+        checkpoint = CheckpointStore(Path(args.checkpoint))
 
     runner = ComparativeRunner(
         arms=arms,
@@ -167,33 +232,46 @@ def _cmd_run(args: argparse.Namespace) -> int:
         tables=tables,
         on_result=None if args.quiet else _on_result,
         blind_judge=blind_judge,
+        spec_hash=spec.spec_hash,
+        replicate_id=spec.replicate_id,
+        checkpoint=checkpoint,
+        n_council=len(spec.roster.council),
     )
     results = asyncio.run(
         runner.run_suite(
             cases,
             models,
             mode=args.mode,
-            rounds=args.rounds,
+            rounds=spec.rounds,
             n_samples=args.n_samples,
         )
     )
+    for spy in spies.values():
+        spy.verify()
     tables_out = summarize_tables(results)
 
     report = {
         "suite": args.suite,
         "mode": args.mode,
-        "rounds": args.rounds,
+        "rounds": spec.rounds,
         "models": models,
         "dry_run": args.dry_run,
         "judge": args.judge,
+        "judge_model": spec.roster.judge_model,
+        "judge_overlap": list(spec.roster.judge_overlap),
         "shared_cache": args.shared_cache,
+        "cache_mode": spec.cache_mode,
+        "replicate_id": spec.replicate_id,
         "arms": list(compare_modes),
         "tables_requested": list(tables),
         "n_cases": len(cases),
         "case_ids": [c.id for c in cases],
+        "dataset_split": spec.dataset_split,
+        "manifest": spec.to_manifest(),
         "tables": tables_out,
-        "summary": tables_out.get("compute_matched") or tables_out.get("cost_matched"),
+        "summary": tables_out.get("request_matched") or tables_out.get("cost_matched"),
         "results": results_to_dicts(results),
+        "independent_validation": False,
     }
 
     for label, summary in tables_out.items():
@@ -239,7 +317,12 @@ def _cmd_rescore(args: argparse.Namespace) -> int:
         base = args.cache_path or cfg.get("cache_path") or ".zhoda-cache.db"
         cfg["cache_path"] = arm_cache_path(str(base), "judge")
         chairman = str(cfg.get("chairman") or cfg["council"][0])
-        judge = BlindLlmJudge(make_provider(cfg), chairman)
+        judges = cfg.get("judges") or []
+        judge_model = str(judges[0] if judges else chairman)
+        overlap = []
+        if judge_model == chairman:
+            overlap.append("chairman")
+        judge = BlindLlmJudge(make_provider(cfg), judge_model, overlap_roles=overlap)
     except Exception as exc:  # noqa: BLE001
         print(f"zhoda-core engine not available: {exc}", file=sys.stderr)
         return 2
@@ -272,7 +355,7 @@ def _cmd_rescore(args: argparse.Namespace) -> int:
     ]
     tables_out = summarize_tables(results)
     report["tables"] = tables_out
-    report["summary"] = tables_out.get("compute_matched") or tables_out.get("cost_matched")
+    report["summary"] = tables_out.get("request_matched") or tables_out.get("cost_matched")
     report["judge"] = "llm"
     out = Path(args.out) if args.out else path
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -316,13 +399,44 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--suite", choices=list(_SUITE_CHOICES), default="all")
     run.add_argument("--mode", choices=list(_MODE_CHOICES), default="compare")
     run.add_argument("--models", default=None, help="comma-separated model ids")
-    run.add_argument("--rounds", type=int, default=3)
+    run.add_argument(
+        "--rounds",
+        type=int,
+        default=None,
+        help="rounds_cap override (default: YAML rounds_cap)",
+    )
+    run.add_argument(
+        "--budget",
+        type=float,
+        default=None,
+        help="budget_per_question_usd override",
+    )
+    run.add_argument(
+        "--replicate",
+        type=int,
+        default=0,
+        help="independent replicate id (fresh cache namespace unless --cache-mode replay)",
+    )
+    run.add_argument(
+        "--cache-mode",
+        default="fresh",
+        choices=["fresh", "replay"],
+        dest="cache_mode",
+        help="fresh = isolated replicate; replay = exact-cache hypothesis",
+    )
+    run.add_argument("--checkpoint", default=None, help="JSONL checkpoint path for resume")
+    run.add_argument(
+        "--judge-model",
+        default=None,
+        dest="judge_model",
+        help="blind LLM judge (default: first YAML judge, never implicit chairman)",
+    )
     run.add_argument(
         "--n-samples",
         type=int,
         default=None,
         dest="n_samples",
-        help="compute budget C for an isolated baseline; best_of_n uses max(C-1,1)+1 judge",
+        help="request budget C for an isolated baseline; best_of_n uses max(C-1,1)+1 judge",
     )
     run.add_argument("--dataset", default=None, help="path to JSONL dataset override")
     run.add_argument("--limit", type=int, default=None, help="first N cases after offset")
@@ -341,8 +455,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--tables",
         default="both",
-        choices=["both", "compute", "cost"],
-        help="which matching tables to spend (default both)",
+        choices=["both", "compute", "request", "cost"],
+        help="request-count and/or cost tables (compute is an alias of request)",
     )
     run.add_argument("--dry-run", action="store_true", help="use deterministic mock engine")
     run.add_argument("--config", default="zhoda.yaml", help="council YAML for live arms")

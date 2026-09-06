@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from .runner import CaseResult, MATCH_COMPUTE, MATCH_COST
+from .runner import CaseResult, MATCH_COST, MATCH_REQUEST
 
 
 def _mean(flags: Iterable[Optional[bool]]) -> Optional[float]:
@@ -52,7 +52,19 @@ def brier_score(results: Iterable[CaseResult]) -> Optional[float]:
 
 
 def accuracy(results: Iterable[CaseResult]) -> Optional[float]:
-    return _mean(r.correct for r in results)
+    """Ungraded/failed/skipped остаются в знаменателе и не credited."""
+    rows = list(results)
+    if not rows:
+        return None
+    return sum(1.0 if r.correct is True else 0.0 for r in rows) / len(rows)
+
+
+def coverage_rate(results: Iterable[CaseResult]) -> Optional[float]:
+    rows = list(results)
+    if not rows:
+        return None
+    graded = sum(1 for r in rows if r.coverage_status == "ok" and r.correct is not None)
+    return graded / len(rows)
 
 
 def zhoda_rate(results: Iterable[CaseResult]) -> Optional[float]:
@@ -77,10 +89,12 @@ def summarize(results: Iterable[CaseResult]) -> Dict[str, Dict[str, Optional[flo
     summary: Dict[str, Dict[str, Optional[float]]] = {}
     for mode, subset in sorted(by_mode.items()):
         json_rates = [r.json_parse_rate for r in subset if r.json_parse_rate is not None]
+        confidences = [r.confidence for r in subset if r.confidence is not None]
         summary[mode] = {
             "n_cases": float(len(subset)),
             "accuracy": accuracy(subset),
             "accuracy_heuristic": _mean(r.correct_heuristic for r in subset),
+            "coverage": coverage_rate(subset),
             "zhoda_rate": zhoda_rate(subset),
             "avg_dead_ends": (
                 sum(r.dead_ends for r in subset) / len(subset) if subset else None
@@ -118,6 +132,9 @@ def summarize(results: Iterable[CaseResult]) -> Dict[str, Dict[str, Optional[flo
             "avg_json_parse_rate": (
                 sum(json_rates) / len(json_rates) if json_rates else None
             ),
+            "answer_confidence_present": (
+                float(len(confidences)) / len(subset) if subset else None
+            ),
         }
     return summary
 
@@ -125,11 +142,30 @@ def summarize(results: Iterable[CaseResult]) -> Dict[str, Dict[str, Optional[flo
 def summarize_tables(
     results: Iterable[CaseResult],
 ) -> Dict[str, Dict[str, Dict[str, Optional[float]]]]:
-    """Две независимые таблицы: compute-matched и cost-matched."""
-    by_match: Dict[str, List[CaseResult]] = {MATCH_COMPUTE: [], MATCH_COST: []}
+    """request_matched / cost_matched только при match_status matched|reference."""
+    from .matching import STATUS_MATCHED, STATUS_REFERENCE, STATUS_INFEASIBLE, STATUS_UNMATCHED
+
+    qualified = {STATUS_MATCHED, STATUS_REFERENCE}
+    by: Dict[str, List[CaseResult]] = {
+        MATCH_REQUEST: [],
+        MATCH_COST: [],
+        "unmatched": [],
+        "infeasible": [],
+    }
     for r in results:
-        by_match.setdefault(r.match, []).append(r)
+        if r.match_status == STATUS_INFEASIBLE:
+            by["infeasible"].append(r)
+        elif r.match_status == STATUS_UNMATCHED:
+            by["unmatched"].append(r)
+        elif r.match == MATCH_COST and r.match_status in qualified:
+            by[MATCH_COST].append(r)
+        elif r.match == MATCH_REQUEST and r.match_status in qualified:
+            by[MATCH_REQUEST].append(r)
+        elif not r.match_status:
+            by.setdefault(r.match, []).append(r)
     return {
-        "compute_matched": summarize(by_match.get(MATCH_COMPUTE, [])),
-        "cost_matched": summarize(by_match.get(MATCH_COST, [])),
+        "request_matched": summarize(by.get(MATCH_REQUEST, [])),
+        "cost_matched": summarize(by.get(MATCH_COST, [])),
+        "unmatched": summarize(by.get("unmatched", [])),
+        "infeasible": summarize(by.get("infeasible", [])),
     }

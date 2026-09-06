@@ -38,6 +38,7 @@ from .models import (
     EvidenceBundle,
     ObjectionStatus,
     PremiseRole,
+    Position,
     Protocol,
     ProtocolEvent,
     RunCompleteness,
@@ -152,6 +153,7 @@ class ZhodaEngine:
         on_progress: Callable[[ProgressEvent], None] | None = None,
         context: str = "",
         value_map: ValueMap | None = None,
+        supplied_positions: list[Position] | None = None,
     ) -> Verdict:
         # fresh session state per question (round-8 §1)
         debate = DebateEngine(
@@ -180,6 +182,7 @@ class ZhodaEngine:
                 on_progress=on_progress,
                 context=context,
                 value_map=value_map,
+                supplied_positions=supplied_positions,
             )
         except Exception as exc:
             # Падение до verdict не оставляет пустой jsonl.
@@ -207,6 +210,7 @@ class ZhodaEngine:
         on_progress: Callable[[ProgressEvent], None] | None,
         context: str,
         value_map: ValueMap | None,
+        supplied_positions: list[Position] | None = None,
     ) -> Verdict:
         started = self.provider.begin_question()
         run_ctx = started if isinstance(started, RunContext) else RunContext(run_id="")
@@ -225,6 +229,7 @@ class ZhodaEngine:
                 value_map=value_map,
                 completeness=run_ctx.completeness,
                 run_id=run_ctx.run_id,
+                supplied_positions=supplied_positions,
             )
         finally:
             self.provider.end_question()
@@ -245,6 +250,7 @@ class ZhodaEngine:
         value_map: ValueMap | None,
         completeness: RunCompleteness,
         run_id: str,
+        supplied_positions: list[Position] | None = None,
     ) -> Verdict:
         catalog = option_catalog(question)
         debate.catalog = catalog
@@ -404,16 +410,28 @@ class ZhodaEngine:
         )
         if route.protocol == Protocol.DEBATE and self.devils_advocate:
             completeness.register("opposition", "synthetic")
-        positions = await extract_positions(
-            self.provider,
-            self.council,
-            question,
-            value_map,
-            aliases,
-            context=context,
-            completeness=completeness,
-            evidence=evidence,
-        )
+        if supplied_positions:
+            raw = [p for p in supplied_positions if isinstance(p, Position)]
+            positions = []
+            for i, model in enumerate(self.council):
+                src = raw[i] if i < len(raw) else raw[-1]
+                alias = aliases.get(model, model)
+                positions.append(src.model_copy(update={"model": alias}))
+            for model in self.council:
+                if completeness.get("position", model) is None:
+                    completeness.register("position", model)
+                completeness.succeed("position", model, reason="supplied")
+        else:
+            positions = await extract_positions(
+                self.provider,
+                self.council,
+                question,
+                value_map,
+                aliases,
+                context=context,
+                completeness=completeness,
+                evidence=evidence,
+            )
         evidence_id = evidence.source_id if evidence is not None else None
         positions = [
             stamp_position(
