@@ -83,6 +83,7 @@ Current mapping (keep updated):
 | short_review factual critique without evidence span is discarded | tests/test_debate.py::test_short_critique_requires_evidence_span |
 | Pilot public JSONL has no gold keys; gold sidecar is provisional | tests/test_eval_pilot.py::test_public_jsonl_has_no_gold_keys + test_gold_sidecar_matches_public_ids |
 | A/B gold exact diffs logged; merged draft disputed; gold.jsonl hash frozen | tests/test_gold_disagreement.py |
+| P5 gold gate is expected_action in disputed_fields, not label_status; owner A prefix | tests/test_gold_disagreement.py::test_p5_gate_uses_disputed_fields_not_label_status + test_hol_min_no_prefix_matches_gold_label |
 | Pilot loader source does not import gold; runner cases have empty GT | tests/test_eval_pilot.py::test_pilot_module_source_does_not_import_gold + test_runner_case_has_empty_ground_truth |
 | Pilot ids disjoint from development-51; 30–50 cases, all task classes | tests/test_eval_pilot.py::test_pilot_ids_disjoint_from_development_51 + test_pilot_size_and_classes |
 | Pilot source_bundle.text is BenchmarkCase.context, not ground_truth | tests/test_eval_pilot.py::test_runner_case_has_empty_ground_truth |

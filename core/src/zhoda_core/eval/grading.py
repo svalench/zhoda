@@ -11,7 +11,7 @@ from typing import Any, Mapping, Protocol, Sequence
 
 from pydantic import field_validator
 
-from zhoda_core.benchmarks.judge import pick_matches_gold
+from zhoda_core.benchmarks.judge import map_to_closed_label, pick_matches_gold
 from zhoda_core.benchmarks.quality import (
     decision_abstains,
     extract_chosen_action,
@@ -112,15 +112,8 @@ def closed_labels(gold: GoldRow, options: Sequence[str]) -> tuple[str, ...]:
 
 
 def _map_to_label(expected: str, labels: Sequence[str]) -> str:
-    if not labels:
-        return expected
-    fold = expected.casefold()
-    for opt in labels:
-        if opt.casefold() == fold:
-            return opt
-        if fold.startswith(opt.casefold() + ";"):
-            return opt
-    return expected
+    """Префикс до ';' побеждает полную форму gold в closed labels."""
+    return map_to_closed_label(expected, labels)
 
 
 def _credited(picked: str, gold: GoldRow, labels: Sequence[str]) -> bool:

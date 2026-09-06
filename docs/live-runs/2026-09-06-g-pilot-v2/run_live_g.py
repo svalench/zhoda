@@ -512,6 +512,56 @@ def snapshot_cache_start(out_dir: Path) -> dict[str, Any]:
     }
 
 
+def check_p1_p2_p3_on_tree() -> dict[str, Any]:
+    """Гейт 1: P1/P2/P3 код в дереве. Без git/сети."""
+    grading = CORE_DIR / "src" / "zhoda_core" / "eval" / "grading.py"
+    guard = CORE_DIR / "src" / "zhoda_core" / "benchmarks" / "cache_guard.py"
+    rescore = CORE_DIR / "src" / "zhoda_core" / "eval" / "pilot_rescore.py"
+    ok = (
+        grading.is_file()
+        and 'GRADER_VERSION = "pilot-grader.v2"' in grading.read_text(encoding="utf-8")
+        and guard.is_file()
+        and "class CacheNotFreshError" in guard.read_text(encoding="utf-8")
+        and rescore.is_file()
+    )
+    return {"ok": ok}
+
+
+def check_gold_expected_action_gate() -> dict[str, Any]:
+    """Гейт 2: expected_action в disputed_fields, не label_status==disputed."""
+    from zhoda_core.eval.gold import (
+        DISAGREEMENT_LOG,
+        DISAGREEMENT_STATUS,
+        GOLD_MERGED_DRAFT_JSONL,
+        load_label_rows,
+        p5_expected_action_unresolved,
+    )
+
+    draft = load_label_rows(GOLD_MERGED_DRAFT_JSONL)
+    unresolved = p5_expected_action_unresolved(draft)
+    log = DISAGREEMENT_LOG.read_text(encoding="utf-8")
+    log_ok = DISAGREEMENT_STATUS in log
+    ok = not unresolved and log_ok
+    return {
+        "ok": ok,
+        "unresolved_ids": unresolved,
+        "log_status_ok": log_ok,
+        "stop_reason": "" if ok else "gold_expected_action_unresolved",
+    }
+
+
+def check_preconditions() -> dict[str, Any]:
+    """Предусловия P5. Гейт 2 не смотрит label_status."""
+    g1 = check_p1_p2_p3_on_tree()
+    g2 = check_gold_expected_action_gate()
+    return {
+        "p1_p2_p3_on_main": g1,
+        "gold_expected_action_resolved": g2,
+        "ok": bool(g1["ok"] and g2["ok"]),
+        "stop_reason": g2["stop_reason"] if not g2["ok"] else ("preconditions_failed" if not g1["ok"] else ""),
+    }
+
+
 def self_check(*, out_dir: Path = OUT_DIR, allow_resume: bool = False) -> int:
     from zhoda_core.benchmarks.cache_guard import (
         apply_allow_resume,
@@ -519,6 +569,13 @@ def self_check(*, out_dir: Path = OUT_DIR, allow_resume: bool = False) -> int:
         ensure_resume_checkpoint,
     )
     from zhoda_core.env import load_zhoda_env
+
+    pre = check_preconditions()
+    print(f"gate 1 = {'PASS' if pre['p1_p2_p3_on_main']['ok'] else 'FAIL'}")
+    print(f"gate 2 = {'PASS' if pre['gold_expected_action_resolved']['ok'] else 'FAIL'}")
+    if not pre["ok"]:
+        print(json.dumps(pre, ensure_ascii=False))
+        return 2
 
     load_zhoda_env(REPO_ROOT)
     cache_mode = apply_allow_resume(CACHE_MODE, allow_resume)
@@ -589,6 +646,9 @@ async def run_live(*, allow_resume: bool = False) -> dict[str, Any]:
     from zhoda_core.providers.openrouter import QuotaExceededError
 
     load_zhoda_env(REPO_ROOT)
+    pre = check_preconditions()
+    if not pre["ok"]:
+        raise SystemExit(pre["gold_expected_action_resolved"].get("stop_reason") or "preconditions_failed")
     if not os.environ.get("OPENROUTER_API_KEY"):
         raise SystemExit("missing OPENROUTER_API_KEY")
     freeze_info = verify_freeze()
