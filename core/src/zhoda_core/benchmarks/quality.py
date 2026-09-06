@@ -44,14 +44,53 @@ _NO_RE = re.compile(
 )
 
 
-def recommendation_head(decision: str, *, limit: int = 400) -> str:
-    """Первая рекомендация: до Dissent: или первые 400 символов."""
+_ARM_MARKER_RE = re.compile(
+    r"^Recommended \([^)]*\bmajority at cap\b[^)]*\):\s*",
+    re.IGNORECASE,
+)
+# Только заголовок блока (начало строки). Протокольный текст не меняем.
+_DISSENT_HEADER_RE = re.compile(
+    r"(?:(?<=\n)|^)(?:dissent|minority(?:\s+report)?):\s*",
+    re.IGNORECASE,
+)
+# Карта без labeled rec: «No zhoda (split).» + тезисы Response A/B/C.
+_NO_ZHODA_LEAD_RE = re.compile(
+    r"^no zhoda\b(?:\s*\([^)]*\))?\.?",
+    re.IGNORECASE,
+)
+
+
+def recommendation_head(decision: str, *, limit: int | None = 400) -> str:
+    """Первая рекомендация: до dissent/minority и до карты No zhoda."""
     body = decision or ""
-    idx = body.find("\nDissent:")
-    if idx < 0:
-        idx = body.find("Dissent:")
-    head = body[:idx] if idx >= 0 else body
+    match = _DISSENT_HEADER_RE.search(body)
+    if match:
+        head = body[: match.start()]
+    else:
+        idx = body.casefold().find("dissent:")
+        head = body[:idx] if idx >= 0 else body
+    stripped = head.lstrip()
+    lead = _NO_ZHODA_LEAD_RE.match(stripped)
+    if lead:
+        # Судье — маркер, не тезисы фракций. Протокол не переписываем.
+        head = stripped[: lead.end()]
+    if limit is None:
+        return head
     return head[:limit]
+
+
+def judge_visible_decision(decision: str) -> str:
+    """Судье — head без dissent/minority/No zhoda-карты и без маркера arm."""
+    head = recommendation_head(decision, limit=None)
+    return _ARM_MARKER_RE.sub("", head, count=1).strip()
+
+
+def quote_in_visible(quote: str, visible: str) -> bool:
+    """quote — непустой span видимого decision. Пустая quote — промах."""
+    needle = " ".join((quote or "").casefold().split())
+    if not needle:
+        return False
+    return needle in " ".join((visible or "").casefold().split())
 
 
 def decision_abstains(decision: str) -> bool:
@@ -89,12 +128,13 @@ def extract_chosen_action(decision: str, options: Sequence[str]) -> str | None:
             return folded
         hit = resolve_picked_id("No", options) or resolve_picked_id("Нет", options)
         return hit or folded
+    cropped = recommendation_head(body, limit=None)
     labeled = re.search(
-        r"Recommended \([^)]+\):\s*(.+?)(?:\nDissent:|$)",
-        body,
+        r"Recommended \([^)]+\):\s*(.+)$",
+        cropped,
         re.DOTALL,
     )
-    head = labeled.group(1).strip() if labeled else recommendation_head(body)
+    head = labeled.group(1).strip() if labeled else cropped.strip()
     if options:
         found: list[tuple[int, str]] = []
         low = head.casefold()

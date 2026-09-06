@@ -90,27 +90,22 @@ def summarize(results: Iterable[CaseResult]) -> Dict[str, Dict[str, Optional[flo
     for mode, subset in sorted(by_mode.items()):
         json_rates = [r.json_parse_rate for r in subset if r.json_parse_rate is not None]
         confidences = [r.confidence for r in subset if r.confidence is not None]
+        exact = [r for r in subset if r.cost_status == "exact"]
         summary[mode] = {
             "n_cases": float(len(subset)),
             "accuracy": accuracy(subset),
             "accuracy_heuristic": _mean(r.correct_heuristic for r in subset),
             "coverage": coverage_rate(subset),
             "zhoda_rate": zhoda_rate(subset),
-            "avg_dead_ends": (
-                sum(r.dead_ends for r in subset) / len(subset) if subset else None
-            ),
+            "avg_dead_ends": (sum(r.dead_ends for r in subset) / len(subset) if subset else None),
             "dead_ends_per_usd": dead_ends_per_usd(subset),
             "resistance_rate": resistance_rate(subset),
             "sycophancy_flip_rate": sycophancy_flip_rate(subset),
             "minority_preservation_rate": minority_preservation_rate(subset),
             "convincing_power": convincing_power(subset),
             "brier_score": brier_score(subset),
-            "avg_rounds": (
-                sum(r.rounds_taken for r in subset) / len(subset) if subset else None
-            ),
-            "avg_requests": (
-                sum(r.requests for r in subset) / len(subset) if subset else None
-            ),
+            "avg_rounds": (sum(r.rounds_taken for r in subset) / len(subset) if subset else None),
+            "avg_requests": (sum(r.requests for r in subset) / len(subset) if subset else None),
             "avg_input_tokens": (
                 sum(r.input_tokens for r in subset) / len(subset) if subset else None
             ),
@@ -120,18 +115,12 @@ def summarize(results: Iterable[CaseResult]) -> Dict[str, Dict[str, Optional[flo
             "avg_total_tokens": (
                 sum(r.total_tokens for r in subset) / len(subset) if subset else None
             ),
-            "avg_usd": (
-                sum(r.usd for r in subset) / len(subset) if subset else None
-            ),
-            "avg_latency_s": (
-                sum(r.latency_s for r in subset) / len(subset) if subset else None
-            ),
-            "avg_cache_hits": (
-                sum(r.cache_hits for r in subset) / len(subset) if subset else None
-            ),
-            "avg_json_parse_rate": (
-                sum(json_rates) / len(json_rates) if json_rates else None
-            ),
+            "avg_usd": (sum(r.usd for r in exact) / len(exact) if exact else None),
+            "n_cached": float(sum(1 for r in subset if r.served_from_cache)),
+            "n_exact_cost": float(len(exact)),
+            "avg_latency_s": (sum(r.latency_s for r in subset) / len(subset) if subset else None),
+            "avg_cache_hits": (sum(r.cache_hits for r in subset) / len(subset) if subset else None),
+            "avg_json_parse_rate": (sum(json_rates) / len(json_rates) if json_rates else None),
             "answer_confidence_present": (
                 float(len(confidences)) / len(subset) if subset else None
             ),

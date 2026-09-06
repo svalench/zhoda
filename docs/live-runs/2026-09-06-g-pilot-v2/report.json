@@ -1,0 +1,102 @@
+{
+  "schema": "zhoda.eval.live_g.v2",
+  "live": false,
+  "independent_validation": false,
+  "started_at": null,
+  "stopped_at": "2026-09-06T14:30:47+00:00",
+  "stop_reason": "preconditions_failed",
+  "stop_error": "gold_expected_action_unresolved",
+  "spy_error": "",
+  "execution_sha": "84ad1fe9609eea6fea7cbb4349fc78414cc873c0",
+  "branch": "main",
+  "spend_cap_usd": 2.0,
+  "spend_usd": 0.0,
+  "engine_usd": 0.0,
+  "evaluator_usd": 0.0,
+  "n_cached": 0,
+  "n_complete": 0,
+  "replicates": 2,
+  "arms": ["zhoda", "short_review", "majority"],
+  "cache_mode": "fresh",
+  "clarify_mode": "no-clarify",
+  "freeze_manifest_rewritten": false,
+  "prompt_hash_checked": false,
+  "old_g_pilot_untouched": true,
+  "router_default_changed": false,
+  "preconditions": {
+    "p1_p2_p3_on_main": {
+      "ok": true,
+      "origin_main": "84ad1fe9609eea6fea7cbb4349fc78414cc873c0",
+      "note": "P1/P2 landed by squash 84ad1fe (feature tips 10cb89b/41374ee are not ancestors). P3 commit 402939e is an ancestor.",
+      "p1_pilot_grader_v2": {
+        "ref": "feat/p1-pilot-grader",
+        "sha": "10cb89be9da1621f2f677df17c57dbf2326c4114",
+        "tip_is_ancestor": false,
+        "on_main": true,
+        "evidence": "core/src/zhoda_core/eval/grading.py GRADER_VERSION=pilot-grader.v2; tests/test_pilot_grader.py"
+      },
+      "p2_rescore_v2": {
+        "ref": "feat/p2-rescore-grader-v2",
+        "sha": "41374eed2dd59916a529f2786850b151878401b6",
+        "tip_is_ancestor": false,
+        "on_main": true,
+        "evidence": "eval/rescore.py + eval/pilot_rescore.py + docs/live-runs/2026-09-06-g-rescore-v2/; CLI rescore-report"
+      },
+      "p3_fresh_cache_guard": {
+        "ref": "feat/p3-fresh-cache-guard",
+        "sha": "402939eba23307c60938ee884df0b02887509e08",
+        "tip_is_ancestor": true,
+        "on_main": true,
+        "evidence": "benchmarks/cache_guard.py CacheNotFreshError; tests/test_cache_mode.py"
+      }
+    },
+    "gold_expected_action_resolved": {
+      "ok": false,
+      "disagreement_log_status": "OPEN — awaiting owner resolution",
+      "resolution_cells_empty": true,
+      "expected_action_exact": "30/36 = 0.833",
+      "disputed_expected_action_ids": [
+        "hol-min-001",
+        "hol-min-002",
+        "hol-min-003",
+        "hol-min-004",
+        "hol-min-005",
+        "hol-min-006"
+      ],
+      "merged_draft_label_status_disputed_n": 36,
+      "kappa_p5_gate": "not triggered (abstain κ=1.000)"
+    },
+    "owner_budget_and_launch": {
+      "ok": true,
+      "cap_usd": 2.0,
+      "source": "this request"
+    }
+  },
+  "coverage": {
+    "n_cases_in_suite": 36,
+    "n_cases_touched": 0,
+    "n_complete": 0,
+    "n_attempts": 0,
+    "n_failed_or_ungraded": 0,
+    "ungraded_failed_share": 1.0
+  },
+  "primary": {
+    "n_paired": 0,
+    "delta": null,
+    "mean_usd_short_review": null,
+    "mean_usd_oxford": null,
+    "n_cached_short_review": 0,
+    "n_cached_oxford": 0,
+    "class_delta": {}
+  },
+  "pairs": [],
+  "replicates_detail": [],
+  "pick_stability": [],
+  "debate_worse_than_vote": [],
+  "keyword_vs_llm": [],
+  "decision_rule": {
+    "verdict": "inconclusive",
+    "product_default": "debate",
+    "reason": "rule1: n_complete=0 < 30 or ungraded/failed share 1.000 > 0.20"
+  }
+}

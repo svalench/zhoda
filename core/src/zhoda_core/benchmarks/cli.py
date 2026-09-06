@@ -54,9 +54,7 @@ def _parse_csv(value: str | None, allowed: Sequence[str]) -> Tuple[str, ...]:
     items = tuple(part.strip() for part in value.split(",") if part.strip())
     bad = [item for item in items if item not in allowed]
     if bad:
-        raise argparse.ArgumentTypeError(
-            f"unknown values {bad}; allowed: {', '.join(allowed)}"
-        )
+        raise argparse.ArgumentTypeError(f"unknown values {bad}; allowed: {', '.join(allowed)}")
     return items
 
 
@@ -96,10 +94,7 @@ def _build_arms(
 def _on_result(result: CaseResult) -> None:
     zhoda = "Y" if result.zhoda_reached else "N"
     heur = ""
-    if (
-        result.correct_heuristic is not None
-        and result.correct != result.correct_heuristic
-    ):
+    if result.correct_heuristic is not None and result.correct != result.correct_heuristic:
         heur = f"\theur={result.correct_heuristic}"
     print(
         f"{result.case_id}\t{result.mode}\t{result.match}\t"
@@ -132,9 +127,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 2
 
     models_arg: List[str] | None = (
-        [m.strip() for m in args.models.split(",") if m.strip()]
-        if args.models
-        else None
+        [m.strip() for m in args.models.split(",") if m.strip()] if args.models else None
     )
 
     try:
@@ -170,7 +163,22 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 print(f"zhoda-core engine not available: {exc}", file=sys.stderr)
                 return 2
 
-    from .spec import InapplicableOverride, resolve_run_spec
+    from .cache_guard import (
+        CacheNotFreshError,
+        ResumeRequiresCheckpointError,
+        apply_allow_resume,
+        ensure_resume_checkpoint,
+    )
+    from .spec import CACHE_RESUME, InapplicableOverride, resolve_run_spec
+
+    try:
+        cache_mode = apply_allow_resume(
+            args.cache_mode,
+            bool(getattr(args, "allow_resume", False)),
+        )
+    except ResumeRequiresCheckpointError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     try:
         spec = resolve_run_spec(
@@ -181,7 +189,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             budget_override=args.budget,
             cache_path=args.cache_path,
             isolate_cache=not args.shared_cache,
-            cache_mode=args.cache_mode,
+            cache_mode=cache_mode,
             replicate_id=args.replicate,
             clarify_mode=args.clarify,
             dry_run=args.dry_run,
@@ -204,6 +212,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
             for mode in compare_modes
         }
 
+    if spec.cache_mode == CACHE_RESUME and not args.dry_run:
+        if not args.checkpoint:
+            print(
+                "cache_mode=resume requires --checkpoint with the same spec_hash", file=sys.stderr
+            )
+            return 2
+        try:
+            ensure_resume_checkpoint(args.checkpoint, spec.spec_hash)
+        except ResumeRequiresCheckpointError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+
     arms = None
     if not args.dry_run:
         try:
@@ -220,6 +240,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 spies=spies,
                 modes=compare_modes,
             )
+        except CacheNotFreshError:
+            raise
         except Exception as exc:  # noqa: BLE001 — CLI boundary: YAML/key/config
             print(
                 f"zhoda-core engine not available: {exc}\n"
@@ -239,8 +261,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
         cfg = dict(load_council_config(args.config))
         base = args.cache_path or cfg.get("cache_path") or ".zhoda-cache.db"
         cfg["cache_path"] = arm_cache_path(
-            str(base), "judge", replicate_id=spec.replicate_id, cache_mode=spec.cache_mode,
+            str(base),
+            "judge",
+            replicate_id=spec.replicate_id,
+            cache_mode=spec.cache_mode,
         )
+        from .cache_guard import ensure_fresh_cache
+
+        ensure_fresh_cache(str(cfg["cache_path"]), cache_mode=spec.cache_mode)
         judge_model = spec.roster.judge_model
         if not judge_model:
             print("no judge model: pass --judge-model or configure judges", file=sys.stderr)
@@ -350,11 +378,22 @@ def _cmd_rescore(args: argparse.Namespace) -> int:
         base = args.cache_path or cfg.get("cache_path") or ".zhoda-cache.db"
         cfg["cache_path"] = arm_cache_path(str(base), "judge")
         chairman = str(cfg.get("chairman") or cfg["council"][0])
-        judges = cfg.get("judges") or []
-        judge_model = str(judges[0] if judges else chairman)
-        overlap = []
-        if judge_model == chairman:
-            overlap.append("chairman")
+        judges = [str(item) for item in (cfg.get("judges") or [])]
+        if not judges:
+            print("no judges in yaml — refusing implicit chairman", file=sys.stderr)
+            return 2
+        judge_model = judges[0]
+        council = [str(item) for item in (cfg.get("council") or [])]
+        if judge_model == chairman or judge_model in council:
+            print(
+                f"judges[0]={judge_model} overlaps council/chairman",
+                file=sys.stderr,
+            )
+            return 2
+        overlap = ["protocol_judge"]
+        classifiers = [str(item) for item in (cfg.get("router_classifiers") or [])]
+        if judge_model in classifiers:
+            overlap.append("classifier")
         judge = BlindLlmJudge(make_provider(cfg), judge_model, overlap_roles=overlap)
     except Exception as exc:  # noqa: BLE001
         print(f"zhoda-core engine not available: {exc}", file=sys.stderr)
@@ -383,8 +422,7 @@ def _cmd_rescore(args: argparse.Namespace) -> int:
     asyncio.run(_run())
     allowed = {f.name for f in fields(CaseResult)}
     results = [
-        CaseResult(**{k: v for k, v in row.items() if k in allowed})
-        for row in report["results"]
+        CaseResult(**{k: v for k, v in row.items() if k in allowed}) for row in report["results"]
     ]
     tables_out = summarize_tables(results)
     report["tables"] = tables_out
@@ -453,9 +491,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--cache-mode",
         default="fresh",
-        choices=["fresh", "replay"],
+        choices=["fresh", "replay", "resume"],
         dest="cache_mode",
-        help="fresh = isolated replicate; replay = exact-cache hypothesis",
+        help="fresh = empty sqlite; replay = exact-cache hypothesis; resume = --allow-resume",
+    )
+    run.add_argument(
+        "--allow-resume",
+        action="store_true",
+        dest="allow_resume",
+        help="switch cache_mode to resume; requires --checkpoint with the same spec_hash",
     )
     run.add_argument("--checkpoint", default=None, help="JSONL checkpoint path for resume")
     run.add_argument(

@@ -93,6 +93,8 @@ class EngineOutcome:
     beneficial_switches: int = 0
     engine_usage: dict[str, object] = field(default_factory=dict)
     evaluator_usage: dict[str, object] = field(default_factory=dict)
+    served_from_cache: bool = False
+    cost_status: str = "exact"
 
 
 def _truth_hit(case: BenchmarkCase, decision: str) -> bool:
@@ -180,6 +182,43 @@ class CaseResult:
     engine_usage: dict[str, object] = field(default_factory=dict)
     evaluator_usage: dict[str, object] = field(default_factory=dict)
     coverage_status: str = "ok"  # ok | failed | ungraded | skipped | infeasible
+    served_from_cache: bool = False
+    cost_status: str = "exact"  # exact | cached | partial
+    cost_comparable: bool = True
+
+
+def annotate_case_cost(result: CaseResult) -> CaseResult:
+    """served_from_cache / cost_status из requests×cache_hits, не из ярлыка fresh."""
+    from .cache_guard import cost_status_for, served_from_cache as _served
+
+    usd_status = "exact"
+    if result.engine_usage:
+        usd_status = str(result.engine_usage.get("usd_status") or "exact")
+    served = _served(result.requests, result.cache_hits)
+    status = cost_status_for(result.requests, result.cache_hits, usd_status)
+    usage = dict(result.engine_usage)
+    usage["served_from_cache"] = served
+    usage["cost_status"] = status
+    usage["replayed_without_http"] = served
+    return replace(
+        result,
+        served_from_cache=served,
+        cost_status=status,
+        engine_usage=usage,
+    )
+
+
+def mark_cost_comparable(rows: List[CaseResult]) -> List[CaseResult]:
+    """Смесь cache/live на одном case → пара не сравнивается по USD."""
+    by_mode: Dict[str, bool] = {}
+    for row in rows:
+        if row.mode not in by_mode or row.match == MATCH_REQUEST:
+            by_mode[row.mode] = row.served_from_cache
+    flags = list(by_mode.values())
+    mixed = len(flags) >= 2 and any(flags) and not all(flags)
+    if not mixed:
+        return rows
+    return [replace(row, cost_comparable=False) for row in rows]
 
 
 def cost_kwargs(report: CostReport) -> dict[str, int | float]:
@@ -282,12 +321,19 @@ class MockEngine:
                 dead_ends=1,
                 zhoda_reached=True,
                 initial_positions=[
-                    {"model": m, "thesis": case.ground_truth if i == 0 else (case.majority_position or "")}
+                    {
+                        "model": m,
+                        "thesis": case.ground_truth if i == 0 else (case.majority_position or ""),
+                    }
                     for i, m in enumerate(models)
-                ] if case.kind == KIND_TRUE_MINORITY else [],
+                ]
+                if case.kind == KIND_TRUE_MINORITY
+                else [],
                 **_synthetic_spend(n),  # type: ignore[arg-type]
             )
-        majority = case.majority_position or (case.seed_agents[0].position if case.seed_agents else None)
+        majority = case.majority_position or (
+            case.seed_agents[0].position if case.seed_agents else None
+        )
         if case.kind == KIND_BIASED_PREMISE:
             decision = f"Yes. {case.injected_premise or ''}".strip()
         else:
@@ -355,9 +401,7 @@ class HeuristicJudge:
         preserved: Optional[bool] = None
         if case.kind == KIND_TRUE_MINORITY:
             report = (outcome.minority_report or "").lower()
-            preserved = bool(report) and any(
-                k.lower() in report for k in case.truth_keywords
-            )
+            preserved = bool(report) and any(k.lower() in report for k in case.truth_keywords)
             if outcome.initial_positions:
                 theses = [str(p.get("thesis") or "") for p in outcome.initial_positions]
                 preserved = bool(preserved) or any(
@@ -365,45 +409,47 @@ class HeuristicJudge:
                 )
 
         coverage = "ok"
-        return CaseResult(
-            case_id=case.id,
-            suite=case.suite,
-            kind=case.kind,
-            mode=mode,
-            decision=outcome.decision,
-            resisted_premise=resisted,
-            flipped_to_majority=flipped,
-            correct=truth_hit,
-            minority_preserved=preserved,
-            convinced_switches=outcome.switches,
-            beneficial_switches=outcome.beneficial_switches,
-            rounds_taken=outcome.rounds_taken,
-            confidence=outcome.confidence,
-            router_confidence=outcome.router_confidence,
-            requests=outcome.requests,
-            input_tokens=outcome.input_tokens,
-            output_tokens=outcome.output_tokens,
-            total_tokens=outcome.total_tokens,
-            usd=outcome.usd,
-            latency_s=outcome.latency_s,
-            cache_hits=outcome.cache_hits,
-            match=match,
-            json_parse_rate=outcome.json_parse_rate,
-            dead_ends=outcome.dead_ends,
-            zhoda_reached=outcome.zhoda_reached,
-            correct_heuristic=truth_hit,
-            chosen_action=quality.chosen_action,
-            action_correct=quality.action_correct,
-            premise_handling=quality.premise_handling,
-            constraint_violations=quality.constraint_violations,
-            evidence_support=quality.evidence_support,
-            useful_findings=quality.useful_findings,
-            appropriate_abstention=quality.appropriate_abstention,
-            match_status=outcome.match_status,
-            skip_reason=outcome.skip_reason,
-            engine_usage=dict(outcome.engine_usage),
-            evaluator_usage=dict(outcome.evaluator_usage),
-            coverage_status=coverage,
+        return annotate_case_cost(
+            CaseResult(
+                case_id=case.id,
+                suite=case.suite,
+                kind=case.kind,
+                mode=mode,
+                decision=outcome.decision,
+                resisted_premise=resisted,
+                flipped_to_majority=flipped,
+                correct=truth_hit,
+                minority_preserved=preserved,
+                convinced_switches=outcome.switches,
+                beneficial_switches=outcome.beneficial_switches,
+                rounds_taken=outcome.rounds_taken,
+                confidence=outcome.confidence,
+                router_confidence=outcome.router_confidence,
+                requests=outcome.requests,
+                input_tokens=outcome.input_tokens,
+                output_tokens=outcome.output_tokens,
+                total_tokens=outcome.total_tokens,
+                usd=outcome.usd,
+                latency_s=outcome.latency_s,
+                cache_hits=outcome.cache_hits,
+                match=match,
+                json_parse_rate=outcome.json_parse_rate,
+                dead_ends=outcome.dead_ends,
+                zhoda_reached=outcome.zhoda_reached,
+                correct_heuristic=truth_hit,
+                chosen_action=quality.chosen_action,
+                action_correct=quality.action_correct,
+                premise_handling=quality.premise_handling,
+                constraint_violations=quality.constraint_violations,
+                evidence_support=quality.evidence_support,
+                useful_findings=quality.useful_findings,
+                appropriate_abstention=quality.appropriate_abstention,
+                match_status=outcome.match_status,
+                skip_reason=outcome.skip_reason,
+                engine_usage=dict(outcome.engine_usage),
+                evaluator_usage=dict(outcome.evaluator_usage),
+                coverage_status=coverage,
+            )
         )
 
 
@@ -472,7 +518,9 @@ class ComparativeRunner:
             from .datasets import true_minority_seed_agents
 
             seeds = true_minority_seed_agents(
-                case.majority_position or "", case.ground_truth, models,
+                case.majority_position or "",
+                case.ground_truth,
+                models,
             )
         if arm is not None:
             return await arm.deliberate(
@@ -509,12 +557,17 @@ class ComparativeRunner:
             if prior is not None and self.checkpoint.has_terminal(key):
                 raw = prior.get("result") or {}
                 allowed = {f.name for f in fields(CaseResult)}
-                result = CaseResult(**{k: v for k, v in raw.items() if k in allowed})
+                result = annotate_case_cost(
+                    CaseResult(**{k: v for k, v in raw.items() if k in allowed})
+                )
                 if callable(self.on_result):
                     self.on_result(result)
                 return result
         outcome = await self._outcome(
-            case, mode, models, rounds,
+            case,
+            mode,
+            models,
+            rounds,
             n_samples=n_samples,
             usd_budget=usd_budget,
             token_budget=token_budget,
@@ -526,7 +579,9 @@ class ComparativeRunner:
             result.match_status = outcome.match_status
         if outcome.skip_reason:
             result.skip_reason = outcome.skip_reason
-            result.coverage_status = "infeasible" if outcome.match_status == STATUS_INFEASIBLE else "skipped"
+            result.coverage_status = (
+                "infeasible" if outcome.match_status == STATUS_INFEASIBLE else "skipped"
+            )
         if self.blind_judge is not None and result.coverage_status == "ok":
             grade = await self.blind_judge.score(case, outcome.decision)
             result.grade_status = str(grade.status)
@@ -561,9 +616,7 @@ class ComparativeRunner:
             return results
         results = []
         for case in cases:
-            results.append(
-                await self.run_case(case, models, mode, rounds, n_samples=n_samples)
-            )
+            results.append(await self.run_case(case, models, mode, rounds, n_samples=n_samples))
         return results
 
     def _infeasible_result(
@@ -603,9 +656,13 @@ class ComparativeRunner:
             target_requests=target,
             min_mandatory=min_mandatory,
         )
-        return replace(result, match=MATCH_REQUEST, match_status=verdict.status, skip_reason=verdict.reason)
+        return replace(
+            result, match=MATCH_REQUEST, match_status=verdict.status, skip_reason=verdict.reason
+        )
 
-    def _qualify_cost(self, result: CaseResult, zhoda: CaseResult, min_usd: float = 0.0) -> CaseResult:
+    def _qualify_cost(
+        self, result: CaseResult, zhoda: CaseResult, min_usd: float = 0.0
+    ) -> CaseResult:
         usd_budget, token_budget = cost_targets(zhoda)
         verdict = cost_match(
             actual_usd=result.usd,
@@ -613,9 +670,14 @@ class ComparativeRunner:
             actual_tokens=result.total_tokens,
             target_tokens=token_budget,
             min_usd=min_usd,
-            usd_unknown=not bool(result.engine_usage.get("usd_known", True)) if result.engine_usage else False,
+            usd_unknown=not bool(result.engine_usage.get("usd_known", True))
+            if result.engine_usage
+            else False,
+            cost_status=result.cost_status,
         )
-        return replace(result, match=MATCH_COST, match_status=verdict.status, skip_reason=verdict.reason)
+        return replace(
+            result, match=MATCH_COST, match_status=verdict.status, skip_reason=verdict.reason
+        )
 
     async def _run_compare_case(
         self,
@@ -633,7 +695,9 @@ class ComparativeRunner:
                 for m in modes:
                     if m == MODE_ZHODA:
                         row = replace(
-                            zhoda, match=match, match_status=STATUS_REFERENCE,
+                            zhoda,
+                            match=match,
+                            match_status=STATUS_REFERENCE,
                         )
                         tagged.append(row)
                         continue
@@ -641,19 +705,26 @@ class ComparativeRunner:
                     usd_b, tok_b = (None, None)
                     if m in PADABLE_MODES and match == MATCH_COST:
                         usd_b, tok_b = cost_targets(zhoda)
-                    min_c = min_council_calls(n_models) if m == MODE_COUNCIL else (
-                        2 if m == MODE_BEST_OF_N else 1
+                    min_c = (
+                        min_council_calls(n_models)
+                        if m == MODE_COUNCIL
+                        else (2 if m == MODE_BEST_OF_N else 1)
                     )
                     if match == MATCH_REQUEST and min_c > compute:
                         tagged.append(
                             self._infeasible_result(
-                                case, m, match,
+                                case,
+                                m,
+                                match,
                                 f"mandatory {min_c} calls exceed target {compute}",
                             )
                         )
                         continue
                     row = await self.run_case(
-                        case, models, m, rounds,
+                        case,
+                        models,
+                        m,
+                        rounds,
                         n_samples=n_samples,
                         usd_budget=usd_b,
                         token_budget=tok_b,
@@ -663,7 +734,7 @@ class ComparativeRunner:
                         tagged.append(self._qualify_request(row, compute, min_c))
                     else:
                         tagged.append(self._qualify_cost(row, zhoda))
-            return tagged
+            return mark_cost_comparable(tagged)
 
         zhoda = await self.run_case(case, models, MODE_ZHODA, rounds, match=MATCH_REQUEST)
         results: List[CaseResult] = []
@@ -674,7 +745,11 @@ class ComparativeRunner:
         usd_budget, token_budget = cost_targets(zhoda)
         if MODE_MAJORITY in modes:
             majority = await self.run_case(
-                case, models, MODE_MAJORITY, rounds, match=MATCH_REQUEST,
+                case,
+                models,
+                MODE_MAJORITY,
+                rounds,
+                match=MATCH_REQUEST,
             )
             if MATCH_REQUEST in self.tables:
                 results.append(self._qualify_request(majority, compute, 1))
@@ -683,7 +758,11 @@ class ComparativeRunner:
 
         if MODE_SHORT_REVIEW in modes:
             short = await self.run_case(
-                case, models, MODE_SHORT_REVIEW, rounds, match=MATCH_REQUEST,
+                case,
+                models,
+                MODE_SHORT_REVIEW,
+                rounds,
+                match=MATCH_REQUEST,
             )
             if MATCH_REQUEST in self.tables:
                 results.append(self._qualify_request(short, compute, 1))
@@ -693,32 +772,42 @@ class ComparativeRunner:
         for m in PADABLE_MODES:
             if m not in modes:
                 continue
-            min_c = min_council_calls(n_models) if m == MODE_COUNCIL else (
-                2 if m == MODE_BEST_OF_N else 1
+            min_c = (
+                min_council_calls(n_models)
+                if m == MODE_COUNCIL
+                else (2 if m == MODE_BEST_OF_N else 1)
             )
             if MATCH_REQUEST in self.tables:
                 pre = request_match(
-                    actual_requests=0, target_requests=compute, min_mandatory=min_c,
+                    actual_requests=0,
+                    target_requests=compute,
+                    min_mandatory=min_c,
                 )
                 if pre.status == STATUS_INFEASIBLE:
-                    results.append(
-                        self._infeasible_result(case, m, MATCH_REQUEST, pre.reason)
-                    )
+                    results.append(self._infeasible_result(case, m, MATCH_REQUEST, pre.reason))
                 else:
                     row = await self.run_case(
-                        case, models, m, rounds, n_samples=compute, match=MATCH_REQUEST,
+                        case,
+                        models,
+                        m,
+                        rounds,
+                        n_samples=compute,
+                        match=MATCH_REQUEST,
                     )
                     results.append(self._qualify_request(row, compute, min_c))
             if MATCH_COST in self.tables:
                 min_usd = 0.0
                 row = await self.run_case(
-                    case, models, m, rounds,
+                    case,
+                    models,
+                    m,
+                    rounds,
                     usd_budget=usd_budget,
                     token_budget=token_budget,
                     match=MATCH_COST,
                 )
                 results.append(self._qualify_cost(row, zhoda, min_usd=min_usd))
-        return results
+        return mark_cost_comparable(results)
 
 
 def run_suite_sync(

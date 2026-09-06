@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
+import hashlib
 import json
 import os
 import sys
@@ -94,6 +96,7 @@ async def compare_case_resilient(runner: Any, case: Any, models: list[str], roun
         MODE_SHORT_REVIEW,
         MODE_ZHODA,
         CaseResult,
+        mark_cost_comparable,
     )
     from zhoda_core.providers.openrouter import QuotaExceededError
 
@@ -134,7 +137,7 @@ async def compare_case_resilient(runner: Any, case: Any, models: list[str], roun
         results.append(runner._qualify_request(short, compute, 1))
     else:
         results.append(short)
-    return results
+    return mark_cost_comparable(results)
 
 
 def evaluator_usd(results: list[Any]) -> float:
@@ -262,6 +265,14 @@ def paired_primary(scored: list[dict[str, Any]]) -> dict[str, Any]:
         ox_c = _credit(ox.get("action_correct"))  # type: ignore[arg-type]
         sr_c = _credit(sr.get("action_correct"))  # type: ignore[arg-type]
         kind = str(ox.get("kind") or "")
+        ox_status = str(ox.get("cost_status") or "exact")
+        sr_status = str(sr.get("cost_status") or "exact")
+        mixed = bool(ox.get("served_from_cache")) != bool(sr.get("served_from_cache"))
+        comparable = (
+            bool(ox.get("cost_comparable", True))
+            and bool(sr.get("cost_comparable", True))
+            and not mixed
+        )
         paired.append(
             {
                 "case_id": case_id,
@@ -272,12 +283,19 @@ def paired_primary(scored: list[dict[str, Any]]) -> dict[str, Any]:
                 "oxford_usd": float(ox.get("usd") or 0.0),
                 "short_review_usd": float(sr.get("usd") or 0.0),
                 "majority_usd": float((arms.get("majority") or {}).get("usd") or 0.0),
+                "oxford_cost_status": ox_status,
+                "short_review_cost_status": sr_status,
+                "cost_comparable": comparable,
             }
         )
     n = len(paired)
     delta = sum(p["delta"] for p in paired) / n if n else None
-    mean_sr = sum(p["short_review_usd"] for p in paired) / n if n else None
-    mean_ox = sum(p["oxford_usd"] for p in paired) / n if n else None
+    exact_sr = [p["short_review_usd"] for p in paired if p["short_review_cost_status"] == "exact"]
+    exact_ox = [p["oxford_usd"] for p in paired if p["oxford_cost_status"] == "exact"]
+    mean_sr = sum(exact_sr) / len(exact_sr) if exact_sr else None
+    mean_ox = sum(exact_ox) / len(exact_ox) if exact_ox else None
+    n_cached_sr = sum(1 for p in paired if p["short_review_cost_status"] == "cached")
+    n_cached_ox = sum(1 for p in paired if p["oxford_cost_status"] == "cached")
     by_kind: dict[str, list[float]] = defaultdict(list)
     for row in paired:
         by_kind[row["kind"]].append(row["delta"])
@@ -293,6 +311,8 @@ def paired_primary(scored: list[dict[str, Any]]) -> dict[str, Any]:
         "delta": delta,
         "mean_usd_short_review": mean_sr,
         "mean_usd_oxford": mean_ox,
+        "n_cached_short_review": n_cached_sr,
+        "n_cached_oxford": n_cached_ox,
         "class_delta": class_delta,
         "pairs": paired,
     }
@@ -421,7 +441,30 @@ def write_notes(report: dict[str, Any]) -> None:
         "Do not retune prompts on these holdout outputs.",
         "",
     ]
+    rows = int(report.get("cache_db_rows_at_start") or 0)
+    ckpt = int(report.get("checkpoint_rows_at_start") or 0)
+    if rows > 0 or ckpt > 0:
+        lines.extend(
+            [
+                f"**Warning:** cache_db_rows_at_start={rows}, "
+                f"checkpoint_rows_at_start={ckpt}, "
+                f"resumed_from_checkpoint={report.get('resumed_from_checkpoint')}. "
+                "Mean USD counts only cost_status=exact; n_cached is separate. "
+                "cache_mode=fresh over a non-empty sqlite is forbidden (P3).",
+                "",
+            ]
+        )
     NOTES_PATH.write_text("\n".join(lines), encoding="utf-8")
+
+
+def plan_identity_hash(path: Path) -> str:
+    """Hash плана без поправок после прогона (`## Поправка 1…`)."""
+    text = path.read_text(encoding="utf-8")
+    marker = "\n## Поправка 1"
+    idx = text.find(marker)
+    if idx >= 0:
+        text = text[: idx + 1]
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def verify_freeze() -> dict[str, Any]:
@@ -438,7 +481,7 @@ def verify_freeze() -> dict[str, Any]:
     checks = {
         "public_hash": file_hash(PUBLIC_JSONL) == frozen["public_hash"],
         "gold_hash": file_hash(GOLD_JSONL) == frozen["gold_hash"],
-        "plan_hash": file_hash(PLAN_MD) == frozen["plan_hash"],
+        "plan_hash": plan_identity_hash(PLAN_MD) == frozen["plan_hash"],
         "prompt_hash": hash_prompts() == frozen["prompt_hash"],
         "rubric_hash": hash_rubric() == frozen["rubric_hash"],
     }
@@ -447,22 +490,88 @@ def verify_freeze() -> dict[str, Any]:
     return {"frozen": frozen, "hash_ok": checks}
 
 
-def self_check() -> int:
+def _arm_cache_paths(out_dir: Path) -> dict[str, Path]:
+    from zhoda_core.benchmarks.engine import arm_cache_path
+    from zhoda_core.benchmarks.runner import PILOT_ARMS
+
+    base = out_dir / "cache.db"
+    return {
+        mode: Path(arm_cache_path(base, mode, replicate_id=REPLICATE_ID, cache_mode="fresh"))
+        for mode in PILOT_ARMS
+    }
+
+
+def snapshot_cache_start(out_dir: Path) -> dict[str, Any]:
+    from zhoda_core.benchmarks.cache_guard import jsonl_row_count, sqlite_cache_rows
+
+    by_arm = {mode: sqlite_cache_rows(path) for mode, path in _arm_cache_paths(out_dir).items()}
+    return {
+        "cache_db_rows_by_arm": by_arm,
+        "cache_db_rows_at_start": int(sum(by_arm.values())),
+        "checkpoint_rows_at_start": jsonl_row_count(out_dir / "checkpoint.jsonl"),
+    }
+
+
+def self_check(*, out_dir: Path = OUT_DIR, allow_resume: bool = False) -> int:
+    from zhoda_core.benchmarks.cache_guard import (
+        apply_allow_resume,
+        ensure_fresh_cache,
+        ensure_resume_checkpoint,
+    )
     from zhoda_core.env import load_zhoda_env
 
     load_zhoda_env(REPO_ROOT)
+    cache_mode = apply_allow_resume(CACHE_MODE, allow_resume)
+    snap = snapshot_cache_start(out_dir)
+    if cache_mode == "fresh":
+        for path in _arm_cache_paths(out_dir).values():
+            ensure_fresh_cache(path, cache_mode="fresh")
     if not os.environ.get("OPENROUTER_API_KEY"):
         print("missing OPENROUTER_API_KEY", file=sys.stderr)
         return 2
     if not CONFIG_PATH.exists():
         print(f"missing {CONFIG_PATH}", file=sys.stderr)
         return 2
+    if cache_mode == "resume":
+        from zhoda_core.benchmarks.spec import resolve_run_spec
+        from zhoda_core.config import load_council_config
+        from zhoda_core.eval.pilot import load_public_cases, public_to_benchmark
+
+        yaml_cfg = load_council_config(CONFIG_PATH)
+        cases = [public_to_benchmark(item) for item in load_public_cases()]
+        spec = resolve_run_spec(
+            cases=cases,
+            yaml_cfg=yaml_cfg,
+            models_override=None,
+            rounds_override=None,
+            budget_override=None,
+            cache_path=str(out_dir / "cache.db"),
+            isolate_cache=True,
+            cache_mode=cache_mode,
+            replicate_id=REPLICATE_ID,
+            clarify_mode=CLARIFY_MODE,
+            dry_run=True,
+            source_dir=REPO_ROOT,
+        )
+        ensure_resume_checkpoint(out_dir / "checkpoint.jsonl", spec.spec_hash)
     info = verify_freeze()
-    print(json.dumps({"ok": True, "hash_ok": info["hash_ok"], "has_key": True}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "hash_ok": info["hash_ok"],
+                "has_key": True,
+                "cache_mode": cache_mode,
+                **snap,
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 
-async def run_live() -> dict[str, Any]:
+async def run_live(*, allow_resume: bool = False) -> dict[str, Any]:
+    from zhoda_core.benchmarks.cache_guard import apply_allow_resume, ensure_resume_checkpoint
     from zhoda_core.benchmarks.checkpoint import CheckpointStore
     from zhoda_core.benchmarks.cli import _build_arms
     from zhoda_core.benchmarks.runner import (
@@ -487,6 +596,9 @@ async def run_live() -> dict[str, Any]:
     public_cases = load_public_cases()
     cases = [public_to_benchmark(item) for item in public_cases]
     case_by_id = {c.id: c for c in cases}
+    cache_mode = apply_allow_resume(CACHE_MODE, allow_resume)
+    cache_snap = snapshot_cache_start(OUT_DIR)
+    cache_snap["resumed_from_checkpoint"] = cache_mode == "resume"
     spec = resolve_run_spec(
         cases=cases,
         yaml_cfg=yaml_cfg,
@@ -495,7 +607,7 @@ async def run_live() -> dict[str, Any]:
         budget_override=None,
         cache_path=str(CACHE_PATH),
         isolate_cache=True,
-        cache_mode=CACHE_MODE,
+        cache_mode=cache_mode,
         replicate_id=REPLICATE_ID,
         clarify_mode=CLARIFY_MODE,
         dry_run=False,
@@ -508,6 +620,9 @@ async def run_live() -> dict[str, Any]:
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    if cache_mode == "resume":
+        ensure_resume_checkpoint(CHECKPOINT_PATH, spec.spec_hash)
+    checkpoint = CheckpointStore(CHECKPOINT_PATH)
     arms = _build_arms(
         str(CONFIG_PATH),
         CLARIFY_MODE,
@@ -521,7 +636,6 @@ async def run_live() -> dict[str, Any]:
         spies=spies,
         modes=PILOT_ARMS,
     )
-    checkpoint = CheckpointStore(CHECKPOINT_PATH)
     runner = ComparativeRunner(
         arms=arms,
         compare_modes=PILOT_ARMS,
@@ -611,6 +725,12 @@ async def run_live() -> dict[str, Any]:
     primary = paired_primary(scored)
     rule = decide_rule(primary, cov["n_complete"], cov["ungraded_failed_share"])
     spend = spent_usd(results)
+    from zhoda_core.benchmarks.metrics import summarize
+
+    n_cached_by_arm = {
+        mode: int(metrics.get("n_cached") or 0)
+        for mode, metrics in summarize(unique_arm_rows(results)).items()
+    }
     report = {
         "schema": "zhoda.eval.live_g.v1",
         "live": True,
@@ -628,8 +748,13 @@ async def run_live() -> dict[str, Any]:
         "engine_usd": spend - evaluator_usd(results),
         "evaluator_usd": evaluator_usd(results),
         "clarify_mode": CLARIFY_MODE,
-        "cache_mode": CACHE_MODE,
+        "cache_mode": cache_mode,
         "replicate_id": REPLICATE_ID,
+        "cache_db_rows_at_start": cache_snap["cache_db_rows_at_start"],
+        "cache_db_rows_by_arm": cache_snap["cache_db_rows_by_arm"],
+        "checkpoint_rows_at_start": cache_snap["checkpoint_rows_at_start"],
+        "resumed_from_checkpoint": cache_snap["resumed_from_checkpoint"],
+        "n_cached_by_arm": n_cached_by_arm,
         "arms": list(PILOT_ARMS),
         "tables": ["request"],
         "judge": "gold_sidecar_after_attempts",
@@ -676,13 +801,35 @@ async def run_live() -> dict[str, Any]:
     return report
 
 
+def bind_out_dir(out_dir: Path) -> None:
+    """Перенаправить артефакты live G (self-check / пустая копия OUT_DIR)."""
+    global OUT_DIR, PROGRESS_PATH, HEARTBEAT_PATH, CHECKPOINT_PATH
+    global REPORT_PATH, NOTES_PATH, LOCK_PATH, CACHE_PATH, TRANSCRIPTS_DIR
+    OUT_DIR = out_dir
+    PROGRESS_PATH = OUT_DIR / "progress.json"
+    HEARTBEAT_PATH = OUT_DIR / "heartbeat.log"
+    CHECKPOINT_PATH = OUT_DIR / "checkpoint.jsonl"
+    REPORT_PATH = OUT_DIR / "report.json"
+    NOTES_PATH = OUT_DIR / "NOTES.md"
+    LOCK_PATH = OUT_DIR / "live_g.lock"
+    CACHE_PATH = OUT_DIR / "cache.db"
+    TRANSCRIPTS_DIR = OUT_DIR / "transcripts"
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    if args == ["--self-check"]:
-        return self_check()
+    parser = argparse.ArgumentParser(description="Live G pilot driver")
+    parser.add_argument("--self-check", action="store_true")
+    parser.add_argument("--allow-resume", action="store_true")
+    parser.add_argument("--out-dir", default=None)
+    args = parser.parse_args(argv)
+    out_dir = Path(args.out_dir).resolve() if args.out_dir else OUT_DIR
+    if args.self_check:
+        return self_check(out_dir=out_dir, allow_resume=args.allow_resume)
+    if args.out_dir:
+        bind_out_dir(out_dir)
     _acquire_lock()
     try:
-        asyncio.run(run_live())
+        asyncio.run(run_live(allow_resume=args.allow_resume))
     finally:
         _release_lock()
     return 0

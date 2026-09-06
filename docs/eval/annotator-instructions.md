@@ -9,11 +9,15 @@ They were drafted by someone who (1) implemented protocol/eval code and
 That is **not** independent expert annotation. Do not cite these labels
 as a human expert panel.
 
-Until a second annotator finishes the set:
+Second annotator file: `core/eval/pilot/gold-annotator-b.jsonl`
+(`llm-independent:cursor-grok-4.6`). Owner resolution is **empty**.
 
-- `label_status` stays `provisional`
-- `annotator` stays `protocol-author-not-independent`
-- disagreement log remains **not started** (template only)
+Until the owner fills `docs/eval/disagreement-log.md`:
+
+- `core/eval/pilot/gold.jsonl` stays `provisional` /
+  `protocol-author-not-independent` (do not rewrite it in place)
+- `gold-merged-draft.jsonl` marks exact A/B field diffs as `disputed`
+- disagreement log is **OPEN**, not adjudicated
 
 ## How to label (second annotator)
 
@@ -41,28 +45,21 @@ If the source is too thin to decide, set `abstain_policy=required` and
 
 1. **LLM-судья** (YAML `judges[0]`, не chairman и не член совета). В
    промпт попадают `question`, `source_bundle.text` и закрытый список
-   labels: gold + `allowed_alternatives` + `answer_options` + `ABSTAIN`.
-   Имя arm и префикс `Recommended (majority at cap…)` в промпт не
-   кладутся. Ответ строго
-   `{"picked_id": <label>, "committed": bool, "quote": "≤200"}`.
-   `"committed": "false"` строкой и `picked_id` вне labels →
-   `grade_status=ungraded`, не incorrect.
-2. **Зачёт.** `action_correct = committed and picked_id ∈ {gold,
-   alternatives}`. Если `abstain_policy=required`, то
-   `action_correct = (picked_id == "ABSTAIN")`. Если `forbidden` и
-   pick = `ABSTAIN` → `action_correct=false`,
-   `appropriate_abstention=false`.
-3. **Heuristic** (`action_correct_heuristic`) — старый keyword-путь
-   `extract_chosen_action` + exact label. Парафраз («index should be
-   retained» vs gold `Keep the index`) остаётся False: это дефект
-   инструмента v1, не miss модели. Расхождения heuristic≠llm пишутся
-   отдельным списком.
-4. **Abstain regex** ищет только в первой рекомендации (до `Dissent:`
-   или первые 400 символов). «insufficient information»,
-   «cannot confirm or deny», «невозможно определить» — abstain;
-   «insufficient index coverage is not the issue» — нет.
+   labels. Имя arm и `Recommended (majority at cap…)` в промпт не
+   кладутся: `dissent:` / `minority:` / `minority report:` (любой регистр)
+   и карта `No zhoda (split|deadlock|…)` срезаются (`judge_visible_decision`);
+   судье остаётся маркер, не тезисы Response A/B/C. `quote` должен быть
+   непустой span этого head, иначе `ungraded`. `"committed": "false"`
+   строкой и `picked_id` вне labels →
+   `grade_status=ungraded`, не incorrect. YAML `judges[0]` не chairman и
+   не член совета.
+2. **Зачёт.** Если `abstain_policy=required`, `action_correct` при
+   `picked_id == "ABSTAIN"` **или** золотой abstain-метке.
+3. **Heuristic** — keyword-путь; парафраз без exact label остаётся False.
+4. **Abstain regex** только до `dissent:` / `minority:` / маркера `No zhoda`. «insufficient information» —
+   abstain; «insufficient index coverage is not the issue» — нет.
 
-Usage судьи — `evaluator_usage`, не `engine_usage`.
+Mean USD в таблицах — только `cost_status=exact`; `n_cached` отдельно.
 
 Synthetic sources only. If a future source has personal data, **do not**
 send it to an external provider without written permission.

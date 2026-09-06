@@ -1075,6 +1075,11 @@ def test_request_match_not_called_compute_matched() -> None:
         actual_usd=0.041, target_usd=0.04, actual_tokens=100, target_tokens=None,
     )
     assert ok.status == STATUS_MATCHED
+    cached = cost_match(
+        actual_usd=0.0, target_usd=0.04, actual_tokens=0, target_tokens=None,
+        cost_status="cached",
+    )
+    assert cached.status == STATUS_UNMATCHED
 
 
 def test_c1_council_is_infeasible_not_hidden_four_calls() -> None:

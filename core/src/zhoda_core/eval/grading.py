@@ -12,7 +12,12 @@ from typing import Any, Mapping, Protocol, Sequence
 from pydantic import field_validator
 
 from zhoda_core.benchmarks.judge import pick_matches_gold
-from zhoda_core.benchmarks.quality import decision_abstains, extract_chosen_action
+from zhoda_core.benchmarks.quality import (
+    decision_abstains,
+    extract_chosen_action,
+    judge_visible_decision,
+    quote_in_visible,
+)
 from zhoda_core.benchmarks.spy import usage_from_report
 from zhoda_core.eval.gold import GoldRow
 from zhoda_core.eval.pilot import PublicCase
@@ -54,7 +59,9 @@ System answer (the producing system is hidden):
 Rules:
 - picked_id MUST be exactly one closed label.
 - committed=true only if the answer commits to that label as the action.
-- If the answer abstains or treats the source as insufficient to decide, picked_id=ABSTAIN.
+- The system answer is the recommendation only; dissent is already removed.
+- If the answer abstains or treats the source as insufficient to decide,
+  picked_id=ABSTAIN or the closed abstain label.
 - quote: at most 200 characters copied from the system answer that justify the pick.
 - Do not invent a label. Do not name the producing system.
 
@@ -126,6 +133,25 @@ def _credited(picked: str, gold: GoldRow, labels: Sequence[str]) -> bool:
     return False
 
 
+def _is_abstain_label(text: str) -> bool:
+    folded = (text or "").strip().casefold()
+    return folded == ABSTAIN_ID.casefold() or folded.startswith("abstain")
+
+
+def _is_abstain_pick(picked: str, gold: GoldRow, labels: Sequence[str]) -> bool:
+    """ABSTAIN или золотая/альтернативная метка-abstain (required gold)."""
+    if picked == ABSTAIN_ID or _is_abstain_label(picked):
+        return True
+    gold_id = _map_to_label(gold.expected_action, labels)
+    if gold.abstain_policy == "required" and pick_matches_gold(picked, gold_id, labels):
+        return True
+    for alt in gold.allowed_alternatives:
+        mapped = _map_to_label(alt, labels)
+        if _is_abstain_label(mapped) and pick_matches_gold(picked, mapped, labels):
+            return True
+    return False
+
+
 def _appropriate(policy: str, abstain: bool, failed: bool) -> bool | None:
     if failed:
         return False
@@ -190,7 +216,7 @@ def _vote_cls(labels: tuple[str, ...]) -> type[ActionGradeVote]:
 def _credit_llm(
     gold: GoldRow, picked: str, committed: bool, labels: Sequence[str]
 ) -> tuple[bool, bool, bool | None]:
-    abstain = picked == ABSTAIN_ID
+    abstain = _is_abstain_pick(picked, gold, labels)
     if gold.abstain_policy == "required":
         return abstain, abstain, _appropriate(gold.abstain_policy, abstain, False)
     if abstain:
@@ -258,11 +284,12 @@ async def score_action_llm(
             evaluator_usage={},
         )
     labels = closed_labels(gold, case_public.answer_options)
+    visible = judge_visible_decision(decision)
     prompt = ACTION_GRADE_PROMPT.format(
         question=case_public.question,
         source=str(case_public.source_bundle.get("text") or ""),
         labels="\n".join(f"- {item}" for item in labels),
-        decision=decision,
+        decision=visible,
     )
     before = _snapshot_usage(provider)
     obj = await provider.ask_json(
@@ -290,6 +317,21 @@ async def score_action_llm(
         )
     vote = parsed.value
     quote = (vote.quote or "")[:200]
+    if not quote_in_visible(quote, visible):
+        return ActionGrade(
+            picked_id=None,
+            committed=None,
+            quote=quote,
+            action_correct=None,
+            appropriate_abstention=None,
+            abstain=False,
+            grade_status="ungraded",
+            grade_error="quote_not_in_decision",
+            raw=obj,
+            judge_model=model,
+            judge_overlap=overlap,
+            evaluator_usage=usage,
+        )
     correct, abstain, appropriate = _credit_llm(gold, vote.picked_id, vote.committed, labels)
     return ActionGrade(
         picked_id=vote.picked_id,
@@ -311,7 +353,7 @@ def _grade_payload(heuristic: HeuristicGrade, grade: ActionGrade) -> dict[str, A
     disagree = heuristic.action_correct != grade.action_correct
     picked = grade.picked_id
     return {
-        "chosen_action": None if picked == ABSTAIN_ID else picked,
+        "chosen_action": None if grade.abstain else picked,
         "action_correct": grade.action_correct,
         "action_correct_heuristic": heuristic.action_correct,
         "ungraded": grade.grade_status == "ungraded",
@@ -404,6 +446,7 @@ async def overlay_scored_rows(
                         "heuristic": overlay["action_correct_heuristic"],
                         "llm": overlay["action_correct"],
                         "picked_id": overlay.get("judge_picked"),
+                        "quote": overlay.get("quote") or "",
                     }
                 )
             scored.append(payload)

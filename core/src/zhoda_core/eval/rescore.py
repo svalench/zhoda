@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Mapping, Sequence
 
+from zhoda_core.benchmarks.cache_guard import COST_CACHED, COST_EXACT, cost_status_for
 from zhoda_core.benchmarks.datasets import BenchmarkCase
 from zhoda_core.benchmarks.judge import GradeResult
 from zhoda_core.eval.gold import GoldRow
@@ -60,7 +61,29 @@ def unique_arm_rows(results: Sequence[Mapping[str, Any]]) -> list[Mapping[str, A
     return list(picked.values())
 
 
-def _credit(value: bool | None) -> float:
+def _row_cost_status(row: Mapping[str, Any]) -> str:
+    token = str(row.get("cost_status") or "").strip().lower()
+    if token in {COST_EXACT, COST_CACHED, "partial"}:
+        return token
+    requests = row.get("requests")
+    hits = row.get("cache_hits")
+    req = int(requests) if isinstance(requests, int) and not isinstance(requests, bool) else 0
+    hit = int(hits) if isinstance(hits, int) and not isinstance(hits, bool) else 0
+    return cost_status_for(req, hit)
+
+
+def _exact_usd(row: Mapping[str, Any] | None) -> float | None:
+    if row is None:
+        return None
+    if _row_cost_status(row) != COST_EXACT:
+        return None
+    usd = row.get("usd")
+    if isinstance(usd, bool) or not isinstance(usd, (int, float)):
+        return 0.0
+    return float(usd)
+
+
+def _credit(value: object) -> float:
     return 1.0 if value is True else 0.0
 
 
@@ -79,6 +102,9 @@ def paired_primary(scored: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         ox_c = _credit(ox.get("action_correct"))
         sr_c = _credit(sr.get("action_correct"))
         kind = str(ox.get("kind") or "")
+        ox_usd = _exact_usd(ox)
+        sr_usd = _exact_usd(sr)
+        maj = arms.get("majority")
         paired.append(
             {
                 "case_id": case_id,
@@ -86,15 +112,19 @@ def paired_primary(scored: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 "oxford_correct": ox_c,
                 "short_review_correct": sr_c,
                 "delta": sr_c - ox_c,
-                "oxford_usd": float(ox.get("usd") or 0.0),
-                "short_review_usd": float(sr.get("usd") or 0.0),
-                "majority_usd": float((arms.get("majority") or {}).get("usd") or 0.0),
+                "oxford_usd": ox_usd,
+                "short_review_usd": sr_usd,
+                "majority_usd": _exact_usd(maj),
+                "oxford_cached": _row_cost_status(ox) == COST_CACHED,
+                "short_review_cached": _row_cost_status(sr) == COST_CACHED,
             }
         )
     n = len(paired)
     delta = sum(p["delta"] for p in paired) / n if n else None
-    mean_sr = sum(p["short_review_usd"] for p in paired) / n if n else None
-    mean_ox = sum(p["oxford_usd"] for p in paired) / n if n else None
+    sr_exact = [float(p["short_review_usd"]) for p in paired if p["short_review_usd"] is not None]
+    ox_exact = [float(p["oxford_usd"]) for p in paired if p["oxford_usd"] is not None]
+    mean_sr = sum(sr_exact) / len(sr_exact) if sr_exact else None
+    mean_ox = sum(ox_exact) / len(ox_exact) if ox_exact else None
     by_kind: dict[str, list[float]] = defaultdict(list)
     for row in paired:
         by_kind[row["kind"]].append(row["delta"])
@@ -107,6 +137,8 @@ def paired_primary(scored: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "delta": delta,
         "mean_usd_short_review": mean_sr,
         "mean_usd_oxford": mean_ox,
+        "n_cached_oxford": sum(1 for p in paired if p["oxford_cached"]),
+        "n_cached_short_review": sum(1 for p in paired if p["short_review_cached"]),
         "class_delta": class_delta,
         "pairs": paired,
     }

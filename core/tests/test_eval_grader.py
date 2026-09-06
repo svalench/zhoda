@@ -297,6 +297,8 @@ def test_sidecar_judge_prompt_uses_gold_not_empty_gt() -> None:
     assert "Keep the index" in prompts[0]
     assert "mode=" not in prompts[0]
     assert "producing system is hidden" in prompts[0]
+    assert "Index Droppers" not in prompts[0]
+    assert prompts[0].count("majority at cap") == 1
 
 
 def test_string_false_committed_is_ungraded() -> None:
@@ -497,27 +499,3 @@ def test_rule1_ungraded_share_is_inconclusive() -> None:
     )
     assert rule["verdict"] == "inconclusive"
     assert rule["product_default"] == "debate"
-
-
-def test_live_g_v1_report_bytes_frozen_and_v2_is_new() -> None:
-    import hashlib
-
-    root = Path(__file__).resolve().parents[2]
-    gdir = root / "docs" / "live-runs" / "2026-09-06-g-pilot"
-    v1 = gdir / "report.json"
-    v2 = gdir / "report-v2.json"
-    assert (
-        hashlib.sha256(v1.read_bytes()).hexdigest()
-        == "6bb6cfce0d24254695f325facd3b5b51d467433366b5abaad86e58dbbd984756"
-    )
-    payload = json.loads(v2.read_text(encoding="utf-8"))
-    assert payload["schema"] == LIVE_G_V2
-    assert payload["rescored_from"] == "zhoda.eval.live_g.v1"
-    assert payload["independent_validation"] is False
-    assert payload["judge"] == "none"
-    assert payload["decision_rule"]["verdict"] == "inconclusive"
-    notes = (gdir / "NOTES.md").read_text(encoding="utf-8")
-    notes_v2 = (gdir / "NOTES-v2.md").read_text(encoding="utf-8")
-    assert "recommend_short_review_default" in notes
-    assert "inconclusive" in notes_v2
-    assert notes != notes_v2

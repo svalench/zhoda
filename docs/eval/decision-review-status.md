@@ -8,6 +8,7 @@ Do not collapse these three into one “ready” label.
 | Pilot prep | **READY_FOR_APPROVAL** | Invite + feedback form drafted. **Not sent.** Permissions not obtained. |
 | Pilot execution | **not started** | No volunteer live calls. Not `PILOT_COMPLETE`. |
 | Product gate | **OPEN** | No confirmed useful-correct fixes + reuse study. Offline demo ≠ user effect. |
+| Gold labels | **AWAITING_OWNER** | A vs B logged. `expected_action` exact 30/36 = 0.833. `abstain_policy` 36/36 = 1.000, Cohen's κ = 1.000 (P5 kappa-below-0.6 gate **not** triggered). `unacceptable_claims` exact 0/36. All 36 ids `disputed` in `gold-merged-draft.jsonl`. `gold.jsonl` unchanged. |
 
 G protocol usefulness: **unknown**
 ([g-protocol-policy.md](g-protocol-policy.md)). Default review protocol
@@ -16,9 +17,3 @@ remains `debate`.
 Telemetry: user source documents are **not** collected by default.
 
 Stars are not a quality metric for this workflow.
-
-`pilot-grader.v1` results from 2026-09-06 live G (`report.json`) are
-**invalid as an instrument**: keyword `extract_chosen_action` scored
-paraphrases and unc-* abstentions as incorrect. Retrospective v2:
-[live-runs/2026-09-06-g-pilot/NOTES-v2.md](../live-runs/2026-09-06-g-pilot/NOTES-v2.md)
-(P2). Do not treat those `action_correct` columns as protocol evidence.

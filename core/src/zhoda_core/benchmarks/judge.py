@@ -179,12 +179,15 @@ class BlindLlmJudge:
         allowed: Sequence[str],
     ) -> GradeResult:
         """Тот же BLIND_JUDGE_PROMPT; gold/labels снаружи (sidecar), не из ground_truth."""
+        from .quality import judge_visible_decision
+
         labels = tuple(allowed) if allowed else (gold,)
+        visible = judge_visible_decision(decision)
         prompt = BLIND_JUDGE_PROMPT.format(
             question=case.question,
             gold=gold,
             options=", ".join(labels),
-            decision=decision,
+            decision=visible,
         )
         obj = await self.provider.ask_json(
             self.model,

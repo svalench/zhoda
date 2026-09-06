@@ -79,9 +79,7 @@ def _cmd_dry_run(args: argparse.Namespace) -> int:
 
     cases = [public_to_benchmark(c) for c in load_public_cases()]
     runner = ComparativeRunner(compare_modes=PILOT_ARMS)
-    results = asyncio.run(
-        runner.run_suite(cases, ["m1", "m2", "m3"], mode="compare", rounds=4)
-    )
+    results = asyncio.run(runner.run_suite(cases, ["m1", "m2", "m3"], mode="compare", rounds=4))
     report = {
         "status": PILOT_STATUS,
         "live": False,
@@ -133,7 +131,11 @@ def _cmd_rescore_report(args: argparse.Namespace) -> int:
             print(f"judge llm unavailable: {exc}", file=sys.stderr)
             return 2
     scored = rescore_report(
-        report, gold_map, cases, votes=votes, judge_name=judge_name,
+        report,
+        gold_map,
+        cases,
+        votes=votes,
+        judge_name=judge_name,
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(scored, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -152,19 +154,11 @@ async def _llm_votes(
     from zhoda_core.config import load_council_config, make_provider
 
     from .grader import allowed_labels
+    from .pilot_rescore import judge_roster
     from .rescore import unique_arm_rows
 
     cfg = dict(load_council_config(config_path))
-    judges = cfg.get("judges") or []
-    model = str(judges[0] if judges else "")
-    if not model:
-        raise ValueError("no judges in yaml — refusing implicit chairman")
-    overlap: list[str] = []
-    chairman = str(cfg.get("chairman") or "")
-    if model == chairman:
-        overlap.append("chairman")
-    if model in (cfg.get("council") or []):
-        overlap.append("council")
+    model, overlap = judge_roster(cfg)
     judge = BlindLlmJudge(make_provider(cfg), model, overlap_roles=overlap)
     votes: dict[tuple[str, str], Any] = {}
     for row in unique_arm_rows(list(report.get("results") or [])):

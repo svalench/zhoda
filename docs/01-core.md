@@ -433,7 +433,14 @@ with four mandatory council calls is infeasible: zero hidden calls, not
 evaluator/judge usage. Answer `confidence` is never filled from
 `router_confidence`; missing stays missing and Brier is not invented.
 Fresh replicate namespaces do not reuse prior answers; `--cache-mode replay`
-is a separate exact-cache hypothesis.
+is a separate exact-cache hypothesis. `cache_mode=fresh` **refuses** a
+non-empty arm sqlite at start (`CacheNotFreshError`) with path and row
+count. `--allow-resume` switches to `cache_mode=resume` and requires an
+existing checkpoint with the same `spec_hash` (`ResumeRequiresCheckpointError`
+otherwise). `requests=0` and `cache_hits>0` is `served_from_cache` /
+`cost_status=cached` — not live spend. Mean USD and `cost_match` count only
+`cost_status=exact`; reports add `n_cached` per arm. A cache/live mix on the
+same case sets `cost_comparable=false`.
 
 `paths_rejected` on a reached zhoda is `dead_ends`; the report adds
 `avg_dead_ends` and `dead_ends_per_usd`. Headline accuracy counts
@@ -448,20 +455,37 @@ label as **ungraded**. `pilot-grader.v2` (`eval.grading.score_action_llm`)
 asks YAML `roster.judges[0]` (not chairman, not council) for
 `{"picked_id", "committed", "quote"}` via `ActionGradeVote` / `StrictBool`
 and a closed label list (gold + alternatives + `answer_options` +
-`ABSTAIN`). Arm names and the `Recommended (majority at cap…)` prefix are
-not format hints in that prompt. Parse failure stays **ungraded**, not
-incorrect. Keyword `extract_chosen_action` remains
-`action_correct_heuristic` (a paraphrase that misses the exact label is
-**False**, which is the v1 instrument defect). Abstain regex matches only
-the recommendation head (before `Dissent:` or the first 400 characters).
-Judge spend is `evaluator_usage`, never `engine_usage`. `judge_overlap`
-lists chairman/council/protocol_judge/classifier when the judge model
-appears there. Chairman is not an implicit independent judge (default is
-the first YAML `judges` entry). `abstain_policy=required` credits
-`picked_id=ABSTAIN`; a forbidden abstain is not appropriate. Ungraded judge
-JSON stays ungraded. `python -m zhoda_core.eval rescore-report` writes a
-new file (`report-v2.json`); it does not overwrite a historical
-`report.json`.
+`ABSTAIN`). The judge prompt has no arm name. The decision sent to the
+judge is `judge_visible_decision`: recommendation head only, without a
+`dissent:` / `minority:` / `minority report:` header (any case), without a
+`No zhoda (split|deadlock|majority)` faction map, and without
+`Recommended (majority at cap…)`. `quote` must be a **non-empty** span of
+that visible head; empty quote or a span outside the head is `ungraded`.
+The same visible cut is applied in `BlindLlmJudge` (the frozen
+`BLIND_JUDGE_PROMPT` text is unchanged, so `hash_prompts()` stays put).
+Protocol prompts are unchanged (`hash_prompts()`). `abstain_policy=required` credits
+`picked_id=ABSTAIN` **or** the gold abstain label. A forbidden abstain is
+not appropriate. Ungraded judge JSON stays ungraded. Offline
+`python docs/live-runs/2026-09-06-g-rescore-v2/rescore_v2.py` writes
+**only** `docs/live-runs/2026-09-06-g-rescore-v2/report-v2.json`
+(`schema=zhoda.eval.live_g.rescore.v2`) from saved v1 decisions plus YAML
+`judges[0]`; `docs/live-runs/2026-09-06-g-pilot/` is byte-identical to
+`9abbe24`. A later live runner lives in
+`docs/live-runs/2026-09-06-g-pilot-v2/run_live_g.py`. Primary Δ uses triples
+where all three arms are `coverage=ok` and
+`grade_status=graded`. Mean USD in that table counts only
+`cost_status=exact`; `n_cached_*` is reported. The
+preregistered decision rule is **not** applied on rescore
+(`decision_rule=pending_rerun`). The older CLI
+`python -m zhoda_core.eval rescore-report` (executable sidecar, schema
+`zhoda.eval.live_g.v2`) also writes a new file and does not overwrite
+a historical `report.json`.
+
+Model identity alone is not independence: the pilot grader **refuses**
+`judges[0]` equal to chairman or a council model. `judge_overlap` then
+lists `protocol_judge` / `classifier` only. Compare CLI still declares
+chairman/council overlap when `--judge-model` collides, and never falls
+back to implicit chairman.
 
 Each arm gets its own sqlite (`cache-zhoda.db`, `cache-majority.db`, …)
 so vote does not reuse debate completions. `--shared-cache` restores the

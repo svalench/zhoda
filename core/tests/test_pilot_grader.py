@@ -5,7 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 
-from zhoda_core.benchmarks.quality import decision_abstains
+from zhoda_core.benchmarks.quality import (
+    decision_abstains,
+    judge_visible_decision,
+    quote_in_visible,
+)
 from zhoda_core.eval.gold import GoldRow, load_gold
 from zhoda_core.eval.grading import (
     ACTION_GRADE_PROMPT,
@@ -286,6 +290,7 @@ def test_overlay_scored_rows_collects_disagreements() -> None:
             "heuristic": False,
             "llm": True,
             "picked_id": "Keep the index",
+            "quote": "The index `idx_orders_created_at` should be retained",
         }
     ]
 
@@ -340,16 +345,21 @@ def test_appropriate_abstention_policies() -> None:
     unc_public = _public("unc-002")
     abstain_text = "INSUFFICIENT_CONTEXT: cannot decide."
     pick_text = "Yes, yesterday's deploy caused it."
-    abstain_vote = {"picked_id": "ABSTAIN", "committed": True, "quote": "cannot confirm"}
+    forbidden_vote = {"picked_id": "ABSTAIN", "committed": True, "quote": "cannot decide"}
+    required_vote = {
+        "picked_id": "ABSTAIN",
+        "committed": True,
+        "quote": "insufficient information to definitively confirm or deny",
+    }
     required_pick_vote = {
         "picked_id": "Abstain; insufficient context",
         "committed": True,
-        "quote": "deploy caused it",
+        "quote": "insufficient information to definitively confirm or deny",
     }
 
     forbidden_abstain = _run(
         score_action_llm(
-            FakeProvider(abstain_vote),
+            FakeProvider(forbidden_vote),
             "j",
             public,
             forbidden,
@@ -364,7 +374,7 @@ def test_appropriate_abstention_policies() -> None:
 
     required_abstain = _run(
         score_action_llm(
-            FakeProvider(abstain_vote),
+            FakeProvider(required_vote),
             "j",
             unc_public,
             required,
@@ -388,16 +398,145 @@ def test_appropriate_abstention_policies() -> None:
             "j",
             unc_public,
             required,
-            pick_text,
+            DECISIONS["unc-002"],
         )
     )
     assert required_pick.grade_status == "graded"
-    assert required_pick.picked_id != "ABSTAIN"
-    assert required_pick.action_correct is False
-    assert required_pick.appropriate_abstention is False
+    assert required_pick.picked_id == "Abstain; insufficient context"
+    assert required_pick.action_correct is True
+    assert required_pick.abstain is True
+    assert required_pick.appropriate_abstention is True
     heur_pick = score_action_heuristic(pick_text, "ok", required, unc_public.answer_options)
     assert heur_pick.action_correct is False
     assert heur_pick.appropriate_abstention is False
+
+
+def test_required_abstain_credits_gold_label() -> None:
+    gold = _gold("unc-001")
+    public = _public("unc-001")
+    grade = _run(
+        score_action_llm(
+            FakeProvider(
+                {
+                    "committed": True,
+                    "picked_id": "Abstain; insufficient context",
+                    "quote": "insufficient information",
+                }
+            ),
+            "j",
+            public,
+            gold,
+            DECISIONS["unc-001"],
+        )
+    )
+    assert grade.grade_status == "graded"
+    assert grade.action_correct is True
+    assert grade.abstain is True
+
+
+def test_judge_prompt_omits_dissent_and_arm_markers() -> None:
+    gold = _gold("evd-001")
+    public = _public("evd-001")
+    provider = FakeProvider({"committed": True, "picked_id": "Keep the index", "quote": "retained"})
+    _run(score_action_llm(provider, "j", public, gold, DECISIONS["evd-001"]))
+    prompt = provider.prompts[0]
+    assert "Dissent:" not in prompt
+    assert "Index Droppers" not in prompt
+    assert "majority at cap" not in prompt
+    visible = judge_visible_decision(DECISIONS["evd-001"])
+    assert "majority at cap" not in visible
+    assert "Dissent:" not in visible
+    assert "should be retained" in visible
+
+
+def test_lowercase_dissent_is_not_visible_to_judge() -> None:
+    decision = (
+        "Recommended (majority at cap, not zhoda): Keep the index.\n"
+        "dissent:\nIndex Droppers: drop idx_orders_created_at; the table is small."
+    )
+    visible = judge_visible_decision(decision)
+    assert "drop idx_orders_created_at" not in visible.casefold()
+    assert "majority at cap" not in visible
+    assert quote_in_visible("Keep the index", visible) is True
+
+
+def test_quote_outside_visible_decision_is_ungraded() -> None:
+    gold = _gold("evd-001")
+    public = _public("evd-001")
+    provider = FakeProvider(
+        {
+            "committed": True,
+            "picked_id": "Keep the index",
+            "quote": "drop idx_orders_created_at because the table is small",
+        }
+    )
+    grade = _run(score_action_llm(provider, "j", public, gold, DECISIONS["evd-001"]))
+    assert grade.grade_status == "ungraded"
+    assert grade.grade_error == "quote_not_in_decision"
+    assert grade.action_correct is None
+
+
+def test_empty_quote_is_ungraded() -> None:
+    gold = _gold("evd-001")
+    public = _public("evd-001")
+    provider = FakeProvider({"committed": True, "picked_id": "Keep the index", "quote": ""})
+    grade = _run(score_action_llm(provider, "j", public, gold, DECISIONS["evd-001"]))
+    assert quote_in_visible("", judge_visible_decision(DECISIONS["evd-001"])) is False
+    assert grade.grade_status == "ungraded"
+    assert grade.grade_error == "quote_not_in_decision"
+    assert grade.action_correct is None
+
+
+def test_minority_without_dissent_header_is_not_visible_pick() -> None:
+    decision = (
+        "Keep the index `idx_orders_created_at`.\n"
+        "Minority:\nDrop the unused index; the table is small."
+    )
+    visible = judge_visible_decision(decision)
+    assert "drop the unused index" not in visible.casefold()
+    assert "keep the index" in visible.casefold()
+    report = (
+        "Keep the index `idx_orders_created_at`.\n"
+        "Minority report:\nDrop the unused index; the table is small."
+    )
+    assert "drop the unused index" not in judge_visible_decision(report).casefold()
+
+
+def test_no_zhoda_split_map_is_not_a_single_pick_span() -> None:
+    decision = (
+        "No zhoda (split).\n"
+        "Response C: Keep the index `idx_orders_created_at`.\n"
+        "Response B: Drop the unused index; the table is small."
+    )
+    visible = judge_visible_decision(decision)
+    assert "drop the unused index" not in visible.casefold()
+    assert "keep the index" not in visible.casefold()
+    assert visible.casefold().startswith("no zhoda")
+    same_line = "No zhoda (majority). PostgreSQL Advocates: Use PostgreSQL. Kafkaists: Use Kafka."
+    same_visible = judge_visible_decision(same_line)
+    assert "use kafka" not in same_visible.casefold()
+    assert "use postgresql" not in same_visible.casefold()
+
+
+def test_no_zhoda_split_quote_from_response_b_is_ungraded() -> None:
+    gold = _gold("evd-001")
+    public = _public("evd-001")
+    decision = (
+        "No zhoda (split).\n"
+        "Response C: Keep the index `idx_orders_created_at`.\n"
+        "Response B: Drop the unused index; the table is small."
+    )
+    provider = FakeProvider(
+        {
+            "committed": True,
+            "picked_id": "Drop the index",
+            "quote": "Drop the unused index; the table is small.",
+        }
+    )
+    grade = _run(score_action_llm(provider, "j", public, gold, decision))
+    assert grade.grade_status == "ungraded"
+    assert grade.grade_error == "quote_not_in_decision"
+    assert grade.action_correct is None
 
 
 def test_prompt_hash_frozen_rubric_is_grader_v2() -> None:
