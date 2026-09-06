@@ -459,9 +459,15 @@ lists chairman/council/protocol_judge/classifier when the judge model
 appears there. Chairman is not an implicit independent judge (default is
 the first YAML `judges` entry). `abstain_policy=required` credits
 `picked_id=ABSTAIN`; a forbidden abstain is not appropriate. Ungraded judge
-JSON stays ungraded. `python -m zhoda_core.eval rescore-report` writes a
-new file (`report-v2.json`); it does not overwrite a historical
-`report.json`.
+JSON stays ungraded. Offline `python docs/live-runs/2026-09-06-g-pilot/rescore_v2.py`
+rewrites **only** `report-v2.json` (`schema=zhoda.eval.live_g.rescore.v2`)
+from saved decisions plus YAML `judges[0]`; `report.json` is frozen.
+Primary Δ uses triples where all three arms are `coverage=ok` and
+`grade_status=graded`. The preregistered decision rule is **not** applied
+on rescore (`decision_rule=pending_rerun`). The older CLI
+`python -m zhoda_core.eval rescore-report` (executable sidecar, schema
+`zhoda.eval.live_g.v2`) also writes a new file and does not overwrite
+a historical `report.json`.
 
 Each arm gets its own sqlite (`cache-zhoda.db`, `cache-majority.db`, …)
 so vote does not reuse debate completions. `--shared-cache` restores the

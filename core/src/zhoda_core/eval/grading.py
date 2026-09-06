@@ -404,6 +404,7 @@ async def overlay_scored_rows(
                         "heuristic": overlay["action_correct_heuristic"],
                         "llm": overlay["action_correct"],
                         "picked_id": overlay.get("judge_picked"),
+                        "quote": overlay.get("quote") or "",
                     }
                 )
             scored.append(payload)

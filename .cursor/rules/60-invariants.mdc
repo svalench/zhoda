@@ -51,6 +51,7 @@ Current mapping (keep updated):
 | Pilot rescore writes v2 and refuses to overwrite the source report | tests/test_eval_grader.py::test_rescore_cli_refuses_overwrite_and_writes_v2 |
 | Frozen protocol prompt_hash unchanged; rubric hash is grader-v2 abstain regex | tests/test_eval_grader.py::test_prompt_and_rubric_hashes_frozen + tests/test_pilot_grader.py::test_prompt_hash_frozen_rubric_is_grader_v2 |
 | Pilot-grader v2: LLM action grade on paraphrase fixtures; keyword stays False | tests/test_pilot_grader.py |
+| Live G rescore v2 does not mutate report.json; primary only fully graded triples | tests/test_pilot_rescore.py |
 | StrictBool stage DTOs; `"false"` is not a transition | tests/test_stage_dtos.py + tests/test_consensus.py::test_c1_string_false_is_not_unanimous + tests/test_debate.py::test_c2_string_false_does_not_close_objection |
 | String committed/picked hedge is ungraded, not correct | tests/test_benchmarks.py::test_c6_string_false_committed_on_hedge_is_ungraded |
 | pick_matches_gold is exact ID, not substring | tests/test_benchmarks.py::test_c7_negated_pick_is_not_gold |

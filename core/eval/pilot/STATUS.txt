@@ -4,7 +4,9 @@ independent_validation=false
 stop_reason=complete
 n_complete=31
 delta=0.0
-decision_rule=recommend_short_review_default
+decision_rule=pending_rerun
 product_default=debate
 spend_usd=0.2116
-# Code default not flipped. Gold provisional. See docs/live-runs/2026-09-06-g-pilot/NOTES.md
+grader_v1=INVALID_INSTRUMENT
+rescore_v2=docs/live-runs/2026-09-06-g-pilot/report-v2.json
+# Code default not flipped. Gold provisional. See docs/live-runs/2026-09-06-g-pilot-rescore-v2.md

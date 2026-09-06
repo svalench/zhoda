@@ -20,5 +20,6 @@ Stars are not a quality metric for this workflow.
 `pilot-grader.v1` results from 2026-09-06 live G (`report.json`) are
 **invalid as an instrument**: keyword `extract_chosen_action` scored
 paraphrases and unc-* abstentions as incorrect. Retrospective v2:
-[live-runs/2026-09-06-g-pilot/NOTES-v2.md](../live-runs/2026-09-06-g-pilot/NOTES-v2.md)
-(P2). Do not treat those `action_correct` columns as protocol evidence.
+[2026-09-06-g-pilot-rescore-v2.md](../live-runs/2026-09-06-g-pilot-rescore-v2.md).
+Do not treat those `action_correct` columns as protocol evidence.
+`decision_rule=pending_rerun`. Product default remains `debate`.

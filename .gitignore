@@ -27,6 +27,7 @@ node_modules/
 transcripts/
 **/.zhoda-cache.*
 *.db
+!docs/live-runs/2026-09-06-g-pilot/rescore-v2/judge-cache.db
 /core/zhoda.yaml
 /core/eval/runs/
 

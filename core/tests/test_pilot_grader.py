@@ -286,6 +286,7 @@ def test_overlay_scored_rows_collects_disagreements() -> None:
             "heuristic": False,
             "llm": True,
             "picked_id": "Keep the index",
+            "quote": "The index `idx_orders_created_at` should be retained",
         }
     ]
 
