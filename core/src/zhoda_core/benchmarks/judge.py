@@ -83,17 +83,63 @@ def resolve_picked_id(picked: str, allowed: Sequence[str]) -> str | None:
     return None
 
 
+def semicolon_head(text: str) -> str:
+    """Префикс до первой ';' — closed option вроде 'No' при gold 'No; …'."""
+    raw = (text or "").strip()
+    head, sep, _rest = raw.partition(";")
+    if not sep:
+        return raw
+    return head.strip()
+
+
+def map_to_closed_label(expected: str, labels: Sequence[str]) -> str:
+    """Closed option: префикс до ';' побеждает полную форму, если оба в списке."""
+    if not labels:
+        return expected
+    fold = expected.casefold()
+    head = semicolon_head(expected)
+    head_fold = head.casefold()
+    prefix_hit: str | None = None
+    exact_hit: str | None = None
+    for opt in labels:
+        opt_fold = opt.casefold()
+        if opt_fold == fold:
+            exact_hit = opt
+        if fold.startswith(opt_fold + ";") or (
+            bool(head) and head_fold != fold and opt_fold == head_fold
+        ):
+            prefix_hit = opt
+    if prefix_hit is not None:
+        return prefix_hit
+    if exact_hit is not None:
+        return exact_hit
+    return expected
+
+
 def pick_matches_gold(
     picked: str,
     gold: str,
     allowed: Sequence[str] = (),
 ) -> bool:
-    """Exact allowed ID, не 'PostgreSQL' ⊂ 'Not PostgreSQL'."""
+    """Exact allowed ID, не 'PostgreSQL' ⊂ 'Not PostgreSQL'.
+
+    'No' матчит gold 'No; use a masked snapshot' по префиксу до ';'.
+    """
     labels = tuple(allowed) if allowed else (gold,)
-    picked_id = resolve_picked_id(picked, labels)
+    gold_id = map_to_closed_label(gold, labels)
+    search = labels
+    if not any(opt.casefold() == gold_id.casefold() for opt in search):
+        search = (*labels, gold_id)
+    picked_id = resolve_picked_id(picked, search)
     if picked_id is None:
-        return False
-    return _fold(picked_id) == _fold(gold)
+        picked_id = resolve_picked_id(semicolon_head(picked), search)
+    if picked_id is None:
+        p_head = semicolon_head(picked)
+        g_head = semicolon_head(gold)
+        return bool(p_head) and bool(g_head) and _fold(p_head) == _fold(g_head)
+    return _fold(picked_id) == _fold(gold_id) or _fold(semicolon_head(picked_id)) == _fold(
+        semicolon_head(gold_id)
+    )
 
 
 def apply_blind_verdict(

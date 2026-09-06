@@ -47,6 +47,7 @@ Current mapping (keep updated):
 | Compare --arms/--tables slice skips unselected spend | tests/test_benchmarks.py::test_compare_arms_and_tables_slice |
 | Per-arm sqlite cache; vote does not reuse debate keys | tests/test_benchmarks.py::test_build_live_arms_uses_distinct_cache_files |
 | Fresh cache refuses occupied sqlite; resume needs matching spec_hash; cached rows excluded from mean USD | tests/test_cache_mode.py + tests/test_openrouter.py::test_preseeded_sqlite_hits_are_replayed_without_http |
+| P5 experiment cap $2; remaining clamp min(YAML, leftover); gate 3 in self-check | tests/test_cache_mode.py::test_p5_cap_is_two_dollars_and_gate3 + test_clamp_arm_budget_cannot_exceed_remaining |
 | Live G v1 tree byte-identical to 9abbe24 (git diff 9abbe24..HEAD + WT/index); v2 runner has no auto-resume | tests/test_pilot_rescore.py::test_v1_live_g_tree_matches_9abbe24 + tests/test_cache_mode.py::test_run_live_g_fresh_does_not_auto_resume_from_checkpoint |
 | Blind LLM judge: committed gold, dissent is a miss | tests/test_benchmarks.py::test_blind_judge_requires_committed_gold + test_blind_llm_judge_hides_arm_and_rejects_dissent |
 | Blind judge decision is judge_visible_decision (no dissent/arm marker in the answer slot) | tests/test_eval_grader.py::test_sidecar_judge_prompt_uses_gold_not_empty_gt |
@@ -83,6 +84,7 @@ Current mapping (keep updated):
 | short_review factual critique without evidence span is discarded | tests/test_debate.py::test_short_critique_requires_evidence_span |
 | Pilot public JSONL has no gold keys; gold sidecar is provisional | tests/test_eval_pilot.py::test_public_jsonl_has_no_gold_keys + test_gold_sidecar_matches_public_ids |
 | A/B gold exact diffs logged; merged draft disputed; gold.jsonl hash frozen | tests/test_gold_disagreement.py |
+| P5 gold gate is expected_action in disputed_fields, not label_status; owner A prefix | tests/test_gold_disagreement.py::test_p5_gate_uses_disputed_fields_not_label_status + test_hol_min_no_prefix_matches_gold_label |
 | Pilot loader source does not import gold; runner cases have empty GT | tests/test_eval_pilot.py::test_pilot_module_source_does_not_import_gold + test_runner_case_has_empty_ground_truth |
 | Pilot ids disjoint from development-51; 30–50 cases, all task classes | tests/test_eval_pilot.py::test_pilot_ids_disjoint_from_development_51 + test_pilot_size_and_classes |
 | Pilot source_bundle.text is BenchmarkCase.context, not ground_truth | tests/test_eval_pilot.py::test_runner_case_has_empty_ground_truth |

@@ -287,3 +287,75 @@ def test_run_live_g_fresh_does_not_auto_resume_from_checkpoint() -> None:
     assert "has_any_terminal" not in text
     assert "allow_resume" in text
     assert "ensure_fresh_cache" in text
+    assert "P5_OWNER_CAP_USD = 2.0" in text
+    assert "SPEND_CAP_USD = 8.0" not in text
+    assert "cache_not_fresh" in text
+
+
+def _load_live_g_v2():
+    import importlib.util
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "docs"
+        / "live-runs"
+        / "2026-09-06-g-pilot-v2"
+        / "run_live_g.py"
+    )
+    spec = importlib.util.spec_from_file_location("zhoda_live_g_v2", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_p5_cap_is_two_dollars_and_gate3() -> None:
+    mod = _load_live_g_v2()
+    assert mod.P5_OWNER_CAP_USD == 2.0
+    assert mod.SPEND_CAP_USD == 2.0
+    assert mod.check_owner_budget_gate(2.0)["ok"] is True
+    assert mod.check_owner_budget_gate(8.0)["ok"] is False
+    pre = mod.check_preconditions(spend_cap_usd=2.0)
+    assert pre["owner_budget_and_launch"]["ok"] is True
+    assert pre["ok"] is True
+    pre8 = mod.check_preconditions(spend_cap_usd=8.0)
+    assert pre8["owner_budget_and_launch"]["ok"] is False
+    assert pre8["stop_reason"] == "spend_cap_mismatch"
+
+
+def test_remaining_experiment_includes_evaluator() -> None:
+    from zhoda_core.benchmarks.runner import CaseResult
+
+    mod = _load_live_g_v2()
+    row = CaseResult(
+        case_id="evd-001",
+        suite="pilot",
+        kind="evidence",
+        mode="zhoda",
+        decision="x",
+        usd=1.5,
+        evaluator_usage={"usd": 0.4},
+    )
+    assert mod.experiment_spent([row]) == pytest.approx(1.9)
+    assert mod.remaining_experiment([row], 2.0) == pytest.approx(0.1)
+    assert mod.remaining_experiment([row], 2.0) < 10.0
+
+
+def test_clamp_arm_budget_cannot_exceed_remaining() -> None:
+    mod = _load_live_g_v2()
+
+    class Holder:
+        budget_usd = 10.0
+
+    class Engine:
+        provider = Holder()
+
+    class Arm:
+        engine = Engine()
+
+    cap = mod.clamp_arm_budget(Arm(), yaml_budget=10.0, remaining=0.25)
+    assert cap == 0.25
+    assert Arm.engine.provider.budget_usd == 0.25
+    cap0 = mod.clamp_arm_budget(Arm(), yaml_budget=10.0, remaining=0.0)
+    assert cap0 == 0.0
+    assert Arm.engine.provider.budget_usd == 0.0
