@@ -35,6 +35,35 @@ For each id:
 If the source is too thin to decide, set `abstain_policy=required` and
 `expected_action` to an abstain form. Do not invent facts.
 
+## Как считается `action_correct` v2
+
+`grader_version=pilot-grader.v2` (`zhoda_core.eval.grading`).
+
+1. **LLM-судья** (YAML `judges[0]`, не chairman и не член совета). В
+   промпт попадают `question`, `source_bundle.text` и закрытый список
+   labels: gold + `allowed_alternatives` + `answer_options` + `ABSTAIN`.
+   Имя arm и префикс `Recommended (majority at cap…)` в промпт не
+   кладутся. Ответ строго
+   `{"picked_id": <label>, "committed": bool, "quote": "≤200"}`.
+   `"committed": "false"` строкой и `picked_id` вне labels →
+   `grade_status=ungraded`, не incorrect.
+2. **Зачёт.** `action_correct = committed and picked_id ∈ {gold,
+   alternatives}`. Если `abstain_policy=required`, то
+   `action_correct = (picked_id == "ABSTAIN")`. Если `forbidden` и
+   pick = `ABSTAIN` → `action_correct=false`,
+   `appropriate_abstention=false`.
+3. **Heuristic** (`action_correct_heuristic`) — старый keyword-путь
+   `extract_chosen_action` + exact label. Парафраз («index should be
+   retained» vs gold `Keep the index`) остаётся False: это дефект
+   инструмента v1, не miss модели. Расхождения heuristic≠llm пишутся
+   отдельным списком.
+4. **Abstain regex** ищет только в первой рекомендации (до `Dissent:`
+   или первые 400 символов). «insufficient information»,
+   «cannot confirm or deny», «невозможно определить» — abstain;
+   «insufficient index coverage is not the issue» — нет.
+
+Usage судьи — `evaluator_usage`, не `engine_usage`.
+
 Synthetic sources only. If a future source has personal data, **do not**
 send it to an external provider without written permission.
 

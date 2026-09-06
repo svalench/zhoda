@@ -15,7 +15,7 @@ from zhoda_core.benchmarks.judge import (
     pick_matches_gold,
     resolve_picked_id,
 )
-from zhoda_core.benchmarks.quality import _ABSTAIN_RE, extract_chosen_action
+from zhoda_core.benchmarks.quality import decision_abstains, extract_chosen_action
 from zhoda_core.eval.gold import GoldRow
 
 FAILED_COVERAGE = frozenset({"failed", "skipped", "infeasible"})
@@ -56,7 +56,7 @@ def allowed_labels(gold: GoldRow, options: Sequence[str]) -> tuple[str, ...]:
 
 
 def is_abstain_text(text: str) -> bool:
-    return bool(_ABSTAIN_RE.search(text or ""))
+    return decision_abstains(text)
 
 
 def is_abstain_label(label: str) -> bool:
