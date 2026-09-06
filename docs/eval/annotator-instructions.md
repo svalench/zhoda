@@ -47,7 +47,8 @@ If the source is too thin to decide, set `abstain_policy=required` and
    промпт попадают `question`, `source_bundle.text` и закрытый список
    labels. Имя arm и `Recommended (majority at cap…)` в промпт не
    кладутся: `dissent:` / `minority:` / `minority report:` (любой регистр)
-   и маркер срезаются (`judge_visible_decision`). `quote` должен быть
+   и карта `No zhoda (split|deadlock|…)` срезаются (`judge_visible_decision`);
+   судье остаётся маркер, не тезисы Response A/B/C. `quote` должен быть
    непустой span этого head, иначе `ungraded`. `"committed": "false"`
    строкой и `picked_id` вне labels →
    `grade_status=ungraded`, не incorrect. YAML `judges[0]` не chairman и
@@ -55,7 +56,7 @@ If the source is too thin to decide, set `abstain_policy=required` and
 2. **Зачёт.** Если `abstain_policy=required`, `action_correct` при
    `picked_id == "ABSTAIN"` **или** золотой abstain-метке.
 3. **Heuristic** — keyword-путь; парафраз без exact label остаётся False.
-4. **Abstain regex** только до `dissent:` / `minority:`. «insufficient information» —
+4. **Abstain regex** только до `dissent:` / `minority:` / маркера `No zhoda`. «insufficient information» —
    abstain; «insufficient index coverage is not the issue» — нет.
 
 Mean USD в таблицах — только `cost_status=exact`; `n_cached` отдельно.

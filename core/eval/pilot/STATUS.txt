@@ -1,11 +1,12 @@
 P5_STOPPED_PRECONDITIONS
 live=false
 independent_validation=false
-stop_reason=preconditions_failed
+stop_reason=gold_expected_action_unresolved
 n_complete=0
 delta=n/a
 decision_rule=inconclusive
 product_default=debate
 spend_usd=0.0
+# P1/P2/P3 on main (84ad1fe). Gold expected_action still disputed.
 # P5 did not start. See docs/live-runs/2026-09-06-g-pilot-v2/
 # Prior G artifacts untouched: docs/live-runs/2026-09-06-g-pilot/

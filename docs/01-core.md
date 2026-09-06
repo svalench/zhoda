@@ -457,7 +457,8 @@ asks YAML `roster.judges[0]` (not chairman, not council) for
 and a closed label list (gold + alternatives + `answer_options` +
 `ABSTAIN`). The judge prompt has no arm name. The decision sent to the
 judge is `judge_visible_decision`: recommendation head only, without a
-`dissent:` / `minority:` / `minority report:` header (any case) and without
+`dissent:` / `minority:` / `minority report:` header (any case), without a
+`No zhoda (split|deadlock|majority)` faction map, and without
 `Recommended (majority at cap…)`. `quote` must be a **non-empty** span of
 that visible head; empty quote or a span outside the head is `ungraded`.
 The same visible cut is applied in `BlindLlmJudge` (the frozen

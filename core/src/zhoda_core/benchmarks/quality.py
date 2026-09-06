@@ -53,10 +53,15 @@ _DISSENT_HEADER_RE = re.compile(
     r"(?:(?<=\n)|^)(?:dissent|minority(?:\s+report)?):\s*",
     re.IGNORECASE,
 )
+# Карта без labeled rec: «No zhoda (split).» + тезисы Response A/B/C.
+_NO_ZHODA_LEAD_RE = re.compile(
+    r"^no zhoda\b(?:\s*\([^)]*\))?\.?",
+    re.IGNORECASE,
+)
 
 
 def recommendation_head(decision: str, *, limit: int | None = 400) -> str:
-    """Первая рекомендация: до dissent/minority-заголовка. limit=None — без обрезки."""
+    """Первая рекомендация: до dissent/minority и до карты No zhoda."""
     body = decision or ""
     match = _DISSENT_HEADER_RE.search(body)
     if match:
@@ -64,13 +69,18 @@ def recommendation_head(decision: str, *, limit: int | None = 400) -> str:
     else:
         idx = body.casefold().find("dissent:")
         head = body[:idx] if idx >= 0 else body
+    stripped = head.lstrip()
+    lead = _NO_ZHODA_LEAD_RE.match(stripped)
+    if lead:
+        # Судье — маркер, не тезисы фракций. Протокол не переписываем.
+        head = stripped[: lead.end()]
     if limit is None:
         return head
     return head[:limit]
 
 
 def judge_visible_decision(decision: str) -> str:
-    """Судье — head без dissent/minority и без маркера arm. Протокол не меняем."""
+    """Судье — head без dissent/minority/No zhoda-карты и без маркера arm."""
     head = recommendation_head(decision, limit=None)
     return _ARM_MARKER_RE.sub("", head, count=1).strip()
 

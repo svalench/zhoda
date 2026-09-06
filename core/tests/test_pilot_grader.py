@@ -502,6 +502,43 @@ def test_minority_without_dissent_header_is_not_visible_pick() -> None:
     assert "drop the unused index" not in judge_visible_decision(report).casefold()
 
 
+def test_no_zhoda_split_map_is_not_a_single_pick_span() -> None:
+    decision = (
+        "No zhoda (split).\n"
+        "Response C: Keep the index `idx_orders_created_at`.\n"
+        "Response B: Drop the unused index; the table is small."
+    )
+    visible = judge_visible_decision(decision)
+    assert "drop the unused index" not in visible.casefold()
+    assert "keep the index" not in visible.casefold()
+    assert visible.casefold().startswith("no zhoda")
+    same_line = "No zhoda (majority). PostgreSQL Advocates: Use PostgreSQL. Kafkaists: Use Kafka."
+    same_visible = judge_visible_decision(same_line)
+    assert "use kafka" not in same_visible.casefold()
+    assert "use postgresql" not in same_visible.casefold()
+
+
+def test_no_zhoda_split_quote_from_response_b_is_ungraded() -> None:
+    gold = _gold("evd-001")
+    public = _public("evd-001")
+    decision = (
+        "No zhoda (split).\n"
+        "Response C: Keep the index `idx_orders_created_at`.\n"
+        "Response B: Drop the unused index; the table is small."
+    )
+    provider = FakeProvider(
+        {
+            "committed": True,
+            "picked_id": "Drop the index",
+            "quote": "Drop the unused index; the table is small.",
+        }
+    )
+    grade = _run(score_action_llm(provider, "j", public, gold, decision))
+    assert grade.grade_status == "ungraded"
+    assert grade.grade_error == "quote_not_in_decision"
+    assert grade.action_correct is None
+
+
 def test_prompt_hash_frozen_rubric_is_grader_v2() -> None:
     import inspect
 
