@@ -31,20 +31,68 @@ On OpenRouter quota exhaustion `zhoda_review` returns `status=incomplete` with
 `zhoda_deliberate` still returns the structured `{error: quota_exceeded}` object.
 `budget_usd` cannot raise a yaml cap of `$0` (`:free` only).
 
-## Install (from this repo)
+## Install (source checkout)
+
+Prerequisites: Python 3.12+, `uv`, and the full repository checkout.
+`zhoda-mcp` and `zhoda-core` are **not published to PyPI yet**. MCP's uv project
+installs the sibling `../core` package as an editable dependency; do not copy
+`mcp/` out of the repository.
+
+Run all shell commands below from the repository root unless noted otherwise:
 
 ```bash
-cd mcp
-uv sync
-# OPENROUTER_API_KEY in repo-root .env or here
-# ZHODA_COUNCIL=/path/to/zhoda.yaml  (default: ./zhoda.yaml)
-uv run zhoda-mcp
+uv --directory mcp sync --python 3.12 --locked
 ```
+
+The initial sync may download dependencies. It does not need an OpenRouter key.
+
+### Try the offline review demo (no API key)
+
+```bash
+uv --directory mcp run zhoda-review-demo
+# Equivalent module entry point:
+uv --directory mcp run python -m zhoda_mcp.demo_review
+```
+
+The demo reads the sample ADR and plan in [examples/review/](examples/review/)
+and uses a **scripted engine**; it makes no model API calls and needs no `.env`,
+council YAML, or MCP host. It creates temporary local runtime storage but does
+not modify the sample documents. The samples are read from the source checkout,
+not packaged as wheel data.
+
+It prints a `zhoda.review.v1` JSON report containing:
+
+- `status: "review"` and `approved: false`;
+- findings about the unique constraint, customer emails, and a feature flag;
+- `demo.live: false`, `demo.independent_validation: false`, and
+  `demo.product_gate: "OPEN"`;
+- `cost.usd_status: "unknown"` — not a measured live model cost.
+
+This demonstrates the review format and read-only boundaries, **not** model
+quality, a live user study, or independent product validation.
+
+### Start the server for live use
+
+After syncing, copy and edit the council config. The example includes paid
+models and a `10.0` USD per-question budget:
+
+```bash
+cp core/zhoda.yaml.example core/zhoda.yaml
+# Edit core/zhoda.yaml for your models and budget.
+# Set OPENROUTER_API_KEY in the repo-root .env; never commit it.
+ZHODA_COUNCIL="$PWD/core/zhoda.yaml" uv --directory mcp run zhoda-mcp
+```
+
+The server uses stdio by default and waits for an MCP host.
+`zhoda_deliberate` and `zhoda_review` with `confirm=false` estimate without a
+model call. `zhoda_clarify` and confirmed deliberation/review use OpenRouter
+and may spend money; they are not the offline demo.
 
 ## Connect a host
 
-Prerequisite: `cd mcp && uv sync`. Council YAML at `core/zhoda.yaml`
-(copy from `zhoda.yaml.example`; judges **outside** the council).
+Prerequisite: the source install and council configuration above.
+Council YAML at `core/zhoda.yaml` (copied from `core/zhoda.yaml.example`;
+judges **outside** the council).
 `OPENROUTER_API_KEY` in the repo-root `.env` — never in git.
 
 Protocol: call `zhoda_deliberate` with `confirm=false` first (estimate).
@@ -143,7 +191,8 @@ Env:
 `allowed_roots`. It does not scan the home directory or the git root.
 Local files only; no URL fetch. Secrets are redacted before the council.
 Transcripts stay in `ZHODA_TRANSCRIPTS_DIR`. User documents are not sent
-as telemetry.
+as telemetry, but confirmed live reviews send the assembled source context
+to the OpenRouter council models.
 
 Trust: a `plan_proposal` is for the human, not for an executor agent to
 apply. Cancel and timeout return `status=incomplete` with a transcript
@@ -153,15 +202,17 @@ Statuses: [decision-review-status.md](../docs/eval/decision-review-status.md).
 Implementation is **IMPLEMENTATION_READY**. The volunteer pilot is **not**
 complete. Product gate is **OPEN**. The offline demo is not user impact.
 
-```bash
-cd mcp
-uv run python -m zhoda_mcp.demo_review
-```
+Start with the [offline review demo](#try-the-offline-review-demo-no-api-key)
+before configuring a live host.
 
-## Tests
+## Development checks
+
+From the repository root, after syncing MCP. The current
+[MCP CI job](../.github/workflows/test.yml) runs these checks; its tests use
+fake engines and mocked/scripted providers, not live model calls:
 
 ```bash
-cd mcp
-uv sync
-uv run pytest
+uv --directory mcp run ruff check .
+uv --directory mcp run mypy src
+uv --directory mcp run pytest
 ```
