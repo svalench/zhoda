@@ -39,28 +39,74 @@ Runs on OpenRouter with BYOK — `:free` or cheap paid, hard per-question budget
 - Honest provider: per-question budget with pre-call estimate, 429/quota split, sqlite cache
 - Test suite: provider gates, ledger gates, scripted e2e (revision / stability flip / deadlock / smart degradation / state isolation)
 
-**Works today (mcp/):** stdio MCP server — `zhoda_clarify` / `zhoda_deliberate` (estimate, then `confirm=true`) / `zhoda_verdict` / `zhoda_transcript` / `zhoda_reputation`. In-process core. Cursor: `.cursor/mcp.json`. DeepSeek Harness: patch in `mcp/examples/dsh.cordis.patch.yml` (not `mcpServers` JSON). See [mcp/README.md](mcp/README.md).
+**Works today (mcp/):** stdio MCP server — `zhoda_clarify` / `zhoda_deliberate` (estimate, then `confirm=true`) / `zhoda_verdict` / `zhoda_transcript` / `zhoda_review` (read-only decision review) / `zhoda_reputation`. In-process core. Cursor: `.cursor/mcp.json`. DeepSeek Harness: patch in `mcp/examples/dsh.cordis.patch.yml` (not `mcpServers` JSON). See [mcp/README.md](mcp/README.md).
 
 **Doesn't exist yet:** dsh plugin, FastAPI hosted server, PyPI/MCP-registry publish. Live ELO updates after each verdict are still a follow-up.
 
 ## Quickstart
 
+**Prerequisites:** Python 3.12+, `uv`, and a source checkout of this repository.
+`zhoda-core` and `zhoda-mcp` are **not published to PyPI yet**. There are two
+separate uv projects, `core/` and `mcp/`, not a project at the repository root.
+Run all commands below from the repository root.
+
+### 1. Install and test without an API key
+
 ```bash
-cd core
-uv sync
-cp zhoda.yaml.example zhoda.yaml   # set council + judges (outside the council!)
-# .env in repo root or core/ — no export needed
-uv run zhoda deliberate "Monolith or microservices for a 4-person B2B SaaS MVP?"
-uv run pytest -m "not live"          # test suite, no network
+uv --directory core sync --python 3.12 --locked
+uv --directory core run zhoda --help
+uv --directory core run pytest -m "not live"
 ```
 
-## Architecture (3 layers)
+The initial sync may download dependencies; the help command and non-live tests
+make no model API calls. No `.env`, council YAML, or API key is needed.
+Keep `-m "not live"` when testing core: a bare `pytest` can select the live
+OpenRouter smoke test if a key is available.
+See [core/README.md](core/README.md) for the source layout and CI checks.
+
+### 2. Try the offline review demo
+
+```bash
+uv --directory mcp sync --python 3.12 --locked
+uv --directory mcp run zhoda-review-demo
+```
+
+This uses a **scripted engine**, not live models, and reads the sample ADR and
+plan in [mcp/examples/review/](mcp/examples/review/). It prints `zhoda.review.v1`
+JSON with `approved: false` and `demo.live: false`. It needs no API key,
+council YAML, or MCP host. Keep the full checkout: MCP uses the sibling `core/`
+package, and the demo reads checkout-local samples.
+
+The demo illustrates the review format and safety boundaries, **not** model
+quality or independent product validation. Details and host setup:
+[mcp/README.md](mcp/README.md).
+
+### 3. Optional: run a live deliberation
+
+**This calls OpenRouter and may spend money.** Copy and review the example
+council config first: it includes paid models and a `10.0` USD per-question
+budget. Configure two distinct judges outside the council and two distinct
+`router_classifiers`.
+
+```bash
+cp core/zhoda.yaml.example core/zhoda.yaml
+# Set OPENROUTER_API_KEY in the repo-root or core/.env; never commit it.
+# Edit core/zhoda.yaml to choose models and a budget before running:
+uv --directory core run zhoda deliberate "Monolith or microservices for a 4-person B2B SaaS MVP?"
+```
+
+## Architecture (implemented and planned)
 
 | Layer | Package | What it is |
 |---|---|---|
-| Core | `zhoda-core` | FastAPI deliberation engine: protocol router, elicitation, factions, debate rounds, consensus, verdicts, reputation |
-| MCP | `zhoda-mcp` | Model Context Protocol server — works in DeepSeek Harness, Claude Code, Codex |
-| Plugin | `@zhoda/dsh-plugin` | DeepSeek Harness plugin: debate room UI, faction graph, verdict panel |
+| Core | `zhoda-core` | Implemented Python library and CLI: protocol router, elicitation, factions, debate rounds, consensus, verdicts, reputation |
+| MCP | `zhoda-mcp` | Implemented Model Context Protocol server with in-process core — stdio by default, optional MCP SSE transport |
+| Plugin | `@zhoda/dsh-plugin` (planned) | Not implemented or published: DeepSeek Harness debate room UI, faction graph, verdict panel |
+
+The hosted FastAPI core server is **not implemented**. MCP's optional SSE
+transport does not provide a remote core API; `ZHODA_CORE_URL` is reserved and
+not wired. DeepSeek Harness can use the existing MCP integration without the
+planned UI plugin.
 
 ## Status
 
